@@ -1,0 +1,24 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 17 2022 x64, CUDA 12.6",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolset": "host=x64,cuda=12.6",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CUDAToolkit_ROOT": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6",
+        "DAYLIGHT_USD": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "vs2022", "configuration": "RelWithDebInfo" },
+    { "name": "debug", "configurePreset": "vs2022", "configuration": "Debug" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "vs2022", "configuration": "RelWithDebInfo", "output": { "outputOnFailure": true } }
+  ]
+}

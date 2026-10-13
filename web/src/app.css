@@ -1,0 +1,19 @@
+/* The one project stylesheet: layout for the canvas, map and timeline regions the design system lacks.
+   Tokens only; no colours invented (zha-ui SKILL.md §3, flagged judgement). */
+.fill { block-size: 100%; min-block-size: 0; grid-auto-rows: minmax(0, 1fr); } /* the split rows are capped at the viewport, so the panels scroll inside */
+.fill > * { min-block-size: 0; min-inline-size: 0; } /* grid items default to min-content: a wide table or the map canvas would widen the column past the viewport */
+.panel { overflow: auto; }
+.viewport { position: relative; block-size: 100%; min-block-size: 24rem; overflow: hidden;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-l); background: var(--bg-surface-2); }
+.viewport > canvas { display: block; inline-size: 100%; block-size: 100%; }
+.viewport > .empty-state { position: absolute; inset: 0; justify-content: center; }
+.map { block-size: 14rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-m); overflow: hidden; }
+.strip { display: block; inline-size: 100%; touch-action: none; }
+/* zha-ui 0.1.4: the segmented radios are position:absolute without a positioned ancestor, so inside a scrolling panel
+   they extend the document's scrollable overflow and focusing one scrolls the whole page. Upstream fix pending. */
+.segmented { position: relative; }
+@media (max-width: 1024px) { /* the splits stack (bundle behaviour): one page column that scrolls as a whole */
+  .fill { block-size: auto; grid-auto-rows: auto; }
+  .panel { overflow: visible; }
+  .viewport { block-size: 24rem; }
+}

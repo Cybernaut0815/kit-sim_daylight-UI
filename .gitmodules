@@ -1,0 +1,3 @@
+[submodule "kit-sim_daylight"]
+	path = kit-sim_daylight
+	url = ../kit-sim_daylight

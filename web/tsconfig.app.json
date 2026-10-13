@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "types": ["vite/client", "node"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "daylight-mesh": ["../kit-sim_daylight/bindings/ts/src/index.ts"],
+      "three": ["./node_modules/@types/three/index.d.ts"],
+      "@gltf-transform/core": ["./node_modules/@gltf-transform/core"]
+    }
+  },
+  "include": ["src", "../kit-sim_daylight/bindings/ts/src/index.ts"]
+}
