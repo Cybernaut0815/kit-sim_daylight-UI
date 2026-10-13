@@ -1,12 +1,18 @@
+// Results: run summary, colour scale and problem range, legend / histogram / cumulative area curve in the result
+// colours, the cursor readout, the range split, and the per-mesh table.
 import { useMemo, type Dispatch } from 'react';
+import { AreaCurve } from '../charts/AreaCurve';
 import { Donut } from '../charts/Donut';
 import { Histogram } from '../charts/Histogram';
-import { columnLabel, columnStats, fmtNum, histogram, unitFor } from '../lib/result';
-import type { Action, ObjectRow, Run } from '../store';
-import { Alert, Illustration, Segmented, Swatch, knob, pct, rowKeys } from '../ui';
+import { Legend } from '../charts/Legend';
+import { ABOVE_VAR, BELOW_VAR, GRADIENTS, hexAt, type Scale } from '../lib/gradients';
+import { columnLabel, columnStats, cumulative, fmtNum, globalRange, histogram, percentile, rangeShares, shareBelow, unitFor } from '../lib/result';
+import type { Action, ObjectRow, Probe, Run, Settings } from '../store';
+import { Alert, Illustration, NumberField, Segmented, Swatch, knob, pct, rowKeys } from '../ui';
 
 interface Props {
   run: Run; objects: ObjectRow[]; column: number; colourBy: 'mesh' | 'value'; hovered: string | null; selected: Set<string>;
+  probe: Probe | null; bin: [number, number] | null; scale: Scale | null; viz: Settings['viz'];
   weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined; dispatch: Dispatch<Action>;
 }
 
@@ -16,16 +22,20 @@ const cacheLine = (c?: Record<string, string>) => {
   return `, scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}`;
 };
 
-export function ResultsPanel({ run, objects, column, colourBy, hovered, selected, weightsFor, dispatch }: Props) {
+const orNull = (v: number) => (Number.isFinite(v) ? v : null);
+
+export function ResultsPanel({ run, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
   const data = useMemo(() => {
     if (run.status !== 'done') return null;
-    const r = run.result, col = Math.min(column, r.columns.length - 1);
+    const r = run.result, col = Math.min(column, r.columns.length - 1), quantity = r.columns[col].split('_')[0];
+    const groups = r.manifest.meshes, weights = r.receivers.map((id, i) => weightsFor(id, r.on) ?? new Float64Array(groups[i].count).fill(1));
     const rows = r.receivers.map((id, i) => {
-      const o = objects.find((x) => x.id === id), g = r.manifest.meshes[i];
-      return { id, name: o?.name ?? g.name, slot: o?.slot, g, stats: columnStats(r.values, col, g, weightsFor(id, r.on) ?? new Float64Array(g.count).fill(1)) };
+      const o = objects.find((x) => x.id === id), g = groups[i];
+      return { id, name: o?.name ?? g.name, slot: o?.slot, g, w: weights[i], stats: columnStats(r.values, col, g, weights[i]) };
     });
     const total = rows.reduce((s, x) => s + x.stats.total, 0), area = rows.reduce((s, x) => s + x.stats.area, 0);
-    return { r, col, rows, total, area, hist: histogram(r.values, col, rows.map((x) => x.g)), unit: unitFor(r.columns[col]) };
+    const cum = cumulative(r.values, col, groups, weights), domain = globalRange(r.values, col);
+    return { r, col, quantity, rows, total, area, cum, domain, hist: histogram(r.values, col, groups, weights, 24, domain), unit: unitFor(r.columns[col]) };
   }, [run, column, objects, weightsFor]);
 
   return (
@@ -35,23 +45,38 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="results" /></div>
           <h3>No results yet</h3>
-          <p>Mark a receiver mesh, set the site and time, then run the simulation. Totals, shares and the value distribution appear here.</p>
+          <p>Mark a receiver mesh, set the site and time, then run the simulation. The values appear on the meshes and in the distribution charts here.</p>
         </div>
       )}
       {run.status === 'running' && (
         <div className="stack" aria-busy="true">
-          <div className="grid" style={knob('--grid-min', '7rem')}>
-            {[0, 1, 2].map((n) => <div key={n} className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;</div>)}
+          <div className="grid" style={knob('--grid-min', '6rem')}>
+            {[0, 1, 2, 3].map((n) => <div key={n} className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;</div>)}
           </div>
           <div className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;<br />&nbsp;<br />&nbsp;<br />&nbsp;</div>
           <p className="text-muted"><span className="spinner" aria-hidden="true" /> Tracing on the GPU</p>
         </div>
       )}
       {run.status === 'error' && <Alert title="Run failed">{run.message}</Alert>}
-      {data && (() => {
-        const { r, col, rows, total, area, hist, unit } = data;
-        const hov = rows.find((x) => x.id === hovered);
+      {data && scale && (() => {
+        const { r, col, quantity, rows, total, area, cum, domain, hist, unit } = data;
+        const hov = rows.find((x) => x.id === hovered), probeRow = probe ? rows.find((x) => x.id === probe.id) : undefined;
+        const hasRange = scale.lo !== null || scale.hi !== null, split = rangeShares(cum, scale.lo, scale.hi);
+        const withinShare = (x: (typeof rows)[number]) => {
+          if (!hasRange) return 1;
+          let w = 0;
+          for (let i = 0; i < x.g.count; i++) { const v = r.values[x.g.first + i][col]; if (Number.isFinite(v) && (scale.lo === null || v >= scale.lo) && (scale.hi === null || v <= scale.hi)) w += x.w[i]; }
+          return x.stats.area ? w / x.stats.area : 0;
+        };
         const select = (id: string, additive: boolean) => dispatch({ type: 'SELECT', ids: [id], additive });
+        const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
+        const readout = probe && probeRow
+          ? `${probeRow.name}, ${r.on === 'faces' ? 'face' : 'vertex'} ${probe.element + 1}: ${fmtNum(probe.value)} ${unit.value}. ${pct(shareBelow(cum, probe.value))} of the area gets less.`
+          : bin
+            ? `Bin ${fmtNum(bin[0])} to ${Number.isFinite(bin[1]) ? fmtNum(bin[1]) : fmtNum(domain[1])} ${unit.value}: the rest of the model is faded.`
+            : hov
+              ? `${hov.name}: ${fmtNum(hov.stats.mean)} ${unit.value} mean, ${fmtNum(hov.stats.min)} to ${fmtNum(hov.stats.max)}, ${pct(total ? hov.stats.total / total : 0)} of the total.`
+              : 'Move the cursor over the model or a bar to read a value.';
         return (
           <div className="stack view-fade">
             <div className="cluster cluster--between">
@@ -63,21 +88,54 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                   </select>
                 </div>
               ) : <h3>{columnLabel(r.columns[0])}</h3>}
-              <Segmented name="colour-by" label="Colour meshes by" value={colourBy} options={[['mesh', 'Mesh'], ['value', 'Value']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
+              <Segmented name="colour-by" label="Colour meshes by" value={colourBy} options={[['value', 'Value'], ['mesh', 'Mesh']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
             </div>
-            <p className="text-muted">{r.manifest.run_s !== undefined ? `${r.manifest.run_s.toFixed(2)} s on the GPU` : 'Done'}{cacheLine(r.cache)}. {r.manifest.duration_h} h evaluated, {r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions.</p>
-            <div className="grid" style={knob('--grid-min', '7rem')}>
+            <p className="text-muted">{r.manifest.run_s !== undefined ? `${r.manifest.run_s.toFixed(2)} s on the GPU` : 'Done'}{cacheLine(r.cache)}. {r.manifest.duration_h} h evaluated, {r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, {fmtNum(r.values.length)} {r.on} on {rows.length} {rows.length === 1 ? 'mesh' : 'meshes'}.</p>
+            <div className="grid" style={knob('--grid-min', '8rem')}>  {/* 2 x 2 in the 24rem aside */}
               <div className="stat"><span className="stat__label">Total</span><span className="stat__value">{fmtNum(total)}</span><span className="stat__delta">{unit.total}</span></div>
-              <div className="stat"><span className="stat__label">Area-weighted mean</span><span className="stat__value">{fmtNum(area ? total / area : NaN)}</span><span className="stat__delta">{unit.value}</span></div>
-              <div className="stat"><span className="stat__label">Elements</span><span className="stat__value">{fmtNum(r.values.length)}</span><span className="stat__delta">{r.on} on {rows.length} {rows.length === 1 ? 'mesh' : 'meshes'}</span></div>
+              <div className="stat"><span className="stat__label">Mean</span><span className="stat__value">{fmtNum(area ? total / area : NaN)}</span><span className="stat__delta">{unit.value}, area-weighted</span></div>
+              <div className="stat"><span className="stat__label">P10</span><span className="stat__value">{fmtNum(percentile(cum, 0.1))}</span><span className="stat__delta">10 % of the area gets less</span></div>
+              <div className="stat"><span className="stat__label">P90</span><span className="stat__value">{fmtNum(percentile(cum, 0.9))}</span><span className="stat__delta">10 % of the area gets more</span></div>
             </div>
-            <div className="grid" style={knob('--grid-min', '14rem')}>  {/* one chart per row in the 24rem aside: the histogram needs the width for its labels */}
-              <Donut slices={rows.map((x) => ({ id: x.id, name: x.name, slot: x.slot, share: total ? x.stats.total / total : 0 }))} total={total} unit={unit.total} hovered={hovered} dispatch={dispatch} />
-              <Histogram edges={hist.edges} counts={hist.counts} series={rows} unit={unit.value} hovered={hovered} dispatch={dispatch} />
-            </div>
-            {hov && (
-              <div className="tooltip" role="status">
-                {hov.name}: {fmtNum(hov.stats.mean)} {unit.value} mean, {fmtNum(hov.stats.total)} {unit.total} total, {pct(total ? hov.stats.total / total : 0)} of the total
+            <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
+            <div className="tooltip" role="status">{readout}</div>
+            <fieldset className="field">
+              <legend>Colour scale</legend>
+              <div className="grid" style={knob('--grid-min', '6rem')}>
+                <div className="field">
+                  <label className="field__label" htmlFor="gradient">Gradient</label>
+                  <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
+                    {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+                  </select>
+                </div>
+                <NumberField id="scale-min" label={`Min ${unit.value}`} value={viz.scales[quantity]?.min ?? NaN} help={`Blank: ${fmtNum(domain[0])}`} onCommit={(v) => setViz({ min: orNull(v) })} />
+                <NumberField id="scale-max" label={`Max ${unit.value}`} value={viz.scales[quantity]?.max ?? NaN} help={`Blank: ${fmtNum(domain[1])}`} onCommit={(v) => setViz({ max: orNull(v) })} />
+              </div>
+            </fieldset>
+            <fieldset className="field">
+              <legend>Problem range</legend>
+              <div className="grid" style={knob('--grid-min', '6rem')}>
+                <NumberField id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} help="Painted blue" onCommit={(v) => setViz({ lo: orNull(v) })} />
+                <NumberField id="range-hi" label={`Above ${unit.value}`} value={scale.hi ?? NaN} help="Painted red" onCommit={(v) => setViz({ hi: orNull(v) })} />
+              </div>
+            </fieldset>
+            <Histogram edges={hist.edges} shares={hist.shares} counts={hist.counts} scale={scale} unit={unit.value} probe={probe?.value ?? null} bin={bin} dispatch={dispatch} />
+            <AreaCurve cum={cum} domain={domain} scale={scale} unit={unit.value} probe={probe?.value ?? null} />
+            {hasRange && (
+              <div className="cluster">
+                <Donut
+                  slices={[
+                    { key: 'below', name: 'below the range', color: `var(${BELOW_VAR})`, share: split.below },
+                    { key: 'within', name: 'within the range', color: hexAt(scale.gradient, 0.5), share: split.within },
+                    { key: 'above', name: 'above the range', color: `var(${ABOVE_VAR})`, share: split.above },
+                  ]}
+                  label={pct(split.within)} sub="within"
+                />
+                <div className="stack stack--tight">
+                  {scale.lo !== null && <span><Swatch color={`var(${BELOW_VAR})`} /> {pct(split.below)} of the area below {fmtNum(scale.lo)} {unit.value}</span>}
+                  <span><Swatch color={hexAt(scale.gradient, 0.5)} /> {pct(split.within)} within</span>
+                  {scale.hi !== null && <span><Swatch color={`var(${ABOVE_VAR})`} /> {pct(split.above)} of the area above {fmtNum(scale.hi)} {unit.value}</span>}
+                </div>
               </div>
             )}
             <div className="table-wrap">
@@ -93,6 +151,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                     <th scope="col" className="num">Max</th>
                     <th scope="col" className="num">Total <span className="th-unit">{unit.total}</span></th>
                     <th scope="col" className="num">Share</th>
+                    {hasRange && <th scope="col" className="num">Within</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -111,6 +170,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                       <td className="num">{fmtNum(x.stats.max)}</td>
                       <td className="num">{fmtNum(x.stats.total)}</td>
                       <td className="num">{pct(total ? x.stats.total / total : 0)}</td>
+                      {hasRange && <td className="num">{pct(withinShare(x))}</td>}
                     </tr>
                   ))}
                 </tbody>

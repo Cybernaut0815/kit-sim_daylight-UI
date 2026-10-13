@@ -44,19 +44,59 @@ export function globalRange(values: Float64Array[], col: number): [number, numbe
   return [lo, hi];
 }
 
-/** Fixed bins over `range` (default the column's global range); counts[group][bin]; every finite row lands in exactly one bin. */
-export function histogram(values: Float64Array[], col: number, groups: Group[], bins = 24, range = globalRange(values, col)): { edges: number[]; counts: number[][] } {
+/**
+ * Fixed bins over `range` (default the column's global range); `shares[bin]` = share of the total weight (area),
+ * `counts[bin]` = elements; every finite row lands in exactly one bin. `weights[k]` belongs to `groups[k]`.
+ */
+export function histogram(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[], bins = 24, range = globalRange(values, col)): { edges: number[]; shares: number[]; counts: number[] } {
   const [lo, hi] = range, span = hi - lo || 1;
   const edges = Array.from({ length: bins + 1 }, (_, i) => lo + (span * i) / bins);
-  const counts = groups.map((g) => {
-    const c = new Array<number>(bins).fill(0);
-    for (let i = g.first; i < g.first + g.count; i++) {
-      const v = values[i][col];
-      if (Number.isFinite(v)) c[Math.min(Math.floor(((v - lo) / span) * bins), bins - 1)]++;
+  const shares = new Array<number>(bins).fill(0), counts = new Array<number>(bins).fill(0);
+  let total = 0;
+  groups.forEach((g, k) => {
+    for (let i = 0; i < g.count; i++) {
+      const v = values[g.first + i][col];
+      if (!Number.isFinite(v)) continue;
+      const b = Math.min(Math.max(Math.floor(((v - lo) / span) * bins), 0), bins - 1), w = weights[k][i];
+      shares[b] += w;
+      counts[b]++;
+      total += w;
     }
-    return c;
   });
-  return { edges, counts };
+  return { edges, shares: total ? shares.map((s) => s / total) : shares, counts };
+}
+
+/** Values ascending with the cumulative share of weight (area) at or below each: percentiles, range shares, the area curve. */
+export interface Cumulative { v: Float64Array; cw: Float64Array }
+
+export function cumulative(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[]): Cumulative {
+  const pairs: [number, number][] = [];
+  groups.forEach((g, k) => { for (let i = 0; i < g.count; i++) { const v = values[g.first + i][col]; if (Number.isFinite(v)) pairs.push([v, weights[k][i]]); } });
+  pairs.sort((a, b) => a[0] - b[0]);
+  const total = pairs.reduce((s, p) => s + p[1], 0) || 1, v = new Float64Array(pairs.length), cw = new Float64Array(pairs.length);
+  let acc = 0;
+  pairs.forEach((p, i) => { v[i] = p[0]; acc += p[1]; cw[i] = acc / total; });
+  return { v, cw };
+}
+
+const firstIndex = (c: Cumulative, pred: (x: number) => boolean) => { let lo = 0, hi = c.v.length; while (lo < hi) { const m = (lo + hi) >> 1; if (pred(c.v[m])) hi = m; else lo = m + 1; } return lo; };
+
+/** Share of the area whose value is strictly below x. */
+export function shareBelow(c: Cumulative, x: number): number { const i = firstIndex(c, (v) => v >= x); return i === 0 ? 0 : c.cw[i - 1]; }
+/** Share of the area whose value is strictly above x. */
+export function shareAbove(c: Cumulative, x: number): number { const i = firstIndex(c, (v) => v > x); return i === 0 ? 1 : Math.max(0, 1 - c.cw[i - 1]); }
+/** Smallest value whose cumulative area share reaches p (0..1); NaN without data. */
+export function percentile(c: Cumulative, p: number): number {
+  const n = c.v.length;
+  if (!n) return NaN;
+  let lo = 0, hi = n - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (c.cw[m] < p) lo = m + 1; else hi = m; }
+  return c.v[lo];
+}
+/** Area shares under / inside / over the problem range (null bound = open). */
+export function rangeShares(c: Cumulative, lo: number | null, hi: number | null): { below: number; within: number; above: number } {
+  const below = lo === null ? 0 : shareBelow(c, lo), above = hi === null ? 0 : shareAbove(c, hi);
+  return { below, above, within: Math.max(0, 1 - below - above) };
 }
 
 const UNITS: Record<string, [string, string]> = {

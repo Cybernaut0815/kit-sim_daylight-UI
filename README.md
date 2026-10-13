@@ -3,7 +3,9 @@
 Browser front end and HTTP server for [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) (GPU
 annual daylight / solar simulation): load `.glb` / `.gltf` / `.obj`, pick shade-casting and receiving meshes, set the
 site on a map, the weather (upload, nearest station, PVGIS or clear sky), the time and every CLI option, run on the
-GPU box, read the results on the meshes and in charts. Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
+GPU box, read the results on the meshes (per-quantity gradients, a problem range painted blue / red) and in charts
+(legend, area-weighted histogram, cumulative area curve, range split, per-mesh table); the cursor's element is read
+out on every chart. Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
 
 ```
 git clone --recurse-submodules <this repo>

@@ -7,6 +7,7 @@
   border: 1px solid var(--border-subtle); border-radius: var(--radius-l); background: var(--bg-surface-2); }
 .viewport > canvas { display: block; inline-size: 100%; block-size: 100%; }
 .viewport > .empty-state { position: absolute; inset: 0; justify-content: center; }
+.viewport > .tooltip { position: absolute; inset-block-start: 0; inset-inline-start: 0; pointer-events: none; white-space: nowrap; } /* the cursor readout; JS translates it */
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-m); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
 /* zha-ui 0.1.4: the segmented radios are position:absolute without a positioned ancestor, so inside a scrolling panel

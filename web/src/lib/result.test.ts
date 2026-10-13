@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnStats, faceAreas, fmtNum, globalRange, histogram, unitFor, vertexAreas } from './result';
+import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, shareAbove, shareBelow, unitFor, vertexAreas } from './result';
 
 // unit square in the XY plane as two triangles
 const pos = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -17,8 +17,9 @@ describe('areas', () => {
   });
 });
 
-describe('stats and histogram', () => {
+describe('stats, histogram and cumulative area', () => {
   const rows = [10, 20, 30, 40, NaN].map((v) => Float64Array.of(v, 2 * v));
+  const groups = [{ first: 0, count: 2 }, { first: 2, count: 3 }], weights = [[1, 1], [1, 3, 1]];
   it('weights the mean and total, skips non-finite', () => {
     const s = columnStats(rows, 0, { first: 0, count: 5 }, [1, 1, 1, 3, 1]);
     expect(s.min).toBe(10);
@@ -27,14 +28,28 @@ describe('stats and histogram', () => {
     expect(s.mean).toBeCloseTo(180 / 6);
     expect(columnStats(rows, 1, { first: 2, count: 2 }, [1, 1]).total).toBe(60 + 80);
   });
-  it('bins every finite element exactly once over the global range', () => {
+  it('bins every finite element exactly once over the global range, shares by weight', () => {
     expect(globalRange(rows, 0)).toEqual([10, 40]);
-    const groups = [{ first: 0, count: 2 }, { first: 2, count: 3 }];
-    const h = histogram(rows, 0, groups, 3);
+    const h = histogram(rows, 0, groups, weights, 3);
     expect(h.edges).toEqual([10, 20, 30, 40]);
-    expect(h.counts[0]).toEqual([1, 1, 0]);
-    expect(h.counts[1]).toEqual([0, 0, 2]); // 30 and 40 (max) land in the last bin, NaN dropped
-    expect(h.counts.flat().reduce((a, b) => a + b)).toBe(4);
+    expect(h.counts).toEqual([1, 1, 2]); // 30 and 40 (max) land in the last bin, NaN dropped
+    expect(h.shares.map((s) => Math.round(s * 100))).toEqual([17, 17, 67]); // weights 1, 1, 1 + 3 of 6
+  });
+  it('cumulative share, percentiles and range shares are area-weighted', () => {
+    const c = cumulative(rows, 0, groups, weights);
+    expect([...c.v]).toEqual([10, 20, 30, 40]);
+    expect([...c.cw].map((w) => Math.round(w * 100))).toEqual([17, 33, 50, 100]);
+    expect(shareBelow(c, 30)).toBeCloseTo(2 / 6);
+    expect(shareBelow(c, 5)).toBe(0);
+    expect(shareAbove(c, 30)).toBeCloseTo(3 / 6);
+    expect(shareAbove(c, 40)).toBeCloseTo(0);
+    expect(shareAbove(c, 0)).toBe(1);
+    expect(percentile(c, 0.1)).toBe(10);
+    expect(percentile(c, 0.5)).toBe(30);
+    expect(percentile(c, 0.9)).toBe(40);
+    expect(rangeShares(c, 15, 35)).toEqual({ below: 1 / 6, above: 0.5, within: 1 - 1 / 6 - 0.5 });
+    expect(rangeShares(c, null, null)).toEqual({ below: 0, above: 0, within: 1 });
+    expect(Number.isNaN(percentile(cumulative([], 0, [], []), 0.5))).toBe(true);
   });
 });
 

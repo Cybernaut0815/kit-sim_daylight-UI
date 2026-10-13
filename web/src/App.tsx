@@ -1,11 +1,12 @@
 // Shell: app bar, inputs panel, viewport, results panel; owns the model, the per-mesh conversion cache and the run.
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Group } from 'three';
 import { fromThree, runRemote, type ObjMesh } from 'daylight-mesh';
 import { buildArgs, derivedTz, validate } from './lib/args';
 import { pvgisUrl } from './lib/geo';
+import { gradientFor, type Scale } from './lib/gradients';
 import { listMeshes, loadFiles } from './lib/loaders';
-import { faceAreas, vertexAreas } from './lib/result';
+import { faceAreas, fmtNum, globalRange, unitFor, vertexAreas } from './lib/result';
 import { LocationPanel } from './panels/LocationPanel';
 import { ModelPanel } from './panels/ModelPanel';
 import { ResultsPanel } from './panels/ResultsPanel';
@@ -113,6 +114,17 @@ export default function App() {
   const tz = derivedTz(state.settings);
   const result = state.run.status === 'done' ? state.run.result : null;
   const selectedHref = state.settings.weather.source === 'station' ? state.settings.weather.station?.href ?? null : null;
+  const column = result ? Math.min(state.column, result.columns.length - 1) : 0;
+  // One colour scale for the viewer and the charts: the quantity's gradient, its legend domain (data range unless
+  // overridden) and its problem range, all from the persisted viz settings.
+  const scale = useMemo<Scale | null>(() => {
+    if (!result) return null;
+    const q = result.columns[column].split('_')[0], { gradients, scales, ranges } = state.settings.viz, [dmin, dmax] = globalRange(result.values, column);
+    return { gradient: gradientFor(q, gradients[q]), vmin: scales[q]?.min ?? dmin, vmax: scales[q]?.max ?? dmax, lo: ranges[q]?.lo ?? null, hi: ranges[q]?.hi ?? null };
+  }, [result, column, state.settings.viz]);
+  const probeLabel = state.probe && result
+    ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
+    : null;
 
   return (
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
@@ -141,10 +153,10 @@ export default function App() {
               <hr className="divider" />
               <SettingsPanel sim={state.settings.sim} run={state.run} hasReceiver={receivers.length > 0} errors={state.errors} onRun={onRun} onCancel={() => abort.current?.abort()} dispatch={dispatch} />
             </aside>
-            <Viewer group={group} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={state.column} theme={theme} dispatch={dispatch} />
+            <Viewer group={group} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} />
           </div>
           <aside className="panel stack" aria-label="Results">
-            <ResultsPanel run={state.run} objects={state.objects} column={state.column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} weightsFor={weightsFor} dispatch={dispatch} />
+            <ResultsPanel run={state.run} objects={state.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} probe={state.probe} bin={state.bin} scale={scale} viz={state.settings.viz} weightsFor={weightsFor} dispatch={dispatch} />
           </aside>
         </div>
       </main>

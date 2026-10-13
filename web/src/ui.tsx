@@ -39,9 +39,9 @@ export function Alert({ title, children }: { title: string; children?: ReactNode
   );
 }
 
-/** Mesh colour key: the same --chart-cat-N token the viewer and the charts use. */
-export function Swatch({ slot }: { slot?: number }) {
-  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill={`var(${slotVar(slot)})`} /></svg>;
+/** Colour key: a mesh's --chart-cat-N token (the viewer and the model table) or any CSS colour (the range legend). */
+export function Swatch({ slot, color }: { slot?: number; color?: string }) {
+  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill={color ?? `var(${slotVar(slot)})`} /></svg>;
 }
 
 /** Numeric input committed on blur or Enter (typing "51." must not snap). `key` remounts it when the value changes elsewhere. */

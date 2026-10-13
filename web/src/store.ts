@@ -24,7 +24,12 @@ export interface Settings {
     mode: SimMode; quantities: Quantity[]; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices';
     cullBackfaces: boolean; selfOcclude: boolean; skyDensity: 1 | 2 | 4; patchSamples: number; ground: number; north: number; offset: number;
   };
+  // Result colouring per quantity: gradient key, legend domain (null = data range) and the problem range (null = open).
+  viz: { gradients: Record<string, string>; scales: Record<string, { min: number | null; max: number | null }>; ranges: Record<string, { lo: number | null; hi: number | null }> };
 }
+
+/** The element under the cursor: object id, element index within the mesh's rows, its value in the current column. */
+export interface Probe { id: string; element: number; value: number }
 
 export interface RunResult {
   values: Float64Array[]; columns: string[]; manifest: RemoteManifest; cache?: Record<string, string>;
@@ -35,6 +40,8 @@ export type Run = { status: 'idle' } | { status: 'running' } | { status: 'error'
 
 export interface State {
   objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
+  probe: Probe | null; // element under the cursor in the viewport
+  bin: [number, number] | null; // hovered histogram bin [lo, hi): the viewer fades everything else
   settings: Settings; stations: Station[] | null; run: Run; column: number; colourBy: 'mesh' | 'value';
   errors: Record<string, string>; // validate() output keyed by field id
 }
@@ -53,6 +60,9 @@ export type Action =
   | { type: 'RUN'; run: Run }
   | { type: 'COLUMN'; column: number }
   | { type: 'COLOUR_BY'; colourBy: 'mesh' | 'value' }
+  | { type: 'PROBE'; probe: Probe | null }
+  | { type: 'BIN'; bin: [number, number] | null }
+  | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null } }
   | { type: 'ERRORS'; errors: Record<string, string> };
 
 const year = new Date().getFullYear();
@@ -63,10 +73,11 @@ export const defaultSettings = (): Settings => ({
   epwMeta: null,
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
   sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0 },
+  viz: { gradients: {}, scales: {}, ranges: {} },
 });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  objects: [], selected: new Set(), hovered: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'mesh', errors: {},
+  objects: [], selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'mesh', errors: {},
 });
 
 /** Chart slot -> token. Slots 0..7 are --chart-cat-1..8; a 9th+ receiver folds into --chart-cat-other (DESIGN.md §Charts). */
@@ -135,12 +146,28 @@ export function reducer(s: State, a: Action): State {
       const station = s.settings.weather.station ?? nearestStations(a.stations, lat, lon, 1)[0] ?? null;
       return { ...s, stations: a.stations, settings: { ...s.settings, weather: { ...s.settings.weather, station } } };
     }
-    case 'RUN':
-      return { ...s, run: a.run, column: a.run.status === 'done' ? Math.min(s.column, a.run.result.columns.length - 1) : s.column, errors: a.run.status === 'running' ? {} : s.errors };
+    case 'RUN': // a finished run shows its values on the meshes
+      return {
+        ...s, run: a.run, probe: null, bin: null, column: a.run.status === 'done' ? Math.min(s.column, a.run.result.columns.length - 1) : s.column,
+        colourBy: a.run.status === 'done' ? 'value' : s.colourBy, errors: a.run.status === 'running' ? {} : s.errors,
+      };
     case 'COLUMN':
       return { ...s, column: a.column };
     case 'COLOUR_BY':
       return { ...s, colourBy: a.colourBy };
+    case 'PROBE':
+      return s.probe === a.probe || (s.probe && a.probe && s.probe.id === a.probe.id && s.probe.element === a.probe.element) ? s : { ...s, probe: a.probe };
+    case 'BIN':
+      return { ...s, bin: a.bin };
+    case 'VIZ': {
+      const { gradients, scales, ranges } = s.settings.viz, q = a.quantity, p = a.patch;
+      const viz = {
+        gradients: p.gradient !== undefined ? { ...gradients, [q]: p.gradient } : gradients,
+        scales: p.min !== undefined || p.max !== undefined ? { ...scales, [q]: { min: p.min !== undefined ? p.min : scales[q]?.min ?? null, max: p.max !== undefined ? p.max : scales[q]?.max ?? null } } : scales,
+        ranges: p.lo !== undefined || p.hi !== undefined ? { ...ranges, [q]: { lo: p.lo !== undefined ? p.lo : ranges[q]?.lo ?? null, hi: p.hi !== undefined ? p.hi : ranges[q]?.hi ?? null } } : ranges,
+      };
+      return { ...s, settings: { ...s.settings, viz } };
+    }
     case 'ERRORS':
       return { ...s, errors: a.errors };
   }
@@ -155,9 +182,11 @@ export function parseSettings(raw: string | null): Settings {
   if (!raw) return d;
   try {
     const p = JSON.parse(raw) as Partial<Record<keyof Settings, object>>;
+    const viz = (p.viz ?? {}) as Partial<Settings['viz']>;
     return {
       site: { ...d.site, ...p.site }, weather: { ...d.weather, ...p.weather, file: null },
       epwMeta: (p.epwMeta as EpwMeta | null | undefined) ?? null, time: { ...d.time, ...p.time }, sim: { ...d.sim, ...p.sim },
+      viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges } },
     };
   } catch {
     return d;
