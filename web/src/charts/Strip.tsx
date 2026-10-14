@@ -46,7 +46,7 @@ export function Strip({ min, max, step, values, span, label, height = 40, onChan
       {span && values.length === 2 && <rect x={Math.min(x(values[0]), x(values[1]))} y={0} width={Math.abs(x(values[1]) - x(values[0]))} height={height} fill="var(--accent-subtle)" />}
       {values.map((v, i) => (
         <rect
-          key={i} role="slider" tabIndex={0} x={x(v) - 2} y={0} width={4} height={height} rx={2} fill="var(--accent)"
+          key={i} role="slider" tabIndex={0} x={x(v) - 2} y={0} width={4} height={height} fill="var(--accent)"
           aria-label={values.length > 1 ? `${label} ${i === 0 ? 'start' : 'end'}` : label}
           aria-valuemin={min} aria-valuemax={max} aria-valuenow={v} aria-valuetext={valueText(v)} onKeyDown={onKey(i)}
         />
@@ -62,7 +62,7 @@ export function YearStrip({ year, values, span, onChange }: { year: number; valu
   return (
     <Strip min={0} max={n - 1} step={1} values={values} span={span} onChange={onChange} label="Day of year" valueText={(v) => dateFromDoy(v, year)} draw={(x, w, h) => (
       <>
-        <rect width={w} height={h} rx={4} fill="var(--bg-surface-2)" />
+        <rect width={w} height={h} fill="var(--bg-surface-2)" />
         {starts.slice(0, 12).map((d0, m) => (
           <g key={m}>
             {m > 0 && <line x1={x(d0)} x2={x(d0)} y1={0} y2={h} stroke="var(--chart-grid)" />}
@@ -79,7 +79,7 @@ export function DayStrip({ bounds, values, span, step, onChange }: { bounds: { s
   return (
     <Strip min={0} max={1440} step={step} values={values} span={span} onChange={onChange} label="Time of day" valueText={fmtClock} draw={(x, w, h) => (
       <>
-        <rect width={w} height={h} rx={4} fill="var(--bg-surface-2)" />
+        <rect width={w} height={h} fill="var(--bg-surface-2)" />
         {bounds.sunset > bounds.sunrise && <rect x={x(bounds.sunrise)} width={x(bounds.sunset) - x(bounds.sunrise)} height={h} fill="var(--bg-surface-3)" />}
         {[6, 12, 18].map((hh) => <line key={hh} x1={x(hh * 60)} x2={x(hh * 60)} y1={0} y2={h} stroke="var(--chart-grid)" />)}
         {[0, 6, 12, 18, 24].map((hh) => (

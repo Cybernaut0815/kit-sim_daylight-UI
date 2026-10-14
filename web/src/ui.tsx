@@ -9,6 +9,7 @@ export const knob = (name: string, value: string): CSSProperties => ({ [name]: v
 const ICONS = {
   contrast: <><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" /></>,
   alert: <><circle cx="12" cy="12" r="9.5" /><path d="M12 7.5v5.5M12 16.25v.25" /></>,
+  undo: <><path d="M4 10h9a5 5 0 0 1 0 10h-3" /><path d="M8 6l-4 4 4 4" /></>,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {
@@ -41,7 +42,26 @@ export function Alert({ title, children }: { title: string; children?: ReactNode
 
 /** Colour key: a mesh's --chart-cat-N token (the viewer and the model table) or any CSS colour (the range legend). */
 export function Swatch({ slot, color }: { slot?: number; color?: string }) {
-  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill={color ?? `var(${slotVar(slot)})`} /></svg>;
+  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" fill={color ?? `var(${slotVar(slot)})`} /></svg>;
+}
+
+/** Small reset-to-default icon button, placed beside the setting it resets. */
+export function ResetButton({ what, onClick }: { what: string; onClick: () => void }) {
+  return (
+    <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Reset ${what} to default`} title={`Reset ${what} to default`} onClick={onClick}>
+      <Icon name="undo" />
+    </button>
+  );
+}
+
+/** Native colour picker in a field (data colours, not chrome). */
+export function ColorField({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (hex: string) => void }) {
+  return (
+    <div className="field">
+      <label className="field__label" htmlFor={id}>{label}</label>
+      <input className="input" id={id} type="color" value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
 }
 
 /** Numeric input committed on blur or Enter (typing "51." must not snap). `key` remounts it when the value changes elsewhere. */

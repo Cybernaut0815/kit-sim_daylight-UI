@@ -104,6 +104,17 @@ const UNITS: Record<string, [string, string]> = {
   irradiance: ['W/m²', 'W'], illuminance: ['lx', 'lm'], sunhours: ['h', 'h·m²'],
 };
 
+/** What each result column means, in plain words, shown under the column selector. */
+export const QUANTITY_HELP: Record<string, string> = {
+  radiation: 'Solar energy received over the evaluated period, in kWh per m² of surface: direct sun, diffuse sky and ground-reflected light, each weighted by the angle it meets the surface at, with everything the scene blocks removed. The basis for solar gains, overheating risk and photovoltaic yield.',
+  direct: 'Only the beam from the sun disc, in kWh/m² over the period. Zero whenever the sun is below the horizon or hidden behind geometry, so it shows where shading works.',
+  diffuse: 'Only the light from the sky dome and the ground reflection, in kWh/m² over the period. Smooth and far less sensitive to shading; the larger part in overcast climates.',
+  irradiance: 'The average power received, in W/m², over the evaluated hours (for a single instant, the value at that moment). The rate behind the radiation total; a clear noon on a surface facing the sun is about 1,000 W/m².',
+  illuminance: 'The average daylight level, in lux, over the evaluated hours, from the luminous efficacy of sun and sky (physical mode). Read against task targets such as 300 to 500 lx for desk work; a clear day outdoors gives 50,000 lx and more.',
+  sunhours: 'Hours in the evaluated period during which the sun is above the horizon and not blocked by any geometry. Geometry and timing only, no weather: the classic solar-access and right-to-light measure.',
+};
+export const SIDE_HELP: Record<string, string> = { front: 'Measured on the side the face normal points to.', back: 'Measured on the side opposite the face normal.' };
+
 /** Column name 'radiation_front' -> per-element and area-integrated units. */
 export function unitFor(column: string): { value: string; total: string } {
   const [value, total] = UNITS[column.split('_')[0]] ?? ['', ''];

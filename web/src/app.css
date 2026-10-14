@@ -1,14 +1,23 @@
-/* The one project stylesheet: layout for the canvas, map and timeline regions the design system lacks.
+/* The one project stylesheet: layout for the canvas, map, timeline and splitter regions the design system lacks.
    Tokens only; no colours invented (zha-ui SKILL.md §3, flagged judgement). */
+:root { --radius-s: 0; --radius-m: 0; --radius-l: 0; --radius-pill: 0; } /* sharp corners everywhere: a product decision over the zha-ui radii */
+.maplibregl-ctrl, .maplibregl-ctrl-attrib, .maplibregl-ctrl-group { border-radius: 0 !important; }
 .fill { block-size: 100%; min-block-size: 0; grid-auto-rows: minmax(0, 1fr); } /* the split rows are capped at the viewport, so the panels scroll inside */
 .fill > * { min-block-size: 0; min-inline-size: 0; } /* grid items default to min-content: a wide table or the map canvas would widen the column past the viewport */
+.panel-wrap { position: relative; display: grid; grid-template-rows: minmax(0, 1fr); } /* hosts a scrolling panel and its splitter, which hangs into the column gap */
 .panel { overflow: auto; }
+.splitter { position: absolute; inset-block: 0; inline-size: var(--space-6); cursor: col-resize; z-index: 1; }
+.splitter--left { inset-inline-end: calc(-1 * var(--space-6)); }
+.splitter--right { inset-inline-start: calc(-1 * var(--space-6)); }
+.splitter:hover, .splitter:focus-visible { background: var(--accent-subtle); outline: none; }
 .viewport { position: relative; block-size: 100%; min-block-size: 24rem; overflow: hidden;
-  border: 1px solid var(--border-subtle); border-radius: var(--radius-l); background: var(--bg-surface-2); }
+  border: 1px solid var(--border-subtle); background: var(--bg-surface-2); }
 .viewport > canvas { display: block; inline-size: 100%; block-size: 100%; }
 .viewport > .empty-state { position: absolute; inset: 0; justify-content: center; }
 .viewport > .tooltip { position: absolute; inset-block-start: 0; inset-inline-start: 0; pointer-events: none; white-space: nowrap; } /* the cursor readout; JS translates it */
-.map { block-size: 14rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-m); overflow: hidden; }
+.viewport__bar { position: absolute; inset-inline: 0; inset-block-end: 0; padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface-1); border-block-start: 1px solid var(--border-subtle); } /* the run bar: always visible under the model */
+.map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
 /* zha-ui 0.1.4: the segmented radios are position:absolute without a positioned ancestor, so inside a scrolling panel
    they extend the document's scrollable overflow and focusing one scrolls the whole page. Upstream fix pending. */
@@ -16,5 +25,6 @@
 @media (max-width: 1024px) { /* the splits stack (bundle behaviour): one page column that scrolls as a whole */
   .fill { block-size: auto; grid-auto-rows: auto; }
   .panel { overflow: visible; }
+  .splitter { display: none; }
   .viewport { block-size: 24rem; }
 }

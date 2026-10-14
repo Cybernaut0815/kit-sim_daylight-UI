@@ -1,15 +1,11 @@
 import type { Dispatch } from 'react';
-import { QUANTITIES, quantitiesFor, type Action, type Run, type Settings } from '../store';
+import { QUANTITIES, quantitiesFor, type Action, type Settings } from '../store';
 import { NumberField, Segmented, knob } from '../ui';
 
-interface Props {
-  sim: Settings['sim']; run: Run; hasReceiver: boolean; errors: Record<string, string>;
-  onRun: () => void; onCancel: () => void; dispatch: Dispatch<Action>;
-}
+interface Props { sim: Settings['sim']; errors: Record<string, string>; dispatch: Dispatch<Action> }
 
-export function SettingsPanel({ sim, run, hasReceiver, errors, onRun, onCancel, dispatch }: Props) {
+export function SettingsPanel({ sim, errors, dispatch }: Props) {
   const set = (patch: Partial<Settings['sim']>) => dispatch({ type: 'SIM', patch });
-  const running = run.status === 'running';
   const valid = quantitiesFor(sim.mode);
   return (
     <section className="stack" aria-labelledby="h-sim">
@@ -72,12 +68,6 @@ export function SettingsPanel({ sim, run, hasReceiver, errors, onRun, onCancel, 
           <label><input type="checkbox" checked={sim.selfOcclude} onChange={(e) => set({ selfOcclude: e.target.checked })} /> Receivers block rays too (self-occlusion)</label>
         </div>
       </details>
-      <div className="cluster cluster--end">
-        {running && <button className="btn btn--ghost" type="button" onClick={onCancel}>Cancel</button>}
-        <button className="btn btn--primary" type="button" disabled={!hasReceiver || running} onClick={onRun}>
-          {running ? <><span className="spinner" aria-hidden="true" /> Running</> : 'Run simulation'}
-        </button>
-      </div>
     </section>
   );
 }

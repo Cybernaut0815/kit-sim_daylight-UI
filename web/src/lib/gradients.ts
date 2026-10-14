@@ -1,5 +1,5 @@
 // Result colour scales: evenly spaced hex stops (matplotlib / Ladybug data colormaps, data not UI chrome), the
-// per-quantity defaults, and the "problem range" that paints values outside [lo, hi] in the diverging polarity tokens.
+// per-quantity defaults, and the "problem range" that paints values outside [lo, hi] in two user-chosen colours.
 export interface Gradient { key: string; label: string; stops: string[] }
 
 const G = (key: string, label: string, stops: string[]): Gradient => ({ key, label, stops });
@@ -16,15 +16,24 @@ export const GRADIENTS: Gradient[] = [
 
 /** Default per quantity: heat-like for energy, viridis for light levels, blue-to-yellow for sun hours. */
 export const DEFAULT_GRADIENT: Record<string, string> = { radiation: 'inferno', direct: 'inferno', diffuse: 'inferno', irradiance: 'magma', illuminance: 'viridis', sunhours: 'cividis' };
+/** Problem-range colours: pure blue under, pure red over. */
+export const DEFAULT_BELOW = '#0000ff', DEFAULT_ABOVE = '#ff0000';
 
 export function gradientFor(quantity: string, key?: string): Gradient {
   return GRADIENTS.find((g) => g.key === key) ?? GRADIENTS.find((g) => g.key === DEFAULT_GRADIENT[quantity]) ?? GRADIENTS[3];
 }
 
+/** '#rrggbb' -> RGB floats 0..1 (anything else -> grey). */
+export function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return [0.5, 0.5, 0.5];
+  return [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16) / 255) as [number, number, number];
+}
+
 const floats = new Map<string, number[][]>();
 function stopsOf(g: Gradient): number[][] {
   let s = floats.get(g.key);
-  if (!s) { s = g.stops.map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)); floats.set(g.key, s); }
+  if (!s) { s = g.stops.map(hexToRgb); floats.set(g.key, s); }
   return s;
 }
 
@@ -35,9 +44,7 @@ export function colorAt(g: Gradient, t: number): [number, number, number] {
 }
 export const hexAt = (g: Gradient, t: number): string => '#' + colorAt(g, t).map((c) => Math.round(c * 255).toString(16).padStart(2, '0')).join('');
 
-export const BELOW_VAR = '--chart-div-neg-3', ABOVE_VAR = '--chart-div-pos-3'; // polarity tokens: under the range / over the range
-
-export interface Scale { gradient: Gradient; vmin: number; vmax: number; lo: number | null; hi: number | null }
+export interface Scale { gradient: Gradient; vmin: number; vmax: number; lo: number | null; hi: number | null; below: string; above: string }
 
 /** 'below' / 'above' the problem range, else the 0..1 position on the gradient. */
 export function place(s: Scale, v: number): 'below' | 'above' | number {
@@ -47,18 +54,18 @@ export function place(s: Scale, v: number): 'below' | 'above' | number {
   return span > 0 ? Math.min(Math.max((v - s.vmin) / span, 0), 1) : 0;
 }
 
-/** Fill for SVG marks: the polarity tokens outside the range, a gradient hex inside. */
+/** Fill for SVG marks: the range colours outside the range, a gradient hex inside. */
 export function svgColor(s: Scale, v: number): string {
   const p = place(s, v);
-  return p === 'below' ? `var(${BELOW_VAR})` : p === 'above' ? `var(${ABOVE_VAR})` : hexAt(s.gradient, p);
+  return p === 'below' ? s.below : p === 'above' ? s.above : hexAt(s.gradient, p);
 }
 
 /**
- * RGB floats (3 per value) for three.js. `below` / `above` are the resolved polarity colours; with `dim` = [lo, hi)
- * every value outside that bin fades towards grey, so a hovered histogram bar shows where its elements sit.
+ * RGB floats (3 per value) for three.js. With `dim` = [lo, hi) every value outside that bin fades towards grey, so a
+ * hovered histogram bar shows where its elements sit.
  */
-export function rgbFor(s: Scale, values: ArrayLike<number>, below: ArrayLike<number>, above: ArrayLike<number>, dim: [number, number] | null): Float32Array {
-  const out = new Float32Array(3 * values.length);
+export function rgbFor(s: Scale, values: ArrayLike<number>, dim: [number, number] | null): Float32Array {
+  const out = new Float32Array(3 * values.length), below = hexToRgb(s.below), above = hexToRgb(s.above);
   for (let i = 0; i < values.length; i++) {
     const v = values[i];
     let c: ArrayLike<number> = [0.5, 0.5, 0.5];

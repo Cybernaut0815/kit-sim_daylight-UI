@@ -1,22 +1,21 @@
 // three.js viewport: render on demand, orbit, grid, pick / hover by raycast, materials painted from zha tokens or,
 // with results, from the result gradient and the problem range; the cursor's element is probed and read out.
-import { useEffect, useRef, type Dispatch } from 'react';
+import { useEffect, useRef, type Dispatch, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { applyToThree } from 'daylight-mesh';
 import { cssVar } from '../lib/cssVar';
-import { ABOVE_VAR, BELOW_VAR, rgbFor, type Scale } from '../lib/gradients';
+import { rgbFor, type Scale } from '../lib/gradients';
 import { listMeshes } from '../lib/loaders';
 import { slotVar, type Action, type ObjectRow, type RunResult } from '../store';
 import { Illustration } from '../ui';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background: three.js drops alpha
-const floats = (css: string): number[] => (css.match(/[\d.]+/g) ?? ['0', '0', '0']).slice(0, 3).map((n) => Number(n) / 255);
 
 interface Props {
   group: THREE.Group | null; loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
   colourBy: 'mesh' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
-  probeLabel: string | null; theme: string; dispatch: Dispatch<Action>;
+  probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the run bar under the model
 }
 
 interface Ctx {
@@ -25,7 +24,7 @@ interface Ctx {
   render: () => void;
 }
 
-export function Viewer({ group, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch }: Props) {
+export function Viewer({ group, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const tip = useRef<HTMLDivElement>(null);
@@ -164,7 +163,6 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       c.grid.position.set(c.gridSpec.x, c.gridSpec.y, c.gridSpec.z);
       c.scene.add(c.grid);
       const accent = solid('--accent'), shade = solid('--bg-surface-3'), none = solid('--text-disabled');
-      const below = floats(solid(BELOW_VAR)), above = floats(solid(ABOVE_VAR));
       const byValue = result && scale && colourBy === 'value' ? result : null;
       for (const mesh of c.meshes) {
         const id = mesh.userData.id as string, row = objects.find((o) => o.id === id);
@@ -174,7 +172,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
         if (byValue && scale && k >= 0 && row.role === 'receiver') {
           const g = byValue.manifest.meshes[k], vals = new Float64Array(g.count);
           for (let i = 0; i < g.count; i++) vals[i] = byValue.values[g.first + i][column];
-          const rgb = rgbFor(scale, vals, below, above, bin), perFace = byValue.on === 'faces';
+          const rgb = rgbFor(scale, vals, bin), perFace = byValue.on === 'faces';
           const attr = mesh.geometry !== source ? (mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined) : undefined;
           if (attr && attr.count === (perFace ? 3 * g.count : g.count)) { // repaint in place (scale, range or bin changed)
             const arr = attr.array as Float32Array;
@@ -217,6 +215,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
           {loading ? <><span className="spinner" aria-hidden="true" /><p>Loading the model</p></> : <><h3>Open a model</h3><p>Pick a .glb, .gltf or .obj in the Model panel. Click a mesh to select it, shift-click to add.</p></>}
         </div>
       )}
+      {children && <div className="viewport__bar">{children}</div>}
     </div>
   );
 }

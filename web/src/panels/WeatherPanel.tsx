@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type Dispatch } from 'react';
+import { EpwCharts } from '../charts/EpwCharts';
+import { epwMonthly } from '../lib/epw';
 import { STATION_INDEX_URL, epwHeader, haversineKm, nearestStations, parseStationIndex, proxyUrl, pvgisUrl } from '../lib/geo';
 import type { Action, Settings, Station, WeatherSource } from '../store';
 import { Alert, NumberField, Segmented } from '../ui';
@@ -37,7 +39,8 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
         const text = weather.source === 'upload'
           ? await weather.file!.text()
           : await fetch(proxyUrl(ref!), { signal: ctrl.signal }).then(async (r) => { if (!r.ok) throw new Error(`proxy ${r.status}: ${(await r.text()).slice(0, 120)}`); return r.text(); });
-        dispatch({ type: 'EPW_META', meta: epwHeader(text) });
+        const meta = epwHeader(text);
+        dispatch({ type: 'EPW_META', meta: { ...meta, monthly: epwMonthly(text, meta.lat, meta.lon, meta.tz) } }); // header for the run, monthly digest for the charts
       } catch (e) {
         if (!ctrl.signal.aborted) setHeaderError(`${(e as Error).message}. Pick another station or upload an EPW.`);
       }
@@ -90,8 +93,11 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
       {wants && (headerError
         ? <Alert title="Weather file unusable">{headerError}</Alert>
         : epwMeta
-          ? <p className="text-muted">EPW {epwMeta.name || 'unnamed'}: {epwMeta.lat.toFixed(2)}, {epwMeta.lon.toFixed(2)}, UTC{epwMeta.tz >= 0 ? '+' : ''}{epwMeta.tz}{epwMeta.leap ? ', leap year' : ''}</p>
-          : <p className="text-muted"><span className="spinner" aria-hidden="true" /> Reading the EPW header</p>)}
+          ? <>
+              <p className="text-muted">EPW {epwMeta.name || 'unnamed'}: {epwMeta.lat.toFixed(2)}, {epwMeta.lon.toFixed(2)}, UTC{epwMeta.tz >= 0 ? '+' : ''}{epwMeta.tz}{epwMeta.leap ? ', leap year' : ''}</p>
+              {epwMeta.monthly && <EpwCharts monthly={epwMeta.monthly} />}
+            </>
+          : <p className="text-muted"><span className="spinner" aria-hidden="true" /> Reading the weather file</p>)}
       {errors.weather && <p className="field__error">{errors.weather}</p>}
     </section>
   );

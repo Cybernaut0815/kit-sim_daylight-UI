@@ -1,6 +1,8 @@
 // App state: types, reducer, slot assignment, settings persistence (pure; the App does the localStorage I/O).
 import type { RemoteManifest } from 'daylight-mesh';
+import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
+import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
 
 export type Role = 'receiver' | 'shade' | 'none';
 export interface ObjectRow { id: string; name: string; tris: number; verts: number; role: Role; slot?: number }
@@ -11,7 +13,7 @@ export type SimMode = 'physical' | 'ladybug';
 export const quantitiesFor = (mode: SimMode): Quantity[] => (mode === 'ladybug' ? QUANTITIES.filter((q) => q !== 'illuminance') : QUANTITIES);
 
 export interface Station { title: string; href: string; lat: number; lon: number; km?: number }
-export interface EpwMeta { lat: number; lon: number; tz: number; name: string; leap: boolean }
+export interface EpwMeta { lat: number; lon: number; tz: number; name: string; leap: boolean; monthly?: EpwMonthly }
 export type WeatherSource = 'upload' | 'station' | 'pvgis' | 'clear-sky';
 export interface TimePoint { date: string; hour: number } // 'YYYY-MM-DD', minutes of day (0..1440)
 
@@ -24,8 +26,12 @@ export interface Settings {
     mode: SimMode; quantities: Quantity[]; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices';
     cullBackfaces: boolean; selfOcclude: boolean; skyDensity: 1 | 2 | 4; patchSamples: number; ground: number; north: number; offset: number;
   };
-  // Result colouring per quantity: gradient key, legend domain (null = data range) and the problem range (null = open).
-  viz: { gradients: Record<string, string>; scales: Record<string, { min: number | null; max: number | null }>; ranges: Record<string, { lo: number | null; hi: number | null }> };
+  // Result colouring per quantity: gradient key, legend domain (null = data range), the problem range (null = open),
+  // and the two range colours (hex, shared by every quantity).
+  viz: {
+    gradients: Record<string, string>; scales: Record<string, { min: number | null; max: number | null }>; ranges: Record<string, { lo: number | null; hi: number | null }>;
+    colors: { below: string; above: string };
+  };
 }
 
 /** The element under the cursor: object id, element index within the mesh's rows, its value in the current column. */
@@ -62,7 +68,8 @@ export type Action =
   | { type: 'COLOUR_BY'; colourBy: 'mesh' | 'value' }
   | { type: 'PROBE'; probe: Probe | null }
   | { type: 'BIN'; bin: [number, number] | null }
-  | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null } }
+  | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
+  | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
   | { type: 'ERRORS'; errors: Record<string, string> };
 
 const year = new Date().getFullYear();
@@ -73,7 +80,7 @@ export const defaultSettings = (): Settings => ({
   epwMeta: null,
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
   sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0 },
-  viz: { gradients: {}, scales: {}, ranges: {} },
+  viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
 });
 
 export const initialState = (settings = defaultSettings()): State => ({
@@ -160,12 +167,21 @@ export function reducer(s: State, a: Action): State {
     case 'BIN':
       return { ...s, bin: a.bin };
     case 'VIZ': {
-      const { gradients, scales, ranges } = s.settings.viz, q = a.quantity, p = a.patch;
+      const { gradients, scales, ranges, colors } = s.settings.viz, q = a.quantity, p = a.patch;
       const viz = {
         gradients: p.gradient !== undefined ? { ...gradients, [q]: p.gradient } : gradients,
         scales: p.min !== undefined || p.max !== undefined ? { ...scales, [q]: { min: p.min !== undefined ? p.min : scales[q]?.min ?? null, max: p.max !== undefined ? p.max : scales[q]?.max ?? null } } : scales,
         ranges: p.lo !== undefined || p.hi !== undefined ? { ...ranges, [q]: { lo: p.lo !== undefined ? p.lo : ranges[q]?.lo ?? null, hi: p.hi !== undefined ? p.hi : ranges[q]?.hi ?? null } } : ranges,
+        colors: { below: p.below ?? colors.below, above: p.above ?? colors.above },
       };
+      return { ...s, settings: { ...s.settings, viz } };
+    }
+    case 'VIZ_RESET': {
+      const { gradients, scales, ranges } = s.settings.viz, q = a.quantity;
+      const drop = <T,>(r: Record<string, T>) => { const { [q]: _gone, ...rest } = r; return rest; };
+      const viz = a.what === 'scale'
+        ? { ...s.settings.viz, gradients: drop(gradients), scales: drop(scales) }
+        : { ...s.settings.viz, ranges: drop(ranges), colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } };
       return { ...s, settings: { ...s.settings, viz } };
     }
     case 'ERRORS':
@@ -186,7 +202,7 @@ export function parseSettings(raw: string | null): Settings {
     return {
       site: { ...d.site, ...p.site }, weather: { ...d.weather, ...p.weather, file: null },
       epwMeta: (p.epwMeta as EpwMeta | null | undefined) ?? null, time: { ...d.time, ...p.time }, sim: { ...d.sim, ...p.sim },
-      viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges } },
+      viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges }, colors: { ...d.viz.colors, ...viz.colors } },
     };
   } catch {
     return d;
