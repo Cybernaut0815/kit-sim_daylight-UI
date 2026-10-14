@@ -7,6 +7,8 @@ GPU box, read the results on the meshes (per-quantity gradients, a problem range
 (legend, area-weighted histogram, cumulative area curve, range split, per-mesh table); the cursor's element is read
 out on every chart. Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
 
+![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
+
 ```
 git clone --recurse-submodules <this repo>
 cd server && cmake --preset vs2022 && cmake --build --preset release     # needs VS 2022, CUDA 12.6, OptiX 9 headers, an RTX GPU
