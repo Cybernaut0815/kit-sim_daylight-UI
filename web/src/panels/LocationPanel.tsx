@@ -50,7 +50,7 @@ export function LocationPanel({ site, tz, stations, selectedHref, errors, theme,
         {searchError ? <span className="field__error">{searchError}</span> : <span className="field__help">Or click the map, drag the marker, or type coordinates.</span>}
       </div>
       <SiteMap lat={site.lat} lon={site.lon} stations={stations} selectedHref={selectedHref} theme={theme} onPick={pick} onStation={(station) => dispatch({ type: 'WEATHER', patch: { source: 'station', station } })} />
-      <p className="text-muted">{site.place}</p>
+      <p className="text-muted line" title={site.place}>{site.place}</p>
       <div className="grid" style={knob('--grid-min', '5rem')}>
         <NumberField id="lat" label="Latitude" value={site.lat} step={0.0001} min={-90} max={90} error={errors.lat} onCommit={(v) => { if (Number.isFinite(v) && v !== site.lat) pick(v, site.lon); }} />
         <NumberField id="lon" label="Longitude" value={site.lon} step={0.0001} min={-180} max={180} error={errors.lon} onCommit={(v) => { if (Number.isFinite(v) && v !== site.lon) pick(site.lat, v); }} />

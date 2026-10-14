@@ -1,7 +1,10 @@
+// Weather: source, station choice (nearest first), clear-sky parameters, and the EPW digest charts. Every region keeps
+// its size while data loads (a disabled select, a one-line status, chart placeholders).
 import { useEffect, useMemo, useState, type Dispatch } from 'react';
 import { EpwCharts } from '../charts/EpwCharts';
 import { epwMonthly } from '../lib/epw';
 import { STATION_INDEX_URL, epwHeader, haversineKm, nearestStations, parseStationIndex, proxyUrl, pvgisUrl } from '../lib/geo';
+import { gradientFor } from '../lib/gradients';
 import type { Action, Settings, Station, WeatherSource } from '../store';
 import { Alert, NumberField, Segmented } from '../ui';
 
@@ -10,7 +13,7 @@ const SOURCES: readonly (readonly [WeatherSource, string])[] = [['station', 'Nea
 interface Props { settings: Settings; stations: Station[] | null; errors: Record<string, string>; dispatch: Dispatch<Action> }
 
 export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
-  const { weather, site, epwMeta } = settings;
+  const { weather, site, epwMeta, viz } = settings;
   const [indexError, setIndexError] = useState<string | null>(null);
   const [headerError, setHeaderError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -27,9 +30,10 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
     return () => { gone = true; };
   }, [weather.source, stations, retry, dispatch]);
 
-  // The EPW header (tz for the run, a sanity check): fetched when the reference changes; the reducer clears epwMeta then.
+  // The EPW (tz for the run, monthly digest for the charts): fetched when the reference changes; the reducer clears epwMeta then.
   const ref = weather.source === 'station' ? weather.station?.href ?? null : weather.source === 'pvgis' ? pvgisUrl(site.lat, site.lon) : null;
   const wants = weather.source !== 'clear-sky' && (weather.source === 'upload' ? !!weather.file : !!ref);
+  const shows = weather.source === 'station' || weather.source === 'pvgis' || wants; // the EPW block holds its place while the station is still being found
   useEffect(() => {
     setHeaderError(null);
     if (epwMeta || !wants) return;
@@ -40,7 +44,7 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
           ? await weather.file!.text()
           : await fetch(proxyUrl(ref!), { signal: ctrl.signal }).then(async (r) => { if (!r.ok) throw new Error(`proxy ${r.status}: ${(await r.text()).slice(0, 120)}`); return r.text(); });
         const meta = epwHeader(text);
-        dispatch({ type: 'EPW_META', meta: { ...meta, monthly: epwMonthly(text, meta.lat, meta.lon, meta.tz) } }); // header for the run, monthly digest for the charts
+        dispatch({ type: 'EPW_META', meta: { ...meta, monthly: epwMonthly(text, meta.lat, meta.lon, meta.tz) } });
       } catch (e) {
         if (!ctrl.signal.aborted) setHeaderError(`${(e as Error).message}. Pick another station or upload an EPW.`);
       }
@@ -48,36 +52,38 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
     return () => { clearTimeout(t); ctrl.abort(); };
   }, [epwMeta, wants, weather.source, weather.file, ref, dispatch]);
 
-  const nearest = useMemo(() => (stations ? nearestStations(stations, site.lat, site.lon, 5) : []), [stations, site.lat, site.lon]);
   const sel = weather.station;
+  const choices = useMemo(() => {
+    const near = stations ? nearestStations(stations, site.lat, site.lon, 8) : [];
+    if (sel && !near.some((s) => s.href === sel.href)) near.unshift({ ...sel, km: haversineKm(site.lat, site.lon, sel.lat, sel.lon) }); // a far station picked on the map
+    return near;
+  }, [stations, site.lat, site.lon, sel]);
 
   return (
     <section className="stack" aria-labelledby="h-weather">
       <h2 id="h-weather">Weather</h2>
       <Segmented name="weather" label="Weather source" value={weather.source} options={SOURCES} onChange={(source) => dispatch({ type: 'WEATHER', patch: { source } })} />
-      {weather.source === 'station' && (stations === null
-        ? (indexError
-          ? <Alert title="No station index">{indexError} <button className="btn btn--ghost" type="button" onClick={() => setRetry((n) => n + 1)}>Retry</button></Alert>
-          : <p className="text-muted"><span className="spinner" aria-hidden="true" /> Loading the station index</p>)
-        : sel
-          ? <div className="stack stack--tight">
-              <div className="cluster">
-                <span className="badge badge--info"><span className="dot" />{Math.round(haversineKm(site.lat, site.lon, sel.lat, sel.lon))} km</span>
-                <span>{sel.title}</span>
-              </div>
-              <div className="cluster">
-                {nearest.filter((s) => s.href !== sel.href).slice(0, 4).map((s) => (
-                  <button key={s.href} className="chip" type="button" onClick={() => dispatch({ type: 'WEATHER', patch: { station: s } })}>{s.title}, {Math.round(s.km!)} km</button>
-                ))}
-              </div>
-            </div>
-          : <p className="text-muted">No station in the index. Use PVGIS or an upload.</p>)}
-      {weather.source === 'pvgis' && <p className="text-muted">Typical meteorological year from PVGIS (ERA5, modelled rather than measured). Limited to 30 requests per second.</p>}
+      {weather.source === 'station' && (
+        <div className="field">
+          <label className="field__label" htmlFor="station">Weather station</label>
+          <select
+            className="select" id="station" disabled={!stations || !choices.length} value={sel?.href ?? ''}
+            onChange={(e) => { const s = choices.find((x) => x.href === e.target.value); if (s) dispatch({ type: 'WEATHER', patch: { station: s } }); }}
+          >
+            {!stations ? <option value="">Loading the station index</option>
+              : !choices.length ? <option value="">No station in the index</option>
+                : choices.map((s) => <option key={s.href} value={s.href}>{s.title.replace(/_/g, ' ')}, {Math.round(s.km ?? 0)} km</option>)}
+          </select>
+          <span className="field__help line">EnergyPlus weather files, nearest first; the map pins pick one too.</span>
+        </div>
+      )}
+      {weather.source === 'station' && indexError && <Alert title="No station index">{indexError} <button className="btn btn--ghost" type="button" onClick={() => setRetry((n) => n + 1)}>Retry</button></Alert>}
+      {weather.source === 'pvgis' && <p className="text-muted lines-2">Typical meteorological year from PVGIS (ERA5, modelled rather than measured), limited to 30 requests per second.</p>}
       {weather.source === 'upload' && (
         <div className="field">
           <label className="field__label" htmlFor="epw-file">EPW file</label>
           <input className="input" id="epw-file" type="file" accept=".epw" onChange={(e) => dispatch({ type: 'WEATHER', patch: { file: e.target.files?.[0] ?? null } })} />
-          {weather.file && <span className="field__help">{weather.file.name}</span>}
+          <span className="field__help line">{weather.file ? weather.file.name : 'An hourly EPW, 8760 or 8784 rows'}</span>
         </div>
       )}
       {weather.source === 'clear-sky' && (
@@ -90,14 +96,16 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
           <NumberField id="altitude" label="Site altitude (m)" value={weather.altitude} step={1} help="2 very clear mountain air, 3 clear, 4 to 5 hazy or urban, 6 to 7 polluted" onCommit={(v) => { if (Number.isFinite(v)) dispatch({ type: 'WEATHER', patch: { altitude: v } }); }} />
         </>
       )}
-      {wants && (headerError
+      {shows && (headerError
         ? <Alert title="Weather file unusable">{headerError}</Alert>
-        : epwMeta
-          ? <>
-              <p className="text-muted">EPW {epwMeta.name || 'unnamed'}: {epwMeta.lat.toFixed(2)}, {epwMeta.lon.toFixed(2)}, UTC{epwMeta.tz >= 0 ? '+' : ''}{epwMeta.tz}{epwMeta.leap ? ', leap year' : ''}</p>
-              {epwMeta.monthly && <EpwCharts monthly={epwMeta.monthly} />}
-            </>
-          : <p className="text-muted"><span className="spinner" aria-hidden="true" /> Reading the weather file</p>)}
+        : <>
+            <p className="text-muted line">
+              {epwMeta
+                ? `EPW ${epwMeta.name || 'unnamed'}: ${epwMeta.lat.toFixed(2)}, ${epwMeta.lon.toFixed(2)}, UTC${epwMeta.tz >= 0 ? '+' : ''}${epwMeta.tz}${epwMeta.leap ? ', leap year' : ''}`
+                : <><span className="spinner" aria-hidden="true" /> Reading the weather file</>}
+            </p>
+            <EpwCharts monthly={epwMeta?.monthly ?? null} sun={gradientFor('sunhours', viz.gradients.sunhours)} rad={gradientFor('radiation', viz.gradients.radiation)} />
+          </>)}
       {errors.weather && <p className="field__error">{errors.weather}</p>}
     </section>
   );

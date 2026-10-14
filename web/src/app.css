@@ -14,11 +14,40 @@
   border: 1px solid var(--border-subtle); background: var(--bg-surface-2); }
 .viewport > canvas { display: block; inline-size: 100%; block-size: 100%; }
 .viewport > .empty-state { position: absolute; inset: 0; justify-content: center; }
-.viewport > .tooltip { position: absolute; inset-block-start: 0; inset-inline-start: 0; pointer-events: none; white-space: nowrap; } /* the cursor readout; JS translates it */
 .viewport__bar { position: absolute; inset-inline: 0; inset-block-end: 0; padding: var(--space-3) var(--space-4);
   background: var(--bg-surface-1); border-block-start: 1px solid var(--border-subtle); } /* the run bar: always visible under the model */
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
+/* fixed-size regions: text and data that load or change never move what is below them */
+.line { block-size: 1lh; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* exactly one line, spinner or text */
+.line > .spinner { vertical-align: text-bottom; }
+.lines-2 { min-block-size: 2lh; }
+.lines-3 { min-block-size: 3lh; }
+.lines-5 { min-block-size: 5lh; }
+.cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) var(--space-5); }
+.row-fill { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; }
+.chart-ph { aspect-ratio: 320 / 150; }
+.table-box { max-block-size: 16rem; overflow: auto; }
+/* the value readout: a quiet well that always holds two lines, so hovering never resizes the panel */
+.readout { min-block-size: calc(2lh + 2 * var(--space-2)); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2); color: var(--text-default); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
+.readout--float { position: absolute; inset-block-start: 0; inset-inline-start: 0; min-block-size: 0; pointer-events: none; white-space: nowrap;
+  background: var(--bg-surface-1); color: var(--text-strong); } /* follows the cursor over the model; JS translates it */
+/* a data colour as a small square next to its label */
+.color-quad { inline-size: 14px; block-size: 14px; padding: 0; border: 1px solid var(--border-strong); background: none; cursor: pointer; appearance: none; -webkit-appearance: none; }
+.color-quad::-webkit-color-swatch-wrapper { padding: 0; }
+.color-quad::-webkit-color-swatch { border: 0; }
+.color-quad::-moz-color-swatch { border: 0; }
+/* the mesh tree: fixed height (drag the corner to enlarge), compact rows, names truncate */
+.tree { block-size: 15rem; min-block-size: 8rem; overflow: auto; resize: vertical; border: 1px solid var(--border-subtle); --row-h: 28px; }
+.tree > .data-table { table-layout: fixed; }
+.tree > p { padding: var(--space-3); }
+.tree tbody { user-select: none; } /* shift-click extends the selection of meshes, not of text */
+.tree__col-num { inline-size: 5.5rem; }
+.tree__col-role { inline-size: 6.5rem; }
+.tree td:first-child { overflow: hidden; text-overflow: ellipsis; }
+.tree__indent { display: inline-block; inline-size: var(--space-4); }
+.tree__toggle { display: inline-flex; inline-size: var(--space-4); padding: 0; border: 0; background: none; color: var(--text-muted); vertical-align: middle; cursor: pointer; }
 /* zha-ui 0.1.4: the segmented radios are position:absolute without a positioned ancestor, so inside a scrolling panel
    they extend the document's scrollable overflow and focusing one scrolls the whole page. Upstream fix pending. */
 .segmented { position: relative; }

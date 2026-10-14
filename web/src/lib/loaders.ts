@@ -29,6 +29,8 @@ export async function loadFiles(files: File[]): Promise<Group> {
   } finally {
     for (const u of urls.values()) URL.revokeObjectURL(u);
   }
+  // GLTFLoader sanitises names for animation bindings ("Block A" -> "Block_A") and keeps the original in userData.name
+  group.traverse((o) => { if (typeof o.userData.name === 'string' && o.userData.name) o.name = o.userData.name; });
   const meshes = listMeshes(group);
   if (meshes.length === 0) throw new Error('No triangle meshes found. Pick a .glb, a .gltf with its .bin and textures, or an .obj file.');
   meshes.forEach((m, i) => {

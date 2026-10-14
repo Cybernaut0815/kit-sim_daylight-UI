@@ -1,5 +1,6 @@
-// Results: run summary, what the column means, colour scale and problem range (with resets), legend / histogram /
-// cumulative area curve in the result colours, the cursor readout, the range split, and the per-mesh table.
+// Results: what the column means, run summary, colour scale and problem range (with resets), legend / histogram /
+// cumulative area curve in the result colours, the cursor readout, the range split, and the per-mesh table. Every
+// region keeps its size whatever the data or the hover state, so the panel does not jump.
 import { useMemo, type Dispatch } from 'react';
 import { AreaCurve } from '../charts/AreaCurve';
 import { Donut } from '../charts/Donut';
@@ -8,10 +9,10 @@ import { Legend } from '../charts/Legend';
 import { GRADIENTS, hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, columnStats, cumulative, fmtNum, globalRange, histogram, percentile, rangeShares, shareBelow, unitFor } from '../lib/result';
 import type { Action, ObjectRow, Probe, Run, Settings } from '../store';
-import { Alert, ColorField, Illustration, NumberField, ResetButton, Segmented, Swatch, knob, pct, rowKeys } from '../ui';
+import { Alert, ColorQuad, Illustration, NumberField, ResetButton, Segmented, Swatch, knob, pct, rowKeys } from '../ui';
 
 interface Props {
-  run: Run; objects: ObjectRow[]; column: number; colourBy: 'mesh' | 'value'; hovered: string | null; selected: Set<string>;
+  run: Run; objects: ObjectRow[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; selected: Set<string>;
   probe: Probe | null; bin: [number, number] | null; scale: Scale | null; viz: Settings['viz'];
   weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined; dispatch: Dispatch<Action>;
 }
@@ -31,13 +32,13 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
     const groups = r.manifest.meshes, weights = r.receivers.map((id, i) => weightsFor(id, r.on) ?? new Float64Array(groups[i].count).fill(1));
     const rows = r.receivers.map((id, i) => {
       const o = objects.find((x) => x.id === id), g = groups[i];
-      return { id, name: o?.name ?? g.name, slot: o?.slot, g, w: weights[i], stats: columnStats(r.values, col, g, weights[i]) };
+      return { id, name: o?.name ?? g.name, g, w: weights[i], stats: columnStats(r.values, col, g, weights[i]) };
     });
     const total = rows.reduce((s, x) => s + x.stats.total, 0), area = rows.reduce((s, x) => s + x.stats.area, 0);
     const cum = cumulative(r.values, col, groups, weights), domain = globalRange(r.values, col);
     const bins = Math.min(64, Math.max(12, Math.round(1.5 * Math.sqrt(cum.v.length)))); // more detail with more elements
     const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
-    return { r, col, quantity, side, rows, total, area, cum, domain, markers, hist: histogram(r.values, col, groups, weights, bins, domain), unit: unitFor(r.columns[col]) };
+    return { r, col, quantity, side, rows, total, cum, domain, markers, hist: histogram(r.values, col, groups, weights, bins, domain), unit: unitFor(r.columns[col]) };
   }, [run, column, objects, weightsFor]);
 
   return (
@@ -55,7 +56,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
           <div className="grid" style={knob('--grid-min', '8rem')}>
             {[0, 1, 2, 3].map((n) => <div key={n} className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;</div>)}
           </div>
-          <div className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;<br />&nbsp;<br />&nbsp;<br />&nbsp;</div>
+          <div className="skeleton chart-ph" aria-hidden="true" />
           <p className="text-muted"><span className="spinner" aria-hidden="true" /> Tracing on the GPU</p>
         </div>
       )}
@@ -78,81 +79,79 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
             ? `Bin ${fmtNum(bin[0])} to ${Number.isFinite(bin[1]) ? fmtNum(bin[1]) : fmtNum(domain[1])} ${unit.value}: the rest of the model is faded.`
             : hov
               ? `${hov.name}: ${fmtNum(hov.stats.mean)} ${unit.value} mean, ${fmtNum(hov.stats.min)} to ${fmtNum(hov.stats.max)}, ${pct(total ? hov.stats.total / total : 0)} of the total.`
-              : null;
+              : '';
         return (
           <div className="stack view-fade">
-            <div className="cluster cluster--between">
-              {r.columns.length > 1 ? (
-                <div className="field">
-                  <label className="sr-only" htmlFor="column">Column</label>
-                  <select className="select" id="column" value={col} onChange={(e) => dispatch({ type: 'COLUMN', column: Number(e.target.value) })}>
-                    {r.columns.map((c, i) => <option key={c} value={i}>{columnLabel(c)}</option>)}
-                  </select>
-                </div>
-              ) : <h3>{columnLabel(r.columns[0])}</h3>}
-              <Segmented name="colour-by" label="Colour meshes by" value={colourBy} options={[['value', 'Value'], ['mesh', 'Mesh']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
+            <div className="row-fill">
+              <div className="field">
+                <label className="sr-only" htmlFor="column">Result</label>
+                <select className="select" id="column" value={col} disabled={r.columns.length < 2} onChange={(e) => dispatch({ type: 'COLUMN', column: Number(e.target.value) })}>
+                  {r.columns.map((c, i) => <option key={c} value={i}>{columnLabel(c)}</option>)}
+                </select>
+              </div>
+              <Segmented name="colour-by" label="Colour the meshes" value={colourBy} options={[['value', 'Values'], ['plain', 'Plain']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
             </div>
-            <p className="text-muted">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
-            <p className="text-muted">{r.manifest.run_s !== undefined ? `${r.manifest.run_s.toFixed(2)} s on the GPU` : 'Done'}{cacheLine(r.cache)}. {r.manifest.duration_h} h evaluated, {r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, {fmtNum(r.values.length)} {r.on} on {rows.length} {rows.length === 1 ? 'mesh' : 'meshes'}.</p>
-            <div className="grid" style={knob('--grid-min', '8rem')}>
+            <p className="text-muted lines-5">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
+            <p className="text-muted lines-2">{r.manifest.run_s !== undefined ? `${r.manifest.run_s.toFixed(2)} s on the GPU` : 'Done'}{cacheLine(r.cache)}. {r.manifest.duration_h} h evaluated, {r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, {fmtNum(r.values.length)} {r.on} on {rows.length} {rows.length === 1 ? 'mesh' : 'meshes'}.</p>
+            <div className="cols-2">
               <div className="stat"><span className="stat__label">Total</span><span className="stat__value">{fmtNum(total)}</span><span className="stat__delta">{unit.total}</span></div>
               <div className="stat"><span className="stat__label">Mean</span><span className="stat__value">{fmtNum(markers.mean)}</span><span className="stat__delta">{unit.value}, area-weighted</span></div>
               <div className="stat"><span className="stat__label">P10</span><span className="stat__value">{fmtNum(markers.p10)}</span><span className="stat__delta">10 % of the area gets less</span></div>
               <div className="stat"><span className="stat__label">P90</span><span className="stat__value">{fmtNum(markers.p90)}</span><span className="stat__delta">10 % of the area gets more</span></div>
             </div>
             <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
-            {readout && <div className="tooltip" role="status">{readout}</div>}
+            <div className="readout" role="status" aria-live="polite">{readout}</div>
             <fieldset className="field">
               <div className="cluster cluster--between"><legend>Colour scale</legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
-              <div className="grid" style={knob('--grid-min', '6rem')}>
-                <div className="field">
-                  <label className="field__label" htmlFor="gradient">Gradient</label>
-                  <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
-                    {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
-                  </select>
-                </div>
+              <div className="field">
+                <label className="field__label" htmlFor="gradient">Gradient</label>
+                <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
+                  {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+                </select>
+              </div>
+              <div className="cols-2">
                 <NumberField id="scale-min" label={`Min ${unit.value}`} value={viz.scales[quantity]?.min ?? NaN} help={`Blank: ${fmtNum(domain[0])}`} onCommit={(v) => setViz({ min: orNull(v) })} />
                 <NumberField id="scale-max" label={`Max ${unit.value}`} value={viz.scales[quantity]?.max ?? NaN} help={`Blank: ${fmtNum(domain[1])}`} onCommit={(v) => setViz({ max: orNull(v) })} />
               </div>
             </fieldset>
             <fieldset className="field">
               <div className="cluster cluster--between"><legend>Problem range</legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
-              <div className="grid" style={knob('--grid-min', '8rem')}>
-                <NumberField id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} help="Blank: no lower bound" onCommit={(v) => setViz({ lo: orNull(v) })} />
-                <NumberField id="range-hi" label={`Above ${unit.value}`} value={scale.hi ?? NaN} help="Blank: no upper bound" onCommit={(v) => setViz({ hi: orNull(v) })} />
-              </div>
-              <div className="grid" style={knob('--grid-min', '8rem')}>
-                <ColorField id="colour-below" label="Colour below" value={scale.below} onChange={(below) => setViz({ below })} />
-                <ColorField id="colour-above" label="Colour above" value={scale.above} onChange={(above) => setViz({ above })} />
+              <div className="cols-2">
+                <NumberField
+                  id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} help="Blank: no lower bound" onCommit={(v) => setViz({ lo: orNull(v) })}
+                  adorn={<ColorQuad id="colour-below" label="Colour below the range" value={scale.below} onChange={(below) => setViz({ below })} />}
+                />
+                <NumberField
+                  id="range-hi" label={`Above ${unit.value}`} value={scale.hi ?? NaN} help="Blank: no upper bound" onCommit={(v) => setViz({ hi: orNull(v) })}
+                  adorn={<ColorQuad id="colour-above" label="Colour above the range" value={scale.above} onChange={(above) => setViz({ above })} />}
+                />
               </div>
             </fieldset>
             <h3>Distribution</h3>
             <Histogram edges={hist.edges} shares={hist.shares} counts={hist.counts} scale={scale} unit={unit.value} probe={probe?.value ?? null} bin={bin} markers={markers} dispatch={dispatch} />
             <h3>Cumulative area</h3>
             <AreaCurve cum={cum} domain={domain} scale={scale} unit={unit.value} probe={probe?.value ?? null} />
-            {hasRange && (
-              <div className="cluster">
-                <Donut
-                  slices={[
-                    { key: 'below', name: 'below the range', color: scale.below, share: split.below },
-                    { key: 'within', name: 'within the range', color: hexAt(scale.gradient, 0.5), share: split.within },
-                    { key: 'above', name: 'above the range', color: scale.above, share: split.above },
-                  ]}
-                  label={pct(split.within)} sub="within"
-                />
-                <div className="stack stack--tight">
-                  {scale.lo !== null && <span><Swatch color={scale.below} /> {pct(split.below)} of the area below {fmtNum(scale.lo)} {unit.value}</span>}
-                  <span><Swatch color={hexAt(scale.gradient, 0.5)} /> {pct(split.within)} within</span>
-                  {scale.hi !== null && <span><Swatch color={scale.above} /> {pct(split.above)} of the area above {fmtNum(scale.hi)} {unit.value}</span>}
-                </div>
+            <h3>Problem range split</h3>
+            <div className="cluster">
+              <Donut
+                slices={[
+                  { key: 'below', name: 'below the range', color: scale.below, share: split.below },
+                  { key: 'within', name: 'within the range', color: hexAt(scale.gradient, 0.5), share: split.within },
+                  { key: 'above', name: 'above the range', color: scale.above, share: split.above },
+                ]}
+                label={pct(split.within)} sub="within"
+              />
+              <div className="stack stack--tight">
+                <span><Swatch color={scale.below} /> {pct(split.below)} below {scale.lo !== null ? `${fmtNum(scale.lo)} ${unit.value}` : '(no bound)'}</span>
+                <span><Swatch color={hexAt(scale.gradient, 0.5)} /> {pct(split.within)} within</span>
+                <span><Swatch color={scale.above} /> {pct(split.above)} above {scale.hi !== null ? `${fmtNum(scale.hi)} ${unit.value}` : '(no bound)'}</span>
               </div>
-            )}
-            <div className="table-wrap">
+            </div>
+            <div className="table-box">
               <table className="data-table">
                 <caption>Per receiver mesh, {columnLabel(r.columns[col])}</caption>
                 <thead>
                   <tr>
-                    <th scope="col"><span className="sr-only">Colour</span></th>
                     <th scope="col">Mesh</th>
                     <th scope="col" className="num">Elements</th>
                     <th scope="col" className="num">Min <span className="th-unit">{unit.value}</span></th>
@@ -160,7 +159,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                     <th scope="col" className="num">Max</th>
                     <th scope="col" className="num">Total <span className="th-unit">{unit.total}</span></th>
                     <th scope="col" className="num">Share</th>
-                    {hasRange && <th scope="col" className="num">Within</th>}
+                    <th scope="col" className="num">Within</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -171,7 +170,6 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                       onPointerEnter={() => dispatch({ type: 'HOVER', id: x.id })} onPointerLeave={() => dispatch({ type: 'HOVER', id: null })}
                       onFocus={() => dispatch({ type: 'HOVER', id: x.id })} onBlur={() => dispatch({ type: 'HOVER', id: null })}
                     >
-                      <td><Swatch slot={x.slot} /></td>
                       <td>{x.name}</td>
                       <td className="num">{x.stats.count.toLocaleString('en-GB')}</td>
                       <td className="num">{fmtNum(x.stats.min)}</td>
@@ -179,7 +177,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                       <td className="num">{fmtNum(x.stats.max)}</td>
                       <td className="num">{fmtNum(x.stats.total)}</td>
                       <td className="num">{pct(total ? x.stats.total / total : 0)}</td>
-                      {hasRange && <td className="num">{pct(withinShare(x))}</td>}
+                      <td className="num">{pct(withinShare(x))}</td>
                     </tr>
                   ))}
                 </tbody>

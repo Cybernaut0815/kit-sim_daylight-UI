@@ -1,6 +1,5 @@
 // Shared bits: knob helper, stroke icons, empty-state illustrations, alert, swatch, number field, segmented control.
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
-import { slotVar } from './store';
 
 /** The only inline style the design system allows: one of its nine knobs. */
 export const knob = (name: string, value: string): CSSProperties => ({ [name]: value }) as CSSProperties;
@@ -10,6 +9,8 @@ const ICONS = {
   contrast: <><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" /></>,
   alert: <><circle cx="12" cy="12" r="9.5" /><path d="M12 7.5v5.5M12 16.25v.25" /></>,
   undo: <><path d="M4 10h9a5 5 0 0 1 0 10h-3" /><path d="M8 6l-4 4 4 4" /></>,
+  chevronRight: <path d="m9 6 6 6-6 6" />,
+  chevronDown: <path d="m6 9 6 6 6-6" />,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {
@@ -40,9 +41,9 @@ export function Alert({ title, children }: { title: string; children?: ReactNode
   );
 }
 
-/** Colour key: a mesh's --chart-cat-N token (the viewer and the model table) or any CSS colour (the range legend). */
-export function Swatch({ slot, color }: { slot?: number; color?: string }) {
-  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" fill={color ?? `var(${slotVar(slot)})`} /></svg>;
+/** Colour key square for chart legends. */
+export function Swatch({ color }: { color: string }) {
+  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" fill={color} /></svg>;
 }
 
 /** Small reset-to-default icon button, placed beside the setting it resets. */
@@ -54,23 +55,20 @@ export function ResetButton({ what, onClick }: { what: string; onClick: () => vo
   );
 }
 
-/** Native colour picker in a field (data colours, not chrome). */
-export function ColorField({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (hex: string) => void }) {
-  return (
-    <div className="field">
-      <label className="field__label" htmlFor={id}>{label}</label>
-      <input className="input" id={id} type="color" value={value} onChange={(e) => onChange(e.target.value)} />
-    </div>
-  );
+/** Native colour picker shown as a small square, for a data colour next to the text it belongs to. */
+export function ColorQuad({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (hex: string) => void }) {
+  return <input className="color-quad" id={id} type="color" value={value} aria-label={label} title={label} onChange={(e) => onChange(e.target.value)} />;
 }
 
 /** Numeric input committed on blur or Enter (typing "51." must not snap). `key` remounts it when the value changes elsewhere. */
-export function NumberField({ id, label, value, onCommit, step = 'any', min, max, help, error }: {
+export function NumberField({ id, label, value, onCommit, step = 'any', min, max, help, error, adorn }: {
   id: string; label: string; value: number; onCommit: (v: number) => void; step?: number | 'any'; min?: number; max?: number; help?: string; error?: string;
+  adorn?: ReactNode; // e.g. a ColorQuad in front of the label
 }) {
+  const lab = <label className="field__label" htmlFor={id}>{label}</label>;
   return (
     <div className="field">
-      <label className="field__label" htmlFor={id}>{label}</label>
+      {adorn ? <div className="cluster">{adorn}{lab}</div> : lab}
       <input
         key={value} className="input" id={id} type="number" inputMode="decimal" step={step} min={min} max={max}
         defaultValue={Number.isFinite(value) ? value : ''} aria-invalid={error ? true : undefined}

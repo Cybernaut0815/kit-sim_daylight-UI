@@ -7,14 +7,15 @@ import { applyToThree } from 'daylight-mesh';
 import { cssVar } from '../lib/cssVar';
 import { rgbFor, type Scale } from '../lib/gradients';
 import { listMeshes } from '../lib/loaders';
-import { slotVar, type Action, type ObjectRow, type RunResult } from '../store';
+import type { Action, ObjectRow, RunResult } from '../store';
 import { Illustration } from '../ui';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background: three.js drops alpha
+const GREY = 0xb4b4b4; // every unpainted mesh: a neutral, opaque, lit grey (a scene material colour, not UI chrome)
 
 interface Props {
   group: THREE.Group | null; loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
-  colourBy: 'mesh' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
+  colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the run bar under the model
 }
 
@@ -162,7 +163,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       c.grid = new THREE.GridHelper(c.gridSpec.size, 20, solid('--border-default'), solid('--border-subtle'));
       c.grid.position.set(c.gridSpec.x, c.gridSpec.y, c.gridSpec.z);
       c.scene.add(c.grid);
-      const accent = solid('--accent'), shade = solid('--bg-surface-3'), none = solid('--text-disabled');
+      const accent = solid('--accent');
       const byValue = result && scale && colourBy === 'value' ? result : null;
       for (const mesh of c.meshes) {
         const id = mesh.userData.id as string, row = objects.find((o) => o.id === id);
@@ -190,12 +191,10 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
         } else {
           if (mesh.geometry !== source) { mesh.geometry.dispose(); mesh.geometry = source; }
           mat.vertexColors = false;
-          mat.color.set(row.role === 'receiver' ? solid(slotVar(row.slot)) : row.role === 'shade' ? shade : none);
+          mat.color.set(GREY);
         }
-        mat.transparent = row.role === 'none';
-        mat.opacity = row.role === 'none' ? 0.35 : 1;
         const painted = mat.vertexColors; // a value-painted mesh keeps its colours readable: a faint tint only
-        const hi = hovered === id ? (painted ? 0.1 : 0.35) : selected.has(id) ? (painted ? 0.2 : 0.6) : 0;
+        const hi = hovered === id ? (painted ? 0.1 : 0.22) : selected.has(id) ? (painted ? 0.12 : 0.14) : 0; // grey stays grey: a light accent tint
         mat.emissive.set(hi ? accent : 0x000000);
         mat.emissiveIntensity = hi;
         mat.needsUpdate = true;
@@ -208,7 +207,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
   return (
     <div ref={host} className="viewport">
       <canvas ref={canvas} aria-label="3D model viewport" />
-      <div ref={tip} className="tooltip" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
+      <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
       {!group && (
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="model" /></div>

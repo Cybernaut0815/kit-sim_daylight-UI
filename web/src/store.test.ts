@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultSettings, initialState, parseSettings, reducer, serializeSettings, slotVar, type ObjectRow, type Station } from './store';
+import { defaultSettings, initialState, parseSettings, reducer, serializeSettings, type ObjectRow, type Station } from './store';
 
 const obj = (id: string, role: ObjectRow['role'] = 'receiver'): ObjectRow => ({ id, name: id, tris: 2, verts: 4, role });
 const stations: Station[] = [
@@ -7,22 +7,12 @@ const stations: Station[] = [
   { title: 'Paris Orly', href: 'https://energyplus-weather.s3.amazonaws.com/FRA_Paris.Orly.epw', lat: 48.73, lon: 2.4 },
 ];
 
-describe('slots', () => {
-  it('assigns the lowest free slot and never repaints the others', () => {
+describe('roles', () => {
+  it('ROLE sets the role of the given meshes only; a new model starts in the plain view', () => {
     let s = reducer(initialState(), { type: 'LOAD', objects: [obj('a'), obj('b'), obj('c')] });
-    expect(s.objects.map((o) => o.slot)).toEqual([0, 1, 2]);
-    s = reducer(s, { type: 'ROLE', ids: ['b'], role: 'shade' });
-    expect(s.objects.map((o) => o.slot)).toEqual([0, undefined, 2]);
-    s = reducer(s, { type: 'LOAD', objects: s.objects.concat(obj('d')) });
-    expect(s.objects.find((o) => o.id === 'd')!.slot).toBe(1); // the freed slot, c keeps 2
-    s = reducer(s, { type: 'ROLE', ids: ['b'], role: 'receiver' });
-    expect(s.objects.find((o) => o.id === 'b')!.slot).toBe(3);
-  });
-  it('folds the ninth receiver into other', () => {
-    expect(slotVar(0)).toBe('--chart-cat-1');
-    expect(slotVar(7)).toBe('--chart-cat-8');
-    expect(slotVar(8)).toBe('--chart-cat-other');
-    expect(slotVar(undefined)).toBe('--chart-cat-other');
+    expect(s.colourBy).toBe('plain');
+    s = reducer(s, { type: 'ROLE', ids: ['b', 'c'], role: 'shade' });
+    expect(s.objects.map((o) => o.role)).toEqual(['receiver', 'shade', 'shade']);
   });
 });
 

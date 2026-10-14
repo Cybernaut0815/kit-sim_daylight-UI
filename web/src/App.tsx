@@ -8,6 +8,7 @@ import { buildArgs, derivedTz, validate } from './lib/args';
 import { pvgisUrl } from './lib/geo';
 import { gradientFor, type Scale } from './lib/gradients';
 import { listMeshes, loadFiles } from './lib/loaders';
+import { buildTree, type TreeNode } from './lib/tree';
 import { faceAreas, fmtNum, globalRange, unitFor, vertexAreas } from './lib/result';
 import { LocationPanel } from './panels/LocationPanel';
 import { ModelPanel } from './panels/ModelPanel';
@@ -42,6 +43,7 @@ export default function App() {
   const theme = mode === 'auto' ? system : mode;
   const [widths, setWidths] = useState(readWidths);
   const [group, setGroup] = useState<Group | null>(null);
+  const [tree, setTree] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh (+ areas on demand): converted once, uploaded once, referenced by id
@@ -92,6 +94,7 @@ export default function App() {
         return { id, name: m.name, tris: (m.geometry.index ? m.geometry.index.count : pos.count) / 3, verts: pos.count, role };
       });
       setGroup(g);
+      setTree(buildTree(g, meshes));
       dispatch({ type: 'LOAD', objects });
     } catch (e) {
       setLoadError((e as Error).message);
@@ -170,7 +173,7 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel objects={state.objects} selected={state.selected} loading={loading} error={loadError} errors={state.errors} onFiles={onFiles} dispatch={dispatch} />
+                <ModelPanel tree={tree} objects={state.objects} selected={state.selected} loading={loading} error={loadError} errors={state.errors} onFiles={onFiles} dispatch={dispatch} />
                 <hr className="divider" />
                 <LocationPanel site={state.settings.site} tz={tz} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <hr className="divider" />

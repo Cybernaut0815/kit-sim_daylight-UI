@@ -1,11 +1,11 @@
-// App state: types, reducer, slot assignment, settings persistence (pure; the App does the localStorage I/O).
+// App state: types, reducer, settings persistence (pure; the App does the localStorage I/O).
 import type { RemoteManifest } from 'daylight-mesh';
 import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
 import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
 
 export type Role = 'receiver' | 'shade' | 'none';
-export interface ObjectRow { id: string; name: string; tris: number; verts: number; role: Role; slot?: number }
+export interface ObjectRow { id: string; name: string; tris: number; verts: number; role: Role }
 
 export type Quantity = 'radiation' | 'direct' | 'diffuse' | 'irradiance' | 'illuminance' | 'sunhours';
 export const QUANTITIES: Quantity[] = ['radiation', 'direct', 'diffuse', 'irradiance', 'illuminance', 'sunhours'];
@@ -48,7 +48,7 @@ export interface State {
   objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
   probe: Probe | null; // element under the cursor in the viewport
   bin: [number, number] | null; // hovered histogram bin [lo, hi): the viewer fades everything else
-  settings: Settings; stations: Station[] | null; run: Run; column: number; colourBy: 'mesh' | 'value';
+  settings: Settings; stations: Station[] | null; run: Run; column: number; colourBy: 'plain' | 'value';
   errors: Record<string, string>; // validate() output keyed by field id
 }
 
@@ -65,7 +65,7 @@ export type Action =
   | { type: 'STATIONS'; stations: Station[] }
   | { type: 'RUN'; run: Run }
   | { type: 'COLUMN'; column: number }
-  | { type: 'COLOUR_BY'; colourBy: 'mesh' | 'value' }
+  | { type: 'COLOUR_BY'; colourBy: 'plain' | 'value' }
   | { type: 'PROBE'; probe: Probe | null }
   | { type: 'BIN'; bin: [number, number] | null }
   | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
@@ -84,33 +84,17 @@ export const defaultSettings = (): Settings => ({
 });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  objects: [], selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'mesh', errors: {},
+  objects: [], selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', errors: {},
 });
-
-/** Chart slot -> token. Slots 0..7 are --chart-cat-1..8; a 9th+ receiver folds into --chart-cat-other (DESIGN.md §Charts). */
-export const slotVar = (slot: number | undefined): string => (slot !== undefined && slot < 8 ? `--chart-cat-${slot + 1}` : '--chart-cat-other');
-
-// Receivers keep their slot for life; a new receiver takes the lowest free one, so nothing repaints when others change.
-function assignSlots(objects: ObjectRow[]): ObjectRow[] {
-  const used = new Set(objects.filter((o) => o.role === 'receiver' && o.slot !== undefined).map((o) => o.slot));
-  return objects.map((o) => {
-    if (o.role !== 'receiver') return o.slot === undefined ? o : { ...o, slot: undefined };
-    if (o.slot !== undefined) return o;
-    let slot = 0;
-    while (used.has(slot)) slot++;
-    used.add(slot);
-    return { ...o, slot };
-  });
-}
 
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((q) => b.includes(q as Quantity));
 
 export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case 'LOAD':
-      return { ...s, objects: assignSlots(a.objects), selected: new Set(), hovered: null, run: { status: 'idle' }, column: 0, colourBy: 'mesh' };
+      return { ...s, objects: a.objects, selected: new Set(), hovered: null, run: { status: 'idle' }, column: 0, colourBy: 'plain' };
     case 'ROLE':
-      return { ...s, objects: assignSlots(s.objects.map((o) => (a.ids.includes(o.id) ? { ...o, role: a.role } : o))), run: { status: 'idle' }, column: 0 };
+      return { ...s, objects: s.objects.map((o) => (a.ids.includes(o.id) ? { ...o, role: a.role } : o)), run: { status: 'idle' }, column: 0 };
     case 'SELECT': {
       if (!a.additive) return { ...s, selected: new Set(a.ids) };
       const next = new Set(s.selected);

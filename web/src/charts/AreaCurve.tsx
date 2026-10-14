@@ -25,11 +25,11 @@ export function AreaCurve({ cum, domain, scale, unit, probe }: { cum: Cumulative
       {[0, 0.25, 0.5, 0.75, 1].map((s) => <text key={s} x={L - 4} y={y(s) + 3} fontSize={FONT} textAnchor="end" fill={TEXT}>{`${100 * s} %`}</text>)}
       <polyline points={pts.join(' ')} fill="none" stroke={STRONG} strokeWidth={1.5} />
       {[0.1, 0.5, 0.9].map((q) => {
-        const v = percentile(cum, q);
+        const v = percentile(cum, q), right = x(v) > L + plotW * 0.7; // labels near the right edge turn inwards
         return Number.isFinite(v) && (
           <g key={q}>
             <circle cx={x(v)} cy={y(q)} r={2.5} fill={STRONG} />
-            <text x={x(v) + 4} y={y(q) - 3} fontSize={FONT} fill={TEXT}>{`P${Math.round(100 * q)} ${fmtNum(v)}`}</text>
+            <text x={x(v) + (right ? -4 : 4)} y={y(q) + (right ? 12 : -3)} fontSize={FONT} textAnchor={right ? 'end' : 'start'} fill={TEXT}>{`P${Math.round(100 * q)} ${fmtNum(v)}`}</text>
           </g>
         );
       })}
