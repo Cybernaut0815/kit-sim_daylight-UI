@@ -16,10 +16,13 @@ cd ../web && npm install && npm run build                                 # need
 server\build\RelWithDebInfo\daylight_server.exe --web web\dist            # http://localhost:8080
 ```
 
-Development: `cd web && npm run dev` (Vite proxies `/run`, `/mesh`, `/proxy`, `/health` to `localhost:8080`;
-`VITE_MOCK=1 npm run dev` fakes the server for GPU-free UI work).
+Development: `cd web && npm run dev` (Vite proxies the API paths to `localhost:8080`; `npm run dev:mock` fakes the
+server for GPU-free UI work).
 
-- [server/README.md](server/README.md): the API (`PUT /mesh`, `POST /run`, `GET /proxy`), caching, the proxy allowlist.
+**API**: several users share the GPU through a job queue; every endpoint is documented by the server itself at
+`/docs` (Swagger UI), `/redoc`, `/openapi.json` (OpenAPI 3.1, for agents and code generators) and `/llms.txt`.
+
+- [server/README.md](server/README.md): documentation endpoints, multi-user behaviour (queue, limits, cancel), caching, flags.
 - `kit-sim_daylight/`: the core as a git submodule (`git submodule update --init`); its `bindings/ts` is imported by
   the web app through a Vite alias.
 - External services the browser uses directly: OpenFreeMap tiles (`styles/dark`, © OpenMapTiles, data from

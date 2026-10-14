@@ -1,0 +1,314 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "daylight_server",
+    "version": "1.0.0",
+    "summary": "GPU annual daylight and solar simulation on meshes, over HTTP.",
+    "description": "Runs the [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) core (OptiX ray tracing, Radiance-derived Perez sky, validated against Ladybug Tools, Radiance and pvlib) for several users at once. One GPU worker runs queued jobs one after another; uploads, validation, cached answers and status polls never wait for it.\n\n## Workflow\n\n1. **Upload each mesh once** as a `.dmesh` image: `PUT /mesh/{id}` with an id you choose (a UUID). Meshes stay cached in server RAM, so later runs only name them.\n2. **Submit a job**: `POST /jobs` (multipart) with the receiving meshes in `sensors`, the shading-only meshes in `context`, CLI flags in `args`, and weather as an `epw` file, an `epw_url`, or `--clear-sky`. A `404` with `{\"missing\": [...]}` lists ids the server does not have: upload those and submit again.\n3. **Wait**: `GET /jobs/{id}?wait=25` returns as soon as the state or the queue position changes (long poll). Repeat while `state` is `queued` or `running`.\n4. **Read the result** when `state` is `done`: `values_b64` is base64 of float64 little-endian values, row-major `[rows x columns.length]`, rows = sum of `meshes[].count`. Rows of mesh *k* are `first .. first + count - 1`, one per face (or per vertex with `--on vertices`) in the uploaded order.\n5. **Cancel** with `DELETE /jobs/{id}` when the result is no longer needed; the GPU moves on to the next job.\n\n`POST /run` does steps 2 to 4 in one blocking call and answers the result object directly.\n\n## Example\n\n```sh\ncurl -T box.dmesh \"http://localhost:8080/mesh/3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11?name=roof\"\ncurl -F sensors=3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11 -F args=--lat -F args=52.52 -F args=--lon -F args=13.41 -F args=--tz -F args=1 \\\n     -F args=--quantity -F args=radiation,sunhours -F args=--clear-sky http://localhost:8080/jobs\ncurl \"http://localhost:8080/jobs/<id from the answer>?wait=25\"\n```\n\nDecoding in Python: `numpy.frombuffer(base64.b64decode(r['values_b64']), '<f8').reshape(-1, len(r['columns']))`. In JavaScript: `new Float64Array(Uint8Array.from(atob(r.values_b64), c => c.charCodeAt(0)).buffer)`.\n\n## Units and conventions\n\nCoordinates in `.dmesh` are metres, Z up, right-handed winding (the face normal points to the front side). `radiation`, `direct`, `diffuse`: kWh/m² over the evaluated period; `irradiance`: W/m² mean; `illuminance`: lux mean; `sunhours`: hours. Columns are named `<quantity>_<side>` (`radiation_front`, `sunhours_back`).\n\n## Errors and limits\n\nErrors are `text/plain`, first line `error: <cause>`; usage errors are `400` and include the CLI usage text. `429`: this client already has `--client-jobs` (default 2) jobs queued or running; identify a client with the `X-Client-Id` header (else the network address). `503`: the queue holds `--max-queue` (default 32) jobs. Both carry `Retry-After`. Finished jobs are kept 15 minutes. There is no authentication; job ids are random UUIDs that only their submitter knows.",
+    "license": { "name": "Apache-2.0 AND LicenseRef-Commons-Clause-1.0", "url": "https://github.com/Cybernaut0815/kit-sim_daylight/blob/main/LICENSE" }
+  },
+  "servers": [{ "url": "/", "description": "this server" }],
+  "security": [],
+  "tags": [
+    { "name": "meshes", "description": "Geometry, uploaded once and referenced by id." },
+    { "name": "jobs", "description": "Queued simulation runs: submit, wait, read, cancel." },
+    { "name": "run", "description": "The one-call blocking variant." },
+    { "name": "weather", "description": "Weather files through the server's download cache." },
+    { "name": "meta", "description": "Health and this documentation." }
+  ],
+  "paths": {
+    "/mesh/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/MeshId" }],
+      "put": {
+        "tags": ["meshes"],
+        "operationId": "uploadMesh",
+        "summary": "Upload one mesh",
+        "description": "Stores one mesh in the server's RAM cache under the id you chose (least recently used meshes are evicted when the cache is full; a later job naming an evicted id gets a `404 {missing}` and you upload it again). Uploading an existing id replaces it. The body is one `.dmesh` image, little-endian, no padding:\n\n| offset | type | content |\n|---|---|---|\n| 0 | char[4] | `DLM1` |\n| 4 | uint32 | 0 (reserved) |\n| 8 | uint64 | n_points |\n| 16 | uint64 | n_faces |\n| 24 | uint64 | n_indices |\n| 32 | float64[3 n_points] | xyz, metres, Z up |\n| | int32[n_faces] | vertices per face (>= 3), right-handed winding |\n| | int32[n_indices] | 0-based point indices, sum(counts) = n_indices |\n\nThe TypeScript binding writes it with `toDmesh(mesh)`, the Python binding with `daylight.to_dmesh(...)`.",
+        "parameters": [
+          { "name": "name", "in": "query", "required": false, "description": "Display name, echoed back in result `meshes[].name` (sanitised to `[A-Za-z0-9._-]`, made unique per run). Defaults to the id.", "schema": { "type": "string" }, "example": "roof" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream", "description": "One .dmesh image." } } }
+        },
+        "responses": {
+          "204": { "description": "Stored." },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      },
+      "get": {
+        "tags": ["meshes"],
+        "operationId": "meshExists",
+        "summary": "Check whether a mesh is cached",
+        "description": "Answers 204 when the server holds the mesh, 404 when it must be uploaded (again).",
+        "responses": {
+          "204": { "description": "Cached." },
+          "404": { "description": "Not cached: upload it with `PUT /mesh/{id}`." }
+        }
+      }
+    },
+    "/jobs": {
+      "post": {
+        "tags": ["jobs"],
+        "operationId": "submitJob",
+        "summary": "Submit a simulation job",
+        "description": "Validates the request at once (bad flags, unknown mesh ids, unusable weather fail here) and queues the run for the GPU. Answers the job: `202` while queued, or `200` with a finished job when an identical request was answered before (same mesh ids, args and weather; `cache.response` is then `hit`). Follow it with `GET /jobs/{id}?wait=25`.",
+        "parameters": [{ "$ref": "#/components/parameters/ClientId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/RunRequest" },
+        "responses": {
+          "202": { "description": "Queued.", "headers": { "Location": { "description": "`/jobs/{id}`", "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" }, "example": { "id": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b", "state": "queued", "position": 1, "created": "2026-10-14T09:30:00Z", "started": null, "finished": null } } } },
+          "200": { "description": "Answered from the result cache: the job is already `done`.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/Missing" },
+          "429": { "$ref": "#/components/responses/TooManyJobs" },
+          "502": { "$ref": "#/components/responses/DownloadFailed" },
+          "503": { "$ref": "#/components/responses/QueueFull" }
+        }
+      },
+      "get": {
+        "tags": ["jobs"],
+        "operationId": "listMyJobs",
+        "summary": "Queue overview and this client's jobs",
+        "description": "How busy the GPU is, and the jobs submitted by this client (same `X-Client-Id`, else the same network address). Other clients' job ids are never listed.",
+        "parameters": [{ "$ref": "#/components/parameters/ClientId" }],
+        "responses": {
+          "200": { "description": "Overview.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobList" }, "example": { "queued": 2, "running": true, "yours": [{ "id": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b", "state": "queued", "position": 2 }] } } } }
+        }
+      }
+    },
+    "/jobs/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+      "get": {
+        "tags": ["jobs"],
+        "operationId": "getJob",
+        "summary": "Get a job, optionally waiting for a change",
+        "description": "The job's state and queue position; when `done` it carries the result fields (`columns`, `meshes`, `values_b64`, ...), when `error` or `cancelled` the message and `status`. With `wait=S` the call returns as soon as the state or the position changes, at the latest after S seconds (long poll; poll again while `queued` or `running`).",
+        "parameters": [
+          { "name": "wait", "in": "query", "required": false, "description": "Seconds to wait for a change, 0 to 30.", "schema": { "type": "integer", "minimum": 0, "maximum": 30, "default": 0 }, "example": 25 }
+        ],
+        "responses": {
+          "200": { "description": "The job.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" }, "examples": {
+            "running": { "value": { "id": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b", "state": "running", "position": 0, "created": "2026-10-14T09:30:00Z", "started": "2026-10-14T09:30:04Z", "finished": null } },
+            "done": { "value": { "id": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b", "state": "done", "position": 0, "created": "2026-10-14T09:30:00Z", "started": "2026-10-14T09:30:04Z", "finished": "2026-10-14T09:30:05Z", "columns": ["radiation_front"], "duration_h": 8760, "dirs": { "sky": 145, "ground": 145, "sun": 4456 }, "meshes": [{ "name": "roof", "first": 0, "count": 2 }], "values_b64": "AAAAAAAA8D8AAAAAAADgPw==", "run_s": 0.214, "total_s": 5, "cache": { "response": "miss", "scene": "built", "weather": "miss" } } },
+            "error": { "value": { "id": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b", "state": "error", "position": 0, "created": "2026-10-14T09:30:00Z", "started": "2026-10-14T09:30:04Z", "finished": "2026-10-14T09:30:04Z", "status": 500, "error": "error: weather (--epw) required for radiation/irradiance/illuminance" } }
+          } } } },
+          "404": { "$ref": "#/components/responses/NoSuchJob" }
+        }
+      },
+      "delete": {
+        "tags": ["jobs"],
+        "operationId": "cancelJob",
+        "summary": "Cancel a job",
+        "description": "A queued job leaves the queue at once (`cancelled`); a running one stops at its next trace chunk (still `running` in this answer, `cancelled` shortly after). A finished job is returned unchanged.",
+        "responses": {
+          "200": { "description": "The job after the request.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" }, "example": { "id": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b", "state": "cancelled", "position": 0, "created": "2026-10-14T09:30:00Z", "started": null, "finished": "2026-10-14T09:30:02Z", "status": 409, "error": "error: cancelled" } } } },
+          "404": { "$ref": "#/components/responses/NoSuchJob" }
+        }
+      }
+    },
+    "/run": {
+      "post": {
+        "tags": ["run"],
+        "operationId": "runSync",
+        "summary": "Run and wait (blocking)",
+        "description": "Submits like `submitJob` and keeps the request open until the job finishes, then answers the result object directly (the same fields a `done` job carries, without the job fields). Simple for scripts; for long runs or a progress display use `submitJob` + `getJob`.",
+        "parameters": [{ "$ref": "#/components/parameters/ClientId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/RunRequest" },
+        "responses": {
+          "200": { "description": "The result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunResult" }, "example": { "columns": ["sunhours_front"], "duration_h": 1, "dirs": { "sky": 145, "ground": 145, "sun": 1 }, "meshes": [{ "name": "roof", "first": 0, "count": 2 }], "values_b64": "AAAAAAAA8D8AAAAAAADwPw==", "run_s": 0.012, "total_s": 0, "cache": { "response": "miss", "scene": "reused", "weather": "none" } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/Missing" },
+          "409": { "description": "Cancelled while it ran (`DELETE /jobs/{id}` from another request).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cancelled\n" } } },
+          "429": { "$ref": "#/components/responses/TooManyJobs" },
+          "500": { "description": "The simulation failed (runtime error from the core).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: weather (--epw) required for radiation/irradiance/illuminance\n" } } },
+          "502": { "$ref": "#/components/responses/DownloadFailed" },
+          "503": { "$ref": "#/components/responses/QueueFull" }
+        }
+      }
+    },
+    "/proxy": {
+      "get": {
+        "tags": ["weather"],
+        "operationId": "proxyDownload",
+        "summary": "Download a weather resource through the server cache",
+        "description": "Fetches one of a fixed set of public weather resources once and serves it from disk afterwards (browsers cannot fetch them directly: no CORS). The same URLs work as `epw_url` in a run. Allowed prefixes:\n\n- `https://raw.githubusercontent.com/NREL/EnergyPlus/develop/weather/master.geojson`: the EnergyPlus weather station index (GeoJSON; each feature's `properties.epw` is an HTML anchor whose `href` is the station's EPW)\n- `https://energyplus-weather.s3.amazonaws.com/`: EnergyPlus weather files (EPW)\n- `https://re.jrc.ec.europa.eu/api/v5_3/tmy?`: PVGIS typical meteorological year, e.g. `...tmy?lat=52.52&lon=13.41&outputformat=epw` (modelled, any location, 30 requests per second per IP)",
+        "parameters": [
+          { "name": "url", "in": "query", "required": true, "description": "The resource URL, URL-encoded (its own `&` must not split the query).", "schema": { "type": "string", "format": "uri" }, "example": "https://re.jrc.ec.europa.eu/api/v5_3/tmy?lat=52.52&lon=13.41&outputformat=epw" }
+        ],
+        "responses": {
+          "200": { "description": "The bytes.", "headers": { "X-Daylight-Cache": { "description": "`hit` (served from disk) or `miss` (downloaded now).", "schema": { "type": "string", "enum": ["hit", "miss"] } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "LOCATION,unknown,-,unknown,ECMWF/ERA,unknown,52.520000,13.410000,1,47\n..." }, "application/geo+json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Not an allowed URL.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: url not in the allowlist\n" } } },
+          "502": { "$ref": "#/components/responses/DownloadFailed" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "getHealth",
+        "summary": "Health and load",
+        "description": "Liveness, the GPU, and how busy the queue is.",
+        "responses": {
+          "200": { "description": "Up.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" }, "example": { "status": "ok", "gpu": "NVIDIA GeForce RTX 2060", "queued": 0, "running": false, "jobs_retained": 3 } } } }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "getOpenApi",
+        "summary": "This API description",
+        "description": "OpenAPI 3.1, the machine-readable source of this documentation. Agents: read this first.",
+        "responses": { "200": { "description": "The description.", "content": { "application/json": { "schema": { "type": "object" }, "example": { "openapi": "3.1.0" } } } } }
+      }
+    },
+    "/llms.txt": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "getLlmsTxt",
+        "summary": "Plain-text guide for agents",
+        "description": "A short summary of the workflow, units and limits, pointing to `/openapi.json`.",
+        "responses": { "200": { "description": "The guide.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "# daylight_server\n..." } } } }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "getDocs",
+        "summary": "Interactive documentation (Swagger UI)",
+        "description": "This description rendered by Swagger UI, with try-it-out.",
+        "responses": { "200": { "description": "HTML page.", "content": { "text/html": { "schema": { "type": "string" }, "example": "<!doctype html>..." } } } }
+      }
+    },
+    "/redoc": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "getRedoc",
+        "summary": "Reference documentation (ReDoc)",
+        "description": "This description rendered by ReDoc.",
+        "responses": { "200": { "description": "HTML page.", "content": { "text/html": { "schema": { "type": "string" }, "example": "<!doctype html>..." } } } }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "MeshId": { "name": "id", "in": "path", "required": true, "description": "Mesh id chosen by the client: 1 to 64 of `[A-Za-z0-9-]`, a UUID is ideal.", "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "example": "3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11" },
+      "JobId": { "name": "id", "in": "path", "required": true, "description": "Job id from `submitJob`.", "schema": { "type": "string", "format": "uuid" }, "example": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b" },
+      "ClientId": { "name": "X-Client-Id", "in": "header", "required": false, "description": "Identifies one client (a browser tab, a script) for the per-client job limit and `listMyJobs`. Without it the network address is used.", "schema": { "type": "string", "maxLength": 64 }, "example": "tab-5f0e2b" }
+    },
+    "requestBodies": {
+      "RunRequest": {
+        "required": true,
+        "description": "One run: meshes by id, CLI flags, weather.",
+        "content": {
+          "multipart/form-data": {
+            "schema": { "$ref": "#/components/schemas/RunRequest" },
+            "encoding": { "epw": { "contentType": "text/plain, application/octet-stream" } },
+            "example": { "sensors": ["3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11"], "context": ["b77e0c55-6a51-4c9f-9f1d-5c3e2a1b0f99"], "args": ["--lat", "52.52", "--lon", "13.41", "--tz", "1", "--quantity", "radiation,sunhours", "--time", "06-21T12:00"], "epw_url": "https://re.jrc.ec.europa.eu/api/v5_3/tmy?lat=52.52&lon=13.41&outputformat=epw" }
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": { "description": "Invalid request: unknown flag, bad id, unusable weather, ... The text starts with `error: <cause>`; flag errors append the CLI usage.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: unknown flag --nope\nusage: daylight <mesh>... [flags]\n..." } } },
+      "Missing": { "description": "The server does not hold these meshes (never uploaded, or evicted): `PUT /mesh/{id}` each and submit again.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Missing" }, "example": { "missing": ["3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11"] } } } },
+      "TooManyJobs": { "description": "This client already has its limit of jobs queued or running.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: 2 jobs of this client are queued or running (limit 2); wait for one to finish or DELETE /jobs/{id}\n" } } },
+      "QueueFull": { "description": "The queue is full.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the queue is full (32 jobs); retry shortly\n" } } },
+      "DownloadFailed": { "description": "The weather resource could not be downloaded.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: download failed (curl exit 22): https://energyplus-weather.s3.amazonaws.com/...\n" } } },
+      "NoSuchJob": { "description": "Unknown id, or finished more than 15 minutes ago.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: no such job (finished jobs are kept 15 minutes)\n" } } }
+    },
+    "schemas": {
+      "RunRequest": {
+        "type": "object",
+        "required": ["sensors"],
+        "properties": {
+          "sensors": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "description": "Ids of the receiving meshes (analysed; they also cast shade unless `--no-self-occlude`). Rows of the result follow this order." },
+          "context": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "description": "Ids of meshes that only cast shade." },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Flags of the `daylight` CLI, one array element per token (`[\"--quantity\", \"radiation,sunhours\"]`).\n\n| flag | value | default | meaning |\n|---|---|---|---|\n| `--quantity` | `Q[,Q...]` | `radiation` | one column per quantity: `radiation` kWh/m² over the period, `direct` (sun only), `diffuse` (sky + ground), `irradiance` mean W/m², `illuminance` mean lux (physical mode), `sunhours` hours of unoccluded sun |\n| `--on` | `faces` / `vertices` | `faces` | one row per face (sensor at the centroid) or per point |\n| `--sides` | `front` / `back` / `both` | `front` | receiving hemisphere; `both` gives two columns per quantity |\n| `--mode` | `physical` / `ladybug` | `physical` | sky and sun model; `ladybug` reproduces Ladybug Tools RadiationStudy |\n| `--lat` `--lon` | degrees, N and E positive | from the EPW | site; required without weather |\n| `--tz` | hours, E positive | EPW header, else round(lon / 15) | standard-time zone of all timestamps |\n| `--clear-sky` | flag | off | synthesise a cloudless year (Ineichen-Perez) instead of an EPW |\n| `--turbidity` | Linke turbidity | `3` | atmosphere for `--clear-sky` |\n| `--altitude` | metres | `0` | site elevation for `--clear-sky` |\n| `--time` | `[YYYY-]MM-DDTHH:MM` | annual | one instant |\n| `--from` `--to` | timestamps | annual | the range `[from, to)` |\n| `--step` | minutes | `60` | step of `--from/--to` |\n| `--sky-density` | `1` / `2` / `4` | `1` | 145 / 577 / 2305 sky patches |\n| `--patch-samples` | square number | `1` | stratified rays per sky patch (physical mode) |\n| `--ground` | 0..1 | `0.2` | ground reflectance |\n| `--north` | degrees ccw from +Y | `0` | model north |\n| `--offset` | metres | `0` | move sensors along their normal |\n| `--cull-backfaces` | flag | off | occluders block only from their front side |\n| `--no-self-occlude` | flag | off | receiving meshes do not cast shade |\n\nRefused over HTTP: mesh file paths, `--context FILE`, `--epw FILE` (use the `epw` part or `epw_url`), `--out`, `--timeseries`, `--dump-*`, `--bench`. Weather is needed for every quantity except `sunhours`.",
+            "examples": [["--lat", "52.52", "--lon", "13.41", "--tz", "1", "--quantity", "radiation,sunhours", "--clear-sky"]]
+          },
+          "epw": { "type": "string", "contentMediaType": "text/plain", "description": "An hourly EPW weather file (8760 or 8784 rows). Give this, `epw_url` or `--clear-sky`, at most one." },
+          "epw_url": { "type": "string", "format": "uri", "description": "An allowed weather URL (see `proxyDownload`); the server downloads it once and caches it." }
+        }
+      },
+      "MeshRange": {
+        "type": "object",
+        "required": ["name", "first", "count"],
+        "properties": {
+          "name": { "type": "string", "description": "The mesh's display name (from `uploadMesh`)." },
+          "first": { "type": "integer", "description": "First row of this mesh in `values_b64`." },
+          "count": { "type": "integer", "description": "Rows of this mesh: its faces, or its points with `--on vertices`." }
+        }
+      },
+      "CacheReport": {
+        "type": "object",
+        "properties": {
+          "response": { "type": "string", "enum": ["hit", "miss"], "description": "`hit`: an identical request was answered from the result cache, nothing ran." },
+          "scene": { "type": "string", "enum": ["reused", "built"], "description": "`reused`: the meshes' acceleration structure was still on the GPU." },
+          "weather": { "type": "string", "enum": ["hit", "miss", "none"], "description": "`hit`: the parsed weather was cached; `none`: no weather file (clear sky or sun hours)." }
+        }
+      },
+      "RunResult": {
+        "description": "A finished run: the CLI's output manifest, the values, and the server's timings and cache report.",
+        "allOf": [{ "$ref": "#/components/schemas/ResultFields" }],
+        "required": ["columns", "duration_h", "dirs", "meshes", "values_b64"]
+      },
+      "ResultFields": {
+        "type": "object",
+        "description": "The result fields; all present on a `RunResult` and on a `done` job.",
+        "properties": {
+          "columns": { "type": "array", "items": { "type": "string" }, "description": "Column names `<quantity>_<side>`, in `--quantity` order, sides inner.", "examples": [["radiation_front", "sunhours_front"]] },
+          "duration_h": { "type": "number", "description": "Hours represented by the evaluated steps." },
+          "dirs": { "type": "object", "description": "Ray directions traced per sensor.", "properties": { "sky": { "type": "integer" }, "ground": { "type": "integer" }, "sun": { "type": "integer" } } },
+          "meshes": { "type": "array", "items": { "$ref": "#/components/schemas/MeshRange" }, "description": "Receiving meshes in `sensors` order with their row ranges." },
+          "values_b64": { "type": "string", "contentEncoding": "base64", "description": "float64 little-endian, row-major `[sum(meshes.count) x columns.length]`." },
+          "run_s": { "type": "number", "description": "Seconds the GPU worker spent on this run." },
+          "total_s": { "type": "number", "description": "Seconds from submission to the result (queue wait included)." },
+          "cache": { "$ref": "#/components/schemas/CacheReport" }
+        }
+      },
+      "JobState": { "type": "string", "enum": ["queued", "running", "done", "error", "cancelled"], "description": "`queued` waits for the GPU, `running` is on it; the other three are final." },
+      "JobStatus": {
+        "type": "object",
+        "required": ["id", "state", "position", "created"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "state": { "$ref": "#/components/schemas/JobState" },
+          "position": { "type": "integer", "description": "Jobs ahead of this one, the running job included; 0 while running or finished." },
+          "created": { "type": "string", "format": "date-time" },
+          "started": { "type": ["string", "null"], "format": "date-time" },
+          "finished": { "type": ["string", "null"], "format": "date-time" },
+          "status": { "type": "integer", "description": "`error`: the HTTP status `runSync` would answer (500 runtime); `cancelled`: 409." },
+          "error": { "type": "string", "description": "`error` / `cancelled`: the message, first line `error: <cause>`." }
+        }
+      },
+      "Job": {
+        "description": "A job; when `state` is `done` it also carries every `RunResult` field.",
+        "allOf": [{ "$ref": "#/components/schemas/JobStatus" }, { "$ref": "#/components/schemas/ResultFields" }],
+        "unevaluatedProperties": false
+      },
+      "JobList": {
+        "type": "object",
+        "properties": {
+          "queued": { "type": "integer", "description": "Jobs waiting, all clients." },
+          "running": { "type": "boolean", "description": "Whether the GPU is busy." },
+          "yours": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "state": { "$ref": "#/components/schemas/JobState" }, "position": { "type": "integer" } } } }
+        }
+      },
+      "Missing": { "type": "object", "required": ["missing"], "properties": { "missing": { "type": "array", "items": { "type": "string" }, "description": "Mesh ids to upload." } } },
+      "Health": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "const": "ok" },
+          "gpu": { "type": "string", "description": "CUDA device name." },
+          "queued": { "type": "integer" },
+          "running": { "type": "boolean" },
+          "jobs_retained": { "type": "integer", "description": "Jobs in memory, finished ones included." }
+        }
+      }
+    }
+  }
+}

@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       fs: { allow: ['..'] },
-      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/mesh', '/proxy', '/health'].map((p) => [p, API])),
+      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt'].map((p) => [p, API])),
     },
     test: { environment: 'node', include: ['src/**/*.test.ts'] },
   };

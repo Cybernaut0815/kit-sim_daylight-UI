@@ -21,6 +21,8 @@ import { Icon, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
+// One id per browser tab for the server's per-client job limit (sessionStorage: a new tab is a new client).
+const CLIENT_ID = (() => { try { return sessionStorage.getItem('daylight.client') ?? (sessionStorage.setItem('daylight.client', crypto.randomUUID()), sessionStorage.getItem('daylight.client')!); } catch { return crypto.randomUUID(); } })();
 // validate() field -> the control that gets focus
 const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date' };
 const WIDTHS = { left: 352, right: 384 }, MIN_W = 240, MAX_W = 640; // px; 22rem / 24rem defaults
@@ -111,7 +113,7 @@ export default function App() {
   }, []);
 
   const receivers = state.objects.filter((o) => o.role === 'receiver');
-  const running = state.run.status === 'running';
+  const running = state.run.status === 'running' || state.run.status === 'queued';
 
   const onRun = async () => {
     const errors = validate(state.settings, receivers.length > 0);
@@ -122,13 +124,14 @@ export default function App() {
     const epw = weather.source === 'upload' ? weather.file! : weather.source === 'station' ? { url: weather.station!.href } : weather.source === 'pvgis' ? { url: pvgisUrl(site.lat, site.lon) } : undefined;
     const ctrl = new AbortController();
     abort.current = ctrl;
-    dispatch({ type: 'RUN', run: { status: 'running' } });
+    dispatch({ type: 'RUN', run: { status: 'queued', position: 0 } });
     try {
       const res = await runRemote('', {
         sensors: receivers.map((o) => conv.current.get(o.id)!.obj),
         context: state.objects.filter((o) => o.role === 'shade').map((o) => conv.current.get(o.id)!.obj),
         epw, args: buildArgs(state.settings),
-        fetch: (input, init) => fetch(input, { ...init, signal: ctrl.signal }),
+        signal: ctrl.signal, clientId: CLIENT_ID,
+        onStatus: (job) => dispatch({ type: 'RUN', run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }),
       });
       res.manifest.meshes.forEach((m, i) => {
         const o = receivers[i], want = o && (sim.on === 'faces' ? o.tris : o.verts);
@@ -163,6 +166,7 @@ export default function App() {
           <span className="app-bar__app">Daylight</span>
         </span>
         <span className="app-bar__spacer" />
+        <a className="btn btn--ghost" href="/docs" target="_blank" rel="noreferrer" title="API documentation (Swagger UI); machine-readable at /openapi.json">API</a>
         <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={cycleTheme}>
           <Icon name="contrast" />
         </button>
@@ -189,7 +193,7 @@ export default function App() {
               <div className="cluster cluster--end">
                 {running && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
                 <button className="btn btn--primary" type="button" disabled={!receivers.length || running} onClick={onRun}>
-                  {running ? <><span className="spinner" aria-hidden="true" /> Running</> : 'Run simulation'}
+                  {state.run.status === 'queued' ? <><span className="spinner" aria-hidden="true" /> Queued{state.run.position ? `, ${state.run.position} ahead` : ''}</> : running ? <><span className="spinner" aria-hidden="true" /> Running</> : 'Run simulation'}
                 </button>
               </div>
             </Viewer>

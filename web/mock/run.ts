@@ -1,6 +1,6 @@
 // Vite dev plugin (VITE_MOCK=1): fakes daylight_server so the UI runs offline without the GPU box.
-// PUT /mesh/:id stores the dmesh header counts; POST /run answers 404 {missing} for unknown ids, else random values
-// shaped by the args; GET /proxy serves a 20-station index in the NREL master.geojson shape and a zero-filled EPW.
+// PUT /mesh/:id stores the dmesh header counts; POST /jobs and POST /run answer 404 {missing} for unknown ids, else random
+// values shaped by the args (a job is queued behind a fake job for 0.5 s, then runs for 0.7 s); GET /proxy serves a 20-station index in the NREL master.geojson shape and a zero-filled EPW.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 
@@ -71,12 +71,12 @@ const index = () => JSON.stringify({
 /** 'MM-DDTHH:MM' -> hours since Jan 1 (non-leap). */
 const hours = (t: string) => { const m = /^(?:\d+-)?(\d+)-(\d+)T(\d+):(\d+)$/.exec(t); return m ? (Date.UTC(2001, +m[1] - 1, +m[2], +m[3], +m[4]) - Date.UTC(2001, 0, 1)) / 36e5 : 0; };
 
-async function run(req: IncomingMessage, res: ServerResponse) {
+async function compute(req: IncomingMessage): Promise<{ status: number; text: string }> {
   const fields = parts(await body(req), req.headers['content-type'] ?? '');
   const get = (n: string) => fields.filter((f) => f.name === n && f.filename === undefined).map((f) => f.data.toString());
   const sensors = get('sensors'), context = get('context'), args = get('args');
   const missing = [...sensors, ...context].filter((id) => !meshes.has(id));
-  if (missing.length) return send(res, 404, JSON.stringify({ missing }));
+  if (missing.length) return { status: 404, text: JSON.stringify({ missing }) };
   const arg = (k: string, d: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
   const sides = arg('--sides', 'front'), on = arg('--on', 'faces');
   const columns = arg('--quantity', 'radiation').split(',').flatMap((q) => (sides === 'both' ? ['front', 'back'] : [sides]).map((s) => `${q}_${s}`));
@@ -86,12 +86,23 @@ async function run(req: IncomingMessage, res: ServerResponse) {
   const scale = (col: string) => { const q = col.split('_')[0]; return q === 'sunhours' ? Math.min(duration_h, 4380) : q === 'irradiance' ? 900 : q === 'illuminance' ? 90000 : (1100 * duration_h) / 8760; };
   const vals = new Float64Array(first * columns.length);
   for (let r = 0; r < first; r++) for (let c = 0; c < columns.length; c++) vals[r * columns.length + c] = Math.random() * scale(columns[c]);
-  await new Promise((r) => setTimeout(r, 700)); // long enough to see the running state
-  send(res, 200, JSON.stringify({
+  return { status: 200, text: JSON.stringify({
     columns, duration_h, dirs: { sky: 145, ground: 145, sun: Math.round(duration_h / 2) }, meshes: mm,
     values_b64: Buffer.from(vals.buffer).toString('base64'), run_s: 0.42,
     cache: { response: 'miss', scene: 'built', weather: args.includes('--clear-sky') ? 'none' : 'miss' },
-  }));
+  }) };
+}
+
+// jobs: queued for 0.5 s (one fake job ahead), running for 0.7 s, then done; the result is computed at submission
+const jobs = new Map<string, { t0: number; result: string; cancelled: boolean }>();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function view(id: string): string {
+  const j = jobs.get(id)!, dt = Date.now() - j.t0;
+  const head = { id, created: new Date(j.t0).toISOString(), started: null, finished: null };
+  if (j.cancelled) return JSON.stringify({ ...head, state: 'cancelled', position: 0, status: 409, error: 'error: cancelled' });
+  if (dt < 500) return JSON.stringify({ ...head, state: 'queued', position: 1 });
+  if (dt < 1200) return JSON.stringify({ ...head, state: 'running', position: 0 });
+  return JSON.stringify({ ...head, state: 'done', position: 0, ...JSON.parse(j.result) });
 }
 
 function send(res: ServerResponse, status: number, text: string, type = 'application/json') {
@@ -120,7 +131,22 @@ export function mock(): Plugin {
             res.statusCode = meshes.has(id) ? 204 : 404;
             return res.end();
           }
-          if (url.pathname === '/run' && req.method === 'POST') return await run(req, res);
+          if (url.pathname === '/run' && req.method === 'POST') { const r = await compute(req); if (r.status === 200) await sleep(700); return send(res, r.status, r.text); }
+          if (url.pathname === '/jobs' && req.method === 'POST') {
+            const r = await compute(req);
+            if (r.status !== 200) return send(res, r.status, r.text);
+            const id = crypto.randomUUID();
+            jobs.set(id, { t0: Date.now(), result: r.text, cancelled: false });
+            return send(res, 202, view(id));
+          }
+          if (url.pathname.startsWith('/jobs/')) {
+            const id = url.pathname.slice(6), j = jobs.get(id);
+            if (!j) return send(res, 404, 'error: no such job', 'text/plain');
+            if (req.method === 'DELETE') { j.cancelled = true; return send(res, 200, view(id)); }
+            const wait = Math.min(30, Number(url.searchParams.get('wait') ?? 0)) * 1000, before = view(id);
+            for (const t = Date.now(); Date.now() - t < wait && view(id) === before; ) await sleep(50); // long poll
+            return send(res, 200, view(id));
+          }
           if (url.pathname === '/proxy') {
             const u = url.searchParams.get('url') ?? '';
             res.setHeader('x-daylight-cache', 'miss');

@@ -42,7 +42,7 @@ export interface RunResult {
   receivers: string[]; // object ids in sensor order: manifest.meshes[i] <-> receivers[i]
   on: 'faces' | 'vertices'; // element kind the rows describe (weights: face areas or vertex areas)
 }
-export type Run = { status: 'idle' } | { status: 'running' } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
+export type Run = { status: 'idle' } | { status: 'queued'; position: number } | { status: 'running' } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
 
 export interface State {
   objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
@@ -140,7 +140,7 @@ export function reducer(s: State, a: Action): State {
     case 'RUN': // a finished run shows its values on the meshes
       return {
         ...s, run: a.run, probe: null, bin: null, column: a.run.status === 'done' ? Math.min(s.column, a.run.result.columns.length - 1) : s.column,
-        colourBy: a.run.status === 'done' ? 'value' : s.colourBy, errors: a.run.status === 'running' ? {} : s.errors,
+        colourBy: a.run.status === 'done' ? 'value' : s.colourBy, errors: a.run.status === 'running' || a.run.status === 'queued' ? {} : s.errors,
       };
     case 'COLUMN':
       return { ...s, column: a.column };

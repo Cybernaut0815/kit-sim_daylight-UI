@@ -51,13 +51,13 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
           <p>Mark a receiver mesh, set the site and time, then run the simulation. The values appear on the meshes and in the distribution charts here.</p>
         </div>
       )}
-      {run.status === 'running' && (
+      {(run.status === 'running' || run.status === 'queued') && (
         <div className="stack" aria-busy="true">
           <div className="grid" style={knob('--grid-min', '8rem')}>
             {[0, 1, 2, 3].map((n) => <div key={n} className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;</div>)}
           </div>
           <div className="skeleton chart-ph" aria-hidden="true" />
-          <p className="text-muted"><span className="spinner" aria-hidden="true" /> Tracing on the GPU</p>
+          <p className="text-muted"><span className="spinner" aria-hidden="true" /> {run.status === 'queued' ? `Waiting for the GPU${run.position ? `, ${run.position} job${run.position > 1 ? 's' : ''} ahead` : ''}` : 'Tracing on the GPU'}</p>
         </div>
       )}
       {run.status === 'error' && <Alert title="Run failed">{run.message}</Alert>}

@@ -1,0 +1,6 @@
+# Lint config for openapi.json: npx @redocly/cli lint openapi.json
+extends:
+  - recommended
+rules:
+  # /health, /openapi.json, /llms.txt, /docs and /redoc take no input, so they have no client error to document
+  operation-4xx-response: off
