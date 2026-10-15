@@ -9,7 +9,7 @@ import { Legend } from '../charts/Legend';
 import { GRADIENTS, hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, columnStats, cumulative, fmtNum, globalRange, histogram, percentile, rangeShares, shareBelow, unitFor } from '../lib/result';
 import type { Action, ObjectRow, Probe, Run, RunResult, Settings } from '../store';
-import { Alert, ColorQuad, Illustration, NumberField, ResetButton, Segmented, Swatch, knob, pct, rowKeys } from '../ui';
+import { Alert, ColorQuad, Illustration, NumberField, ResetButton, Segmented, Swatch, pct, rowKeys } from '../ui';
 
 interface Props {
   result: RunResult | null; run: Run; error: string | null; stale: boolean; auto: boolean; // result: the last finished run, kept while the next one runs
@@ -75,6 +75,7 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
         };
         const what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, ${fmtNum(r.values.length)} ${r.on} on ${rows.length} ${rows.length === 1 ? 'mesh' : 'meshes'}.`;
         const select = (id: string, additive: boolean) => dispatch({ type: 'SELECT', ids: [id], additive });
+        const inUnit = unit.value ? ` (${unit.value})` : ''; // the unit once per group: the labels stay one short word
         const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
         const readout = probe && probeRow
           ? `${probeRow.name}, ${r.on === 'faces' ? 'face' : 'vertex'} ${probe.element + 1}: ${fmtNum(probe.value)} ${unit.value}. ${pct(shareBelow(cum, probe.value))} of the area gets less.`
@@ -120,33 +121,36 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
             </table>
             <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
             <div className="readout" role="status" aria-live="polite">{readout}</div>
-            <fieldset className="field" aria-labelledby="lg-scale">
-              <div className="cluster cluster--between"><legend id="lg-scale">Colour scale<span className="sr-only">. Min or Max left blank: the range of the data (the placeholder)</span></legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
-              <div className="grid" style={knob('--grid-min', '6rem')}>
-                <div className="field">
-                  <label className="field__label" htmlFor="gradient">Gradient</label>
-                  <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
-                    {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
-                  </select>
+            {/* the colour scale and the problem range: one row of five controls when the panel is wide enough, else two */}
+            <div className="scale-row">
+              <fieldset className="field" aria-labelledby="lg-scale">
+                <div className="cluster cluster--between"><legend id="lg-scale">Colour scale{inUnit}<span className="sr-only">. Min or Max left blank: the range of the data (the placeholder)</span></legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
+                <div className="scale-row__cols">
+                  <div className="field">
+                    <label className="field__label" htmlFor="gradient">Gradient</label>
+                    <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
+                      {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+                    </select>
+                  </div>
+                  {/* blank: the data's own bound, shown as the placeholder */}
+                  <NumberField id="scale-min" label="Min" value={viz.scales[quantity]?.min ?? NaN} placeholder={fmtNum(domain[0])} onCommit={(v) => setViz({ min: orNull(v) })} />
+                  <NumberField id="scale-max" label="Max" value={viz.scales[quantity]?.max ?? NaN} placeholder={fmtNum(domain[1])} onCommit={(v) => setViz({ max: orNull(v) })} />
                 </div>
-                {/* blank: the data's own bound, shown as the placeholder */}
-                <NumberField id="scale-min" label={`Min ${unit.value}`} value={viz.scales[quantity]?.min ?? NaN} placeholder={fmtNum(domain[0])} onCommit={(v) => setViz({ min: orNull(v) })} />
-                <NumberField id="scale-max" label={`Max ${unit.value}`} value={viz.scales[quantity]?.max ?? NaN} placeholder={fmtNum(domain[1])} onCommit={(v) => setViz({ max: orNull(v) })} />
-              </div>
-            </fieldset>
-            <fieldset className="field" aria-labelledby="lg-range">
-              <div className="cluster cluster--between"><legend id="lg-range">Problem range<span className="sr-only">. Below or Above left blank: no bound</span></legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
-              <div className="cols-2">
-                <NumberField
-                  id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} placeholder="no bound" onCommit={(v) => setViz({ lo: orNull(v) })}
-                  adorn={<ColorQuad id="colour-below" label="Colour below the range" value={scale.below} onChange={(below) => setViz({ below })} />}
-                />
-                <NumberField
-                  id="range-hi" label={`Above ${unit.value}`} value={scale.hi ?? NaN} placeholder="no bound" onCommit={(v) => setViz({ hi: orNull(v) })}
-                  adorn={<ColorQuad id="colour-above" label="Colour above the range" value={scale.above} onChange={(above) => setViz({ above })} />}
-                />
-              </div>
-            </fieldset>
+              </fieldset>
+              <fieldset className="field" aria-labelledby="lg-range">
+                <div className="cluster cluster--between"><legend id="lg-range">Problem range{inUnit}<span className="sr-only">. Below or Above left blank: no bound</span></legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
+                <div className="scale-row__cols">
+                  <NumberField
+                    id="range-lo" label="Below" value={scale.lo ?? NaN} placeholder="none" onCommit={(v) => setViz({ lo: orNull(v) })}
+                    adorn={<ColorQuad id="colour-below" label="Colour below the range" value={scale.below} onChange={(below) => setViz({ below })} />}
+                  />
+                  <NumberField
+                    id="range-hi" label="Above" value={scale.hi ?? NaN} placeholder="none" onCommit={(v) => setViz({ hi: orNull(v) })}
+                    adorn={<ColorQuad id="colour-above" label="Colour above the range" value={scale.above} onChange={(above) => setViz({ above })} />}
+                  />
+                </div>
+              </fieldset>
+            </div>
             <h3>Distribution</h3>
             <Histogram edges={hist.edges} shares={hist.shares} counts={hist.counts} scale={scale} unit={unit.value} probe={probe?.value ?? null} bin={bin} markers={markers} dispatch={dispatch} />
             <h3>Cumulative area</h3>
