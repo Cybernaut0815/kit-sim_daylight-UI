@@ -3,10 +3,14 @@ import type { Settings } from '../store';
 import { quantitiesFor } from '../store';
 import { pvgisUrl } from './geo';
 import { doy, fmtClock, fmtTime } from './time';
+import { zoneAt } from './zone';
 
-/** The tz the run uses: the user's explicit value, else the EPW header, else round(lon / 15). Always sent: the core
- *  would otherwise default tz before it reads the EPW header. */
-export const derivedTz = (s: Settings): number => s.site.tz ?? s.epwMeta?.tz ?? Math.round(s.site.lon / 15);
+/** The clock of every time the user picks: the explicit value, else the site's civil standard offset. Sent as --tz;
+ *  the core keeps EPW rows in their own zone and moves these times into it, so any weather source gives the same sun. */
+export const derivedTz = (s: Settings): number => s.site.tz ?? zoneAt(s.site.lat, s.site.lon).std;
+
+/** Whether the core's weather year is a leap year (clear sky never is). */
+export const weatherLeap = (s: Settings): boolean => s.weather.source !== 'clear-sky' && !!s.epwMeta?.leap;
 
 /** The weather a run sends: the uploaded EPW, or a station / PVGIS URL the server fetches through its cache. */
 export function epwRef({ weather, site }: Settings): File | { url: string } | undefined {
@@ -17,16 +21,16 @@ export function epwRef({ weather, site }: Settings): File | { url: string } | un
 
 export function buildArgs(s: Settings): string[] {
   const { site, weather, time, sim } = s;
-  const a = ['--lat', String(site.lat), '--lon', String(site.lon), '--tz', String(derivedTz(s))];
+  const a = ['--lat', String(site.lat), '--lon', String(site.lon), '--tz', String(derivedTz(s))], leap = weatherLeap(s);
   if (weather.source === 'clear-sky') a.push('--clear-sky', '--turbidity', String(weather.turbidity), '--altitude', String(weather.altitude));
   a.push('--mode', sim.mode, '--quantity', sim.quantities.join(','), '--sides', sim.sides, '--on', sim.on,
     '--sky-density', String(sim.skyDensity), '--patch-samples', String(sim.patchSamples),
     '--ground', String(sim.ground), '--north', String(sim.north), '--offset', String(sim.offset));
   if (sim.cullBackfaces) a.push('--cull-backfaces');
   if (!sim.selfOcclude) a.push('--no-self-occlude');
-  if (time.mode === 'instant') a.push('--time', fmtTime(time.date, time.hour));
+  if (time.mode === 'instant') a.push('--time', fmtTime(time.date, time.hour, leap));
   if (time.mode === 'range') {
-    a.push('--from', fmtTime(time.from.date, time.from.hour), '--to', fmtTime(time.to.date, time.to.hour), '--step', String(time.stepMin));
+    a.push('--from', fmtTime(time.from.date, time.from.hour, leap), '--to', fmtTime(time.to.date, time.to.hour, leap), '--step', String(time.stepMin));
     if (time.from.date !== time.to.date) a.push('--hours', `${fmtClock(time.from.hour)}-${fmtClock(time.to.hour)}`); // the same hours of every day
   }
   return a;
@@ -53,5 +57,8 @@ export function validate(s: Settings, hasReceiver: boolean): Record<string, stri
     else if (time.from.hour >= time.to.hour) e.timeTo = 'The end time must be after the start time.';
   }
   if (time.mode === 'instant' && !time.date) e.timeDate = 'Pick a date.';
+  const feb29 = (date: string) => date.slice(5) === '02-29', noFeb29 = 'Feb 29 is not in the weather year. Pick Feb 28 or Mar 1.';
+  if (!weatherLeap(s) && time.mode === 'instant' && feb29(time.date)) e.timeDate = noFeb29;
+  if (!weatherLeap(s) && time.mode === 'range' && (feb29(time.from.date) || feb29(time.to.date))) e.timeTo = noFeb29;
   return e;
 }

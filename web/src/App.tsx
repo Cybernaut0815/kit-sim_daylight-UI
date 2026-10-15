@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { Group } from 'three';
 import { fromThree, runRemote, type ObjMesh } from 'daylight-mesh';
 import { Splitter } from './Splitter';
-import { buildArgs, derivedTz, epwRef, validate } from './lib/args';
+import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args';
+import { zoneAt } from './lib/zone';
 import { gradientFor, type Scale } from './lib/gradients';
 import { listMeshes, loadFiles } from './lib/loaders';
 import { buildTree, type TreeNode } from './lib/tree';
@@ -125,8 +126,7 @@ export default function App() {
   const args = buildArgs(s), epw = epwRef(s);
   // Everything the server's response cache keys on: an equal key gives an equal result.
   const runKey = JSON.stringify([args, epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null, receivers.map((o) => o.id), shades.map((o) => o.id)]);
-  const annual = s.time.mode === 'annual';
-  const autoOn = ui.auto && !annual && receivers.length > 0;
+  const autoOn = ui.auto && receivers.length > 0; // every mode: an annual run is a fraction of a second too
   const meshKey = useRef(''); // the receivers and shades now: a job started for others reports no error here
   meshKey.current = JSON.stringify([receivers.map((o) => o.id), shades.map((o) => o.id)]);
 
@@ -176,7 +176,8 @@ export default function App() {
     if (autoOn && !busy.current && runKey !== lastKey.current) void onRun(true);
   }, [autoOn, runKey, ended, state.result, state.run.status]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings runKey came from
 
-  const tz = derivedTz(s), leap = s.weather.source !== 'clear-sky' && !!s.epwMeta?.leap; // the core's weather year (clear sky: never leap)
+  const zone = useMemo(() => zoneAt(s.site.lat, s.site.lon), [s.site.lat, s.site.lon]); // the site's civil zone (offline lookup)
+  const tz = derivedTz(s), leap = weatherLeap(s);
   const sunSite = useMemo(() => ({ lat: s.site.lat, lon: s.site.lon, tz, leap }), [s.site.lat, s.site.lon, tz, leap]);
   const sunView = useMemo<SunView | null>(() => (ui.sunPath ? { site: sunSite, north: s.sim.north, time: s.time, scale: sunScale } : null), [ui.sunPath, sunSite, s.sim.north, s.time, sunScale]);
   const result = state.result;
@@ -216,11 +217,11 @@ export default function App() {
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
                 <ModelPanel tree={tree} objects={state.objects} selected={state.selected} loading={loading} error={loadError} errors={state.errors} onFiles={onFiles} dispatch={dispatch} />
                 <hr className="divider" />
-                <LocationPanel site={s.site} tz={tz} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
+                <LocationPanel site={s.site} tz={tz} zone={zone} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <hr className="divider" />
                 <WeatherPanel weather={s.weather} site={s.site} epwMeta={s.epwMeta} viz={s.viz} stations={state.stations} errors={state.errors} dispatch={dispatch} />
                 <hr className="divider" />
-                <TimePanel time={s.time} site={s.site} tz={tz} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
+                <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <hr className="divider" />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
               </aside>
@@ -231,9 +232,8 @@ export default function App() {
                   progress shows in the Results run line */}
               <div className="cluster cluster--end">
                 {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
-                <label title={annual ? 'Annual runs are not repeated automatically' : 'Runs the simulation whenever the date, time, location or a setting changes'}>
-                  <input type="checkbox" id="auto-run" checked={ui.auto} disabled={annual} aria-describedby={annual ? 'auto-run-why' : undefined} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
-                  {annual && <span id="auto-run-why" className="sr-only">Annual runs are not repeated automatically.</span>}
+                <label title="Runs the simulation whenever the location, the date, the time or a setting changes">
+                  <input type="checkbox" id="auto-run" checked={ui.auto} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
                 </label>
                 <button className="btn btn--primary" type="button" disabled={!receivers.length || busyBar} aria-busy={busyBar} onClick={() => void onRun()}>Run simulation</button>
               </div>

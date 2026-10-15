@@ -97,6 +97,17 @@ describe('site and weather', () => {
     expect(reducer(s, { type: 'WEATHER', patch: { source: 'pvgis' } }).settings.epwMeta).toBeNull();
     expect(reducer(s, { type: 'WEATHER', patch: { turbidity: 4 } }).settings.epwMeta).not.toBeNull();
   });
+  it('a move clears an explicit time zone and a station picked before the index arrived', () => {
+    let s = reducer(initialState(), { type: 'SITE', patch: { tz: 9 } });
+    expect(s.settings.site.tz).toBe(9);
+    expect(reducer(s, { type: 'SITE', patch: { place: 'x' } }).settings.site.tz).toBe(9); // not a move
+    s = reducer(s, { type: 'WEATHER', patch: { station: stations[0] } });
+    s = reducer(s, { type: 'SITE', patch: { lat: 48.85, lon: 2.35 } });
+    expect(s.settings.site.tz).toBeNull();
+    expect(s.settings.weather.station).toBeNull(); // no index yet: STATIONS picks the nearest
+    expect(reducer(s, { type: 'STATIONS', stations }).settings.weather.station?.title).toBe('Paris Orly');
+    expect(reducer(s, { type: 'SITE', patch: { lat: 1, lon: 2, tz: 3 } }).settings.site.tz).toBe(3); // a move that sets the zone
+  });
   it('mode switch keeps the all-quantities default and clamps sky density', () => {
     let s = reducer(initialState(), { type: 'SIM', patch: { skyDensity: 4 } });
     s = reducer(s, { type: 'SIM', patch: { mode: 'ladybug' } });
@@ -121,5 +132,9 @@ describe('persistence', () => {
     expect(parseSettings('{not json').site.lat).toBe(d.site.lat);
     expect(parseSettings('{"site":{"lat":1}}').site.lon).toBe(d.site.lon);
     expect(parseSettings(null).sim.quantities).toHaveLength(6);
+    const u = defaultSettings();
+    u.weather.source = 'upload';
+    u.epwMeta = { lat: 51, lon: 0, tz: 0, name: 'x', leap: false };
+    expect(parseSettings(serializeSettings(u)).epwMeta).toBeNull(); // the file is not kept, nor its header
   });
 });

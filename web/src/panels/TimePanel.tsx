@@ -1,19 +1,24 @@
 import { memo, useMemo, type Dispatch } from 'react';
 import { DayStrip, YearStrip } from '../charts/Strip';
-import { stepHoys } from '../lib/sun';
-import { dateFromDoy, dayBounds, doy, fmtClock, fmtDay, timeStep, yearOf } from '../lib/time';
+import { dayBounds, stepHoys } from '../lib/sun';
+import { dateFromDoy, doy, fmtClock, fmtDay, timeStep, yearOf } from '../lib/time';
+import { fmtOffset, type Zone } from '../lib/zone';
 import type { Action, Settings } from '../store';
 import { ResetButton, Segmented, knob } from '../ui';
 
 interface Props {
-  time: Settings['time']; site: Settings['site']; tz: number; leap: boolean; errors: Record<string, string>; dispatch: Dispatch<Action>; // leap: the core's weather year
+  time: Settings['time']; site: Settings['site']; tz: number; zone: Zone; leap: boolean; errors: Record<string, string>; dispatch: Dispatch<Action>; // zone: the site's civil zone; leap: the core's weather year
   sunPath: boolean; sunScale: number; onSunPath: (on: boolean) => void; onSunScale: (scale: number) => void; // the 3D sun path: shown, size x the fitted radius
 }
 
-export const TimePanel = memo(function TimePanel({ time, site, tz, leap, errors, dispatch, sunPath, sunScale, onSunPath, onSunScale }: Props) {
+export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, errors, dispatch, sunPath, sunScale, onSunPath, onSunScale }: Props) {
   const year = yearOf(time.date);
   const set = (patch: Partial<Settings['time']>) => dispatch({ type: 'TIME', patch });
   const step = timeStep(time);
+  // Every time here is local standard time (as weather files and Ladybug use); say which, and what summer clocks show.
+  const dst = zone.dst ? ` Summer clocks are ${zone.dst % 1 ? `${Math.round(zone.dst * 60)} min` : `${zone.dst} h`} ahead.` : '';
+  const clock = site.tz !== null ? `Times in standard time ${fmtOffset(tz)}, set by hand.` : `Times in local standard time, ${fmtOffset(tz)}${zone.name ? ` (${zone.name})` : ''}.${dst}`;
+  const sunSite = { lat: site.lat, lon: site.lon, tz, leap };
   // A range is an analysis period: every day from the start date to the end date, from the start time to the end time.
   const days = doy(time.to.date) - doy(time.from.date) + 1, perDay = Math.ceil((time.to.hour - time.from.hour) / step);
   const hours = `${fmtClock(time.from.hour)} to ${fmtClock(time.to.hour)}`;
@@ -42,12 +47,13 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, leap, errors,
     <section className="stack" aria-labelledby="h-time">
       <h2 id="h-time">Time</h2>
       <Segmented name="time-mode" label="Time mode" value={time.mode} options={[['annual', 'Annual'], ['instant', 'Single date'], ['range', 'Date range']] as const} onChange={(mode) => set({ mode })} />
+      <p className="text-muted lines-2">{clock}</p>
       {time.mode === 'annual' && <p className="text-muted">Every hour of the weather year, sun at mid-hour. The year of the dates below is ignored by the core.</p>}
       {time.mode === 'instant' && (
         <>
           {dateField('time-date', 'Date', time.date, (date) => set({ date }), errors.timeDate)}
           <YearStrip year={year} values={[doy(time.date)]} onChange={(_, v) => set({ date: dateFromDoy(v, year) })} />
-          <DayStrip bounds={dayBounds(site.lat, site.lon, tz, time.date)} values={[time.hour]} step={step} onChange={(_, v) => set({ hour: v })} />
+          <DayStrip bounds={dayBounds(sunSite, time.date)} values={[time.hour]} step={step} onChange={(_, v) => set({ hour: v })} />
           {hourRow('time-hour', 'Hour', time.hour, (hour) => set({ hour }))}
         </>
       )}
@@ -58,7 +64,7 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, leap, errors,
             {dateField('time-to-date', 'To', time.to.date, (date) => set({ to: { ...time.to, date } }), errors.timeTo)}
           </div>
           <YearStrip year={year} span values={[doy(time.from.date), doy(time.to.date)]} onChange={(i, v) => set(i === 0 ? { from: { ...time.from, date: dateFromDoy(Math.min(v, doy(time.to.date)), year) } } : { to: { ...time.to, date: dateFromDoy(Math.max(v, doy(time.from.date)), year) } })} />
-          <DayStrip bounds={dayBounds(site.lat, site.lon, tz, time.from.date)} span values={[time.from.hour, time.to.hour]} step={step} onChange={(i, v) => set(i === 0 ? fromHour(v) : toHour(v))} />
+          <DayStrip bounds={dayBounds(sunSite, time.from.date)} span values={[time.from.hour, time.to.hour]} step={step} onChange={(i, v) => set(i === 0 ? fromHour(v) : toHour(v))} />
           {hourRow('time-from-hour', 'From', time.from.hour, (hour) => set(fromHour(hour)))}
           {hourRow('time-to-hour', 'To', time.to.hour, (hour) => set(toHour(hour)))}
           <p className="text-muted lines-2">{summary}</p>

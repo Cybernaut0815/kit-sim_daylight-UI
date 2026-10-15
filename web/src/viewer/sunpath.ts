@@ -25,7 +25,7 @@ export type Grab =
 
 const HANDLE_PX = 14, ARC_PX = 8, Y = 0.003; // pick radii; the compass floats just above the ground (no z-fighting)
 const rad = (d: number) => (d * Math.PI) / 180;
-const mmdd = (date: string) => fmtTime(date, 0).slice(0, 5);
+const mmdd = (date: string, leap: boolean) => fmtTime(date, 0, leap).slice(0, 5);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** A zha token as a three.js colour plus its alpha (three.js colours have none, so translucent tokens become opacity). */
@@ -161,9 +161,9 @@ export function createSunPath() {
     if (t.mode === 'annual') return;
     // contrast on the viewport in both themes: dark gold / yellow for the sun, the accent fill for a period; the soft yellow only as the sun's halo
     const range = t.mode === 'range', tok = range ? token('--accent-fill') : token('--typology-yellow-text'), glow = token('--color-typology-yellow');
-    const at = (date: string, minute: number) => sunAt(site, parseHoy(fmtTime(date, minute), site.leap));
+    const at = (date: string, minute: number) => sunAt(site, parseHoy(fmtTime(date, minute, site.leap), site.leap));
     const arc = (which: Which, date: string, from = 0, to = 1440) => {
-      const p = dayPath(site, mmdd(date), 5);
+      const p = dayPath(site, mmdd(date, site.leap), 5);
       if (!p.alt.length) return;
       const width = range ? 1 : 3, full = lines(upSegs(p.xyz, p.alt, []), tok, width + (hot === `a:${which}` ? 1.5 : 0));
       active.add(full);
@@ -237,7 +237,7 @@ export function createSunPath() {
     const steps = stepHoys(t, site.leap);
     if (steps.length <= 4000) {
       const xyz: number[] = [];
-      for (const hoy of steps) { const s = sunAt(site, hoy); if (s.up) xyz.push(...sunDir(s.alt, s.azi)); }
+      for (const hoy of steps) { const s = sunAt(site, hoy + t.stepMin / 120); if (s.up) xyz.push(...sunDir(s.alt, s.azi)); } // the core takes each step's sun at its middle
       if (xyz.length) active.add(dots(xyz, tok, 4));
     }
     handle('from', t.from.date, t.from.hour, 1 / 40, tok);

@@ -13,12 +13,26 @@ describe('buildArgs', () => {
     expect(p['--lon']).toBe('13.4');
     expect(p['--tz']).toBe('1');
   });
-  it('prefers the EPW header tz, then the explicit one', () => {
+  it('uses the civil zone of the site, never the weather file zone or the longitude; an explicit tz wins', () => {
     const s = defaultSettings();
     s.epwMeta = { lat: 0, lon: 0, tz: -5, name: 'x', leap: false };
-    expect(derivedTz(s)).toBe(-5);
+    expect(derivedTz(s)).toBe(0); // London: the header's -5 is the file's own clock, the core converts
+    s.site = { ...s.site, lat: 40.4168, lon: -3.7038 };
+    expect(derivedTz(s)).toBe(1); // Madrid: CET, where round(lon / 15) would say 0
     s.site.tz = 3;
     expect(pairs(buildArgs(s))['--tz']).toBe('3');
+  });
+  it('rejects Feb 29 unless the weather year is a leap year', () => {
+    const s = defaultSettings();
+    s.weather.source = 'clear-sky';
+    s.time.mode = 'instant';
+    s.time.date = '2028-02-29';
+    expect(validate(s, true).timeDate).toMatch(/Feb 29/);
+    s.weather.source = 'upload';
+    s.weather.file = new Blob(['x']) as File;
+    s.epwMeta = { lat: 0, lon: 0, tz: 0, name: 'x', leap: true };
+    expect(validate(s, true)).toEqual({});
+    expect(pairs(buildArgs(s))['--time']).toBe('02-29T12:00');
   });
   it('emits time flags per mode and the clear-sky trio', () => {
     const s = defaultSettings();

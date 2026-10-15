@@ -115,7 +115,9 @@ export function reducer(s: State, a: Action): State {
       const moved = site.lat !== s.settings.site.lat || site.lon !== s.settings.site.lon;
       let { weather, epwMeta } = s.settings;
       if (moved) {
-        if (s.stations) weather = { ...weather, station: nearestStations(s.stations, site.lat, site.lon, 1)[0] ?? null };
+        if (!('tz' in a.patch)) site.tz = null; // an explicit zone belongs to the old place
+        // the nearest station, or none until the index arrives (STATIONS then picks the nearest)
+        weather = { ...weather, station: s.stations ? nearestStations(s.stations, site.lat, site.lon, 1)[0] ?? null : null };
         if (weather.source !== 'upload') epwMeta = null; // station / PVGIS reference changed: the header is re-fetched, the server re-serves from its cache
       }
       return { ...s, settings: { ...s.settings, site, weather, epwMeta } };
@@ -186,8 +188,9 @@ export function reducer(s: State, a: Action): State {
   }
 }
 
-/** Settings -> JSON for localStorage (the File cannot be stored; the user re-picks it). */
-export const serializeSettings = (s: Settings): string => JSON.stringify({ ...s, weather: { ...s.weather, file: null } });
+/** Settings -> JSON for localStorage (the File cannot be stored; the user re-picks it, and its header goes with it). */
+export const serializeSettings = (s: Settings): string =>
+  JSON.stringify({ ...s, weather: { ...s.weather, file: null }, epwMeta: s.weather.source === 'upload' ? null : s.epwMeta }); // the header of a file that is not kept either
 
 /** JSON (or null) -> Settings, each group spread over the defaults so a stale or partial record still loads. */
 export function parseSettings(raw: string | null): Settings {

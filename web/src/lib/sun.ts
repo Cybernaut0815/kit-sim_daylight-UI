@@ -80,9 +80,9 @@ export const decOf = (lat: number, alt: number, azi: number): number =>
  *  --hours from.hour-to.hour when the dates differ. [] for annual, or where the core rejects the input. */
 export function stepHoys(t: Settings['time'], leap: boolean): number[] {
   if (t.mode === 'annual') return [];
-  if (t.mode === 'instant') { const h = parseHoy(fmtTime(t.date, t.hour), leap); return Number.isNaN(h) ? [] : [h]; }
-  const nh = leap ? 8784 : 8760, step = t.stepMin / 60, t0 = parseHoy(fmtTime(t.from.date, t.from.hour), leap);
-  const t1 = Math.min(parseHoy(fmtTime(t.to.date, t.to.hour), leap), nh), daily = t.from.date !== t.to.date, out: number[] = [];
+  if (t.mode === 'instant') { const h = parseHoy(fmtTime(t.date, t.hour, leap), leap); return Number.isNaN(h) ? [] : [h]; }
+  const nh = leap ? 8784 : 8760, step = t.stepMin / 60, t0 = parseHoy(fmtTime(t.from.date, t.from.hour, leap), leap);
+  const t1 = Math.min(parseHoy(fmtTime(t.to.date, t.to.hour, leap), leap), nh), daily = t.from.date !== t.to.date, out: number[] = [];
   if (!(t0 >= 0 && t0 < nh && t1 > t0 && step > 0)) return out;
   for (let k = 0; ; k++) {
     const hoy = t0 + k * step;
@@ -120,7 +120,22 @@ export function analemma(site: Site, minute: number): { day: number[]; xyz: numb
 /** Declination at 12:00 per UI calendar day of `year`, as the core reads that date; NaN where the core rejects it
  *  (Feb 29 of a leap UI year without a leap weather year). What the date drag searches. */
 export const decTable = (site: Site, year: number): number[] =>
-  Array.from({ length: daysInYear(year) }, (_, d) => sunAt(site, parseHoy(fmtTime(dateFromDoy(d, year), 720), site.leap)).dec);
+  Array.from({ length: daysInYear(year) }, (_, d) => sunAt(site, parseHoy(fmtTime(dateFromDoy(d, year), 720, site.leap), site.leap)).dec);
+
+/** Sunrise and sunset in minutes of the standard-time day, as the sun path draws them: where the refracted altitude
+ *  crosses 0, interpolated between 5-min samples. Polar day [0, 1440]; polar night, or a date the core rejects, [0, 0].
+ *  Sunset before sunrise means it falls after midnight (the day band wraps). */
+export function dayBounds(site: Site, date: string): { sunrise: number; sunset: number } {
+  const p = dayPath(site, fmtTime(date, 0, site.leap).slice(0, 5), 5);
+  let sunrise = NaN, sunset = NaN;
+  for (let i = 1; i < p.alt.length; i++) {
+    const a = p.alt[i - 1], b = p.alt[i], at = p.min[i - 1] + ((p.min[i] - p.min[i - 1]) * a) / (a - b);
+    if (a < 0 && b >= 0) sunrise = at;
+    if (a >= 0 && b < 0) sunset = at;
+  }
+  if (Number.isNaN(sunrise) && Number.isNaN(sunset)) return p.alt[0] >= 0 ? { sunrise: 0, sunset: 1440 } : { sunrise: 0, sunset: 0 };
+  return { sunrise: Number.isNaN(sunrise) ? 0 : Math.round(sunrise), sunset: Number.isNaN(sunset) ? 1440 : Math.round(sunset) };
+}
 
 export interface DayDrag { half: 1 | -1; latch: boolean } // +1 rising half (Dec -> Jun solstice), -1 falling half
 

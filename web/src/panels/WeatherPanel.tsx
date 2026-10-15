@@ -5,6 +5,7 @@ import { EpwCharts } from '../charts/EpwCharts';
 import { epwMonthly } from '../lib/epw';
 import { STATION_INDEX_URL, epwHeader, haversineKm, nearestStations, parseStationIndex, proxyUrl, pvgisUrl } from '../lib/geo';
 import { gradientFor } from '../lib/gradients';
+import { fmtOffset } from '../lib/zone';
 import type { Action, Settings, Station, WeatherSource } from '../store';
 import { Alert, NumberField, Segmented } from '../ui';
 
@@ -54,6 +55,9 @@ export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta,
     return () => { clearTimeout(t); ctrl.abort(); };
   }, [epwMeta, wants, weather.source, weather.file, ref, dispatch]);
 
+  // the file's own place and zone (the run moves the site's times into it), and how far it is from the site
+  const km = epwMeta ? haversineKm(site.lat, site.lon, epwMeta.lat, epwMeta.lon) : 0;
+  const epwLine = epwMeta ? `EPW ${epwMeta.name || 'unnamed'}: ${epwMeta.lat.toFixed(2)}, ${epwMeta.lon.toFixed(2)}, ${fmtOffset(epwMeta.tz)}${epwMeta.leap ? ', leap year' : ''}${km > 50 ? `, ${Math.round(km).toLocaleString('en-GB')} km from the site` : ''}` : '';
   const sel = weather.station;
   const choices = useMemo(() => {
     const near = stations ? nearestStations(stations, site.lat, site.lon, 8) : [];
@@ -101,9 +105,9 @@ export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta,
       {shows && (headerError
         ? <Alert title="Weather file unusable">{headerError}</Alert>
         : <>
-            <p className="text-muted line">
+            <p className="text-muted line" title={epwLine}>
               {epwMeta
-                ? `EPW ${epwMeta.name || 'unnamed'}: ${epwMeta.lat.toFixed(2)}, ${epwMeta.lon.toFixed(2)}, UTC${epwMeta.tz >= 0 ? '+' : ''}${epwMeta.tz}${epwMeta.leap ? ', leap year' : ''}`
+                ? epwLine
                 : <><span className="spinner" aria-hidden="true" /> Reading the weather file</>}
             </p>
             <EpwCharts monthly={epwMeta?.monthly ?? null} sun={gradientFor('sunhours', viz.gradients.sunhours)} rad={gradientFor('radiation', viz.gradients.radiation)} />

@@ -81,6 +81,12 @@ export function DayStrip({ bounds, values, span, step, onChange }: { bounds: { s
       <>
         <rect width={w} height={h} fill="var(--bg-surface-2)" />
         {bounds.sunset > bounds.sunrise && <rect x={x(bounds.sunrise)} width={x(bounds.sunset) - x(bounds.sunrise)} height={h} fill="var(--bg-surface-3)" />}
+        {bounds.sunset < bounds.sunrise && ( /* sets after midnight: daylight at both ends of the day */
+          <>
+            <rect x={x(0)} width={x(bounds.sunset) - x(0)} height={h} fill="var(--bg-surface-3)" />
+            <rect x={x(bounds.sunrise)} width={x(1440) - x(bounds.sunrise)} height={h} fill="var(--bg-surface-3)" />
+          </>
+        )}
         {[6, 12, 18].map((hh) => <line key={hh} x1={x(hh * 60)} x2={x(hh * 60)} y1={0} y2={h} stroke="var(--chart-grid)" />)}
         {[0, 6, 12, 18, 24].map((hh) => (
           <text key={hh} x={x(hh * 60) + (hh === 0 ? 3 : hh === 24 ? -3 : 0)} y={h - 6} textAnchor={hh === 0 ? 'start' : hh === 24 ? 'end' : 'middle'} fontSize={10} fill="var(--chart-text)">{pad(hh)}</text>

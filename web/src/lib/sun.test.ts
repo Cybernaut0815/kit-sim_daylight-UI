@@ -1,7 +1,7 @@
 import { Object3D, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, type Settings, type TimePoint } from '../store';
-import { altAzi, analemma, dayPath, decOf, decTable, dragDay, hoyToDate, parseHoy, round2, startDayDrag, stepHoys, sunAt, sunDir, sunNoaa, type Site } from './sun';
+import { altAzi, analemma, dayBounds, dayPath, decOf, decTable, dragDay, hoyToDate, parseHoy, round2, startDayDrag, stepHoys, sunAt, sunDir, sunNoaa, type Site } from './sun';
 import { doy, pad } from './time';
 
 // The core's tests/check_solar.cpp kGold (ladybug-core 0.44 Sunpath): lat, lon, tz, hoy, leap, alt, azi, up
@@ -224,5 +224,25 @@ describe('date drag', () => {
     expect(d28.map((v, d) => (Number.isNaN(v) ? d : -1)).filter((d) => d >= 0)).toEqual([59]);
     for (let t = -24; t <= 24; t += 0.25) expect(dragDay(d28, t, startDayDrag(d28, 59), 59)).not.toBe(59);
     expect([58, 60]).toContain(dragDay(d28, (d28[58] + d28[60]) / 2, startDayDrag(d28, 59), 59));
+  });
+});
+
+describe('dayBounds (the day band of the Time panel)', () => {
+  it('is where the drawn sun path crosses the horizon', () => {
+    const b = dayBounds(london, '2026-06-21');
+    expect(b.sunrise).toBeGreaterThan(3 * 60 + 40); // the arc rises about 03:46 and sets about 20:20 (UTC)
+    expect(b.sunrise).toBeLessThan(3 * 60 + 52);
+    expect(b.sunset).toBeGreaterThan(20 * 60 + 14);
+    expect(b.sunset).toBeLessThan(20 * 60 + 26);
+  });
+  it('shifts with the zone; polar day, polar night; wraps when sunset falls after midnight', () => {
+    const berlin: Site = { lat: 52.5, lon: 13.4, tz: 0, leap: false };
+    expect(dayBounds({ ...berlin, tz: 1 }, '2026-03-21').sunrise - dayBounds(berlin, '2026-03-21').sunrise).toBe(60);
+    expect(dayBounds({ lat: 78, lon: 15, tz: 1, leap: false }, '2026-06-21')).toEqual({ sunrise: 0, sunset: 1440 });
+    expect(dayBounds({ lat: 78, lon: 15, tz: 1, leap: false }, '2026-12-21')).toEqual({ sunrise: 0, sunset: 0 });
+    const late = dayBounds({ lat: 64.146, lon: -21.9422, tz: 2, leap: false }, '2026-06-21'); // a clock 2 h ahead of the sun
+    expect(late.sunset).toBeLessThan(120); // sets after midnight ...
+    expect(late.sunrise).toBeGreaterThan(240); // ... and rises about 05:00: the band wraps
+    expect(dayBounds(london, '2028-02-29')).toEqual({ sunrise: 0, sunset: 0 }); // not in a non-leap weather year
   });
 });

@@ -54,12 +54,15 @@ export interface Place { name: string; lat: number; lon: number }
 interface PhotonFeature { properties: Record<string, string | undefined>; geometry: { coordinates: [number, number] } }
 const placeName = (p: Record<string, string | undefined>) => [...new Set([p.name, p.city, p.state, p.country].filter(Boolean))].join(', ');
 
+/** Places for a query, nearer ones a little first: a weak, continent-sized bias (zoom 4, scale 0.1), so 'Sydney' from
+ *  London is Sydney in Australia while a street name still finds the local street. One result per name. */
 export async function photonSearch(q: string, bias?: { lat: number; lon: number }, signal?: AbortSignal): Promise<Place[]> {
-  const biasQ = bias ? `&lat=${bias.lat}&lon=${bias.lon}` : '';
+  const biasQ = bias ? `&lat=${bias.lat}&lon=${bias.lon}&zoom=4&location_bias_scale=0.1` : '';
   const res = await fetch(`${PHOTON}/api/?q=${encodeURIComponent(q)}&limit=6&lang=en${biasQ}`, { signal });
   if (!res.ok) throw new Error(`Photon search failed (${res.status})`);
   const { features } = (await res.json()) as { features: PhotonFeature[] };
-  return features.map((f) => ({ name: placeName(f.properties), lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+  const out = features.map((f) => ({ name: placeName(f.properties), lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+  return out.filter((p, i) => out.findIndex((o) => o.name === p.name) === i); // the datalist picks by name
 }
 
 export async function photonReverse(lat: number, lon: number, signal?: AbortSignal): Promise<string> {

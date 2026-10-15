@@ -1,6 +1,7 @@
 // Monthly digest of an EPW: sunshine hours (DNI >= 120 W/m2, the WMO sunshine-duration threshold), possible daylight
 // hours (sunrise to sunset at the file's site), and the horizontal / normal radiation sums.
-import { dateFromDoy, dayBounds } from './time';
+import { dayBounds } from './sun';
+import { dateFromDoy } from './time';
 
 export interface EpwMonthly { sunshine: number[]; daylight: number[]; ghi: number[]; dni: number[]; dhi: number[] } // h, h, kWh/m2, kWh/m2, kWh/m2
 
@@ -35,8 +36,8 @@ export function epwMonthly(text: string, lat: number, lon: number, tz: number): 
   }
   const year = leap ? 2024 : 2023;
   for (let doy = 0, mo = 0, dm = 0; doy < (leap ? 366 : 365); doy++) {
-    const b = dayBounds(lat, lon, tz, dateFromDoy(doy, year));
-    m.daylight[mo] += Math.max(0, b.sunset - b.sunrise) / 60;
+    const b = dayBounds({ lat, lon, tz, leap }, dateFromDoy(doy, year)); // as the sun path draws the day
+    m.daylight[mo] += (b.sunset >= b.sunrise ? b.sunset - b.sunrise : 1440 - b.sunrise + b.sunset) / 60; // sunset after midnight wraps
     if (++dm === days[mo]) { mo++; dm = 0; }
   }
   return m;
