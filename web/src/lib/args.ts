@@ -1,11 +1,19 @@
 // Settings -> CLI flags for /run (every option explicit, so equal settings give equal request keys), and validation.
 import type { Settings } from '../store';
 import { quantitiesFor } from '../store';
-import { fmtTime, toMinutes } from './time';
+import { pvgisUrl } from './geo';
+import { doy, fmtClock, fmtTime } from './time';
 
 /** The tz the run uses: the user's explicit value, else the EPW header, else round(lon / 15). Always sent: the core
  *  would otherwise default tz before it reads the EPW header. */
 export const derivedTz = (s: Settings): number => s.site.tz ?? s.epwMeta?.tz ?? Math.round(s.site.lon / 15);
+
+/** The weather a run sends: the uploaded EPW, or a station / PVGIS URL the server fetches through its cache. */
+export function epwRef({ weather, site }: Settings): File | { url: string } | undefined {
+  if (weather.source === 'upload') return weather.file ?? undefined;
+  if (weather.source === 'station') return weather.station ? { url: weather.station.href } : undefined;
+  return weather.source === 'pvgis' ? { url: pvgisUrl(site.lat, site.lon) } : undefined;
+}
 
 export function buildArgs(s: Settings): string[] {
   const { site, weather, time, sim } = s;
@@ -17,7 +25,10 @@ export function buildArgs(s: Settings): string[] {
   if (sim.cullBackfaces) a.push('--cull-backfaces');
   if (!sim.selfOcclude) a.push('--no-self-occlude');
   if (time.mode === 'instant') a.push('--time', fmtTime(time.date, time.hour));
-  if (time.mode === 'range') a.push('--from', fmtTime(time.from.date, time.from.hour), '--to', fmtTime(time.to.date, time.to.hour), '--step', String(time.stepMin));
+  if (time.mode === 'range') {
+    a.push('--from', fmtTime(time.from.date, time.from.hour), '--to', fmtTime(time.to.date, time.to.hour), '--step', String(time.stepMin));
+    if (time.from.date !== time.to.date) a.push('--hours', `${fmtClock(time.from.hour)}-${fmtClock(time.to.hour)}`); // the same hours of every day
+  }
   return a;
 }
 
@@ -37,7 +48,10 @@ export function validate(s: Settings, hasReceiver: boolean): Record<string, stri
     if (weather.source === 'upload' && !weather.file) e.weather = 'Every quantity except sun hours needs weather. Choose an EPW file or another source.';
     if (weather.source === 'station' && !weather.station) e.weather = 'No station selected. Wait for the index or pick another source.';
   }
-  if (time.mode === 'range' && toMinutes(time.from) >= toMinutes(time.to)) e.timeTo = 'The range must end after it starts.';
+  if (time.mode === 'range') { // every day from the start date to the end date, from the start time to the end time
+    if (doy(time.to.date) < doy(time.from.date)) e.timeTo = 'The end date must not be before the start date.';
+    else if (time.from.hour >= time.to.hour) e.timeTo = 'The end time must be after the start time.';
+  }
   if (time.mode === 'instant' && !time.date) e.timeDate = 'Pick a date.';
   return e;
 }

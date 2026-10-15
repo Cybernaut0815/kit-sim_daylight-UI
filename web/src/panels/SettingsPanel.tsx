@@ -1,10 +1,10 @@
-import type { Dispatch } from 'react';
+import { memo, type Dispatch } from 'react';
 import { QUANTITIES, quantitiesFor, type Action, type Settings } from '../store';
 import { NumberField, Segmented, knob } from '../ui';
 
 interface Props { sim: Settings['sim']; errors: Record<string, string>; dispatch: Dispatch<Action> }
 
-export function SettingsPanel({ sim, errors, dispatch }: Props) {
+export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch }: Props) {
   const set = (patch: Partial<Settings['sim']>) => dispatch({ type: 'SIM', patch });
   const valid = quantitiesFor(sim.mode);
   return (
@@ -70,4 +70,4 @@ export function SettingsPanel({ sim, errors, dispatch }: Props) {
       </details>
     </section>
   );
-}
+});

@@ -16,6 +16,14 @@
 .viewport > .empty-state { position: absolute; inset: 0; justify-content: center; }
 .viewport__bar { position: absolute; inset-inline: 0; inset-block-end: 0; padding: var(--space-3) var(--space-4);
   background: var(--bg-surface-1); border-block-start: 1px solid var(--border-subtle); } /* the run bar: always visible under the model */
+/* the sun-path labels over the 3D view (three.js CSS2DRenderer): chart text that never takes the pointer; z-index 0
+   keeps the renderer's per-label z-order below the readout and the run bar */
+.viewport__labels { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.sunpath-label { font-size: var(--fs-small); color: var(--chart-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sunpath-label--strong { color: var(--chart-text-strong); }
+.sunpath-label--at { padding: 0 0 var(--space-1) var(--space-2); } /* anchored by its corner at a handle: up and right of it */
+.viewport > canvas.viewport__grab { cursor: grab; }
+.viewport > canvas.viewport__grabbing { cursor: grabbing; }
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
 /* fixed-size regions: text and data that load or change never move what is below them */

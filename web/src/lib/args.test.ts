@@ -45,6 +45,19 @@ describe('buildArgs', () => {
     expect(buildArgs(s)).toEqual(expect.arrayContaining(['--no-self-occlude', '--cull-backfaces']));
     expect(pairs(buildArgs(s))['--quantity']).toBe('radiation,direct,diffuse,irradiance,illuminance,sunhours');
   });
+  it('a range over several days sends the daily window as --hours, a one-day range does not', () => {
+    const s = defaultSettings();
+    s.time.mode = 'range';
+    s.time.from = { date: '2026-06-01', hour: 540 };
+    s.time.to = { date: '2026-08-31', hour: 1020 };
+    const p = pairs(buildArgs(s));
+    expect([p['--from'], p['--to'], p['--hours']]).toEqual(['06-01T09:00', '08-31T17:00', '09:00-17:00']);
+    expect(buildArgs(s).at(-2)).toBe('--hours'); // appended last: the other flags keep their order (and request keys)
+    s.time.to.hour = 1440;
+    expect(pairs(buildArgs(s))['--hours']).toBe('09:00-24:00');
+    s.time.to.date = '2026-06-01';
+    expect(buildArgs(s)).not.toContain('--hours');
+  });
 });
 
 describe('validate', () => {
@@ -75,5 +88,17 @@ describe('validate', () => {
     s.time.from = { date: '2026-06-21', hour: 600 };
     s.time.to = { date: '2026-06-21', hour: 600 };
     expect(validate(s, true)).toHaveProperty('timeTo');
+  });
+  it('a range needs the end date on or after the start and a daily window that ends after it starts', () => {
+    const s = defaultSettings();
+    s.weather.source = 'clear-sky';
+    s.time.mode = 'range';
+    s.time.from = { date: '2026-06-01', hour: 540 };
+    s.time.to = { date: '2026-08-31', hour: 1020 };
+    expect(validate(s, true)).toEqual({});
+    s.time.to.hour = 480; // later date, earlier time: the daily window would be empty
+    expect(validate(s, true).timeTo).toMatch(/end time/);
+    s.time.to = { date: '2026-05-31', hour: 1020 };
+    expect(validate(s, true).timeTo).toMatch(/end date/);
   });
 });

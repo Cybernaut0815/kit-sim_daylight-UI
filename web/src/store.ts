@@ -41,6 +41,8 @@ export interface RunResult {
   values: Float64Array[]; columns: string[]; manifest: RemoteManifest; cache?: Record<string, string>;
   receivers: string[]; // object ids in sensor order: manifest.meshes[i] <-> receivers[i]
   on: 'faces' | 'vertices'; // element kind the rows describe (weights: face areas or vertex areas)
+  key: string; // the run key (args, weather, mesh ids) it was computed for: differs from the current one = stale
+  elapsed: number; // s, click to result (the round trip the user waits for)
 }
 export type Run = { status: 'idle' } | { status: 'queued'; position: number } | { status: 'running' } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
 
@@ -49,6 +51,8 @@ export interface State {
   probe: Probe | null; // element under the cursor in the viewport
   bin: [number, number] | null; // hovered histogram bin [lo, hi): the viewer fades everything else
   settings: Settings; stations: Station[] | null; run: Run; column: number; colourBy: 'plain' | 'value';
+  result: RunResult | null; // the last finished run: stays on screen while the next one is queued, running or failed
+  error: string | null; // why the last run failed: kept while the next one runs, so the alert does not blink between Auto runs
   errors: Record<string, string>; // validate() output keyed by field id
 }
 
@@ -84,17 +88,20 @@ export const defaultSettings = (): Settings => ({
 });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  objects: [], selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', errors: {},
+  objects: [], selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', result: null, error: null, errors: {},
 });
 
+// A job still on its way when the model or the roles change keeps its status (the button stays busy until it ends);
+// its result is then dropped at RUN done, because its receivers are gone.
+const inFlight = (r: Run) => r.status === 'queued' || r.status === 'running';
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((q) => b.includes(q as Quantity));
 
 export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case 'LOAD':
-      return { ...s, objects: a.objects, selected: new Set(), hovered: null, run: { status: 'idle' }, column: 0, colourBy: 'plain' };
+      return { ...s, objects: a.objects, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain' };
     case 'ROLE':
-      return { ...s, objects: s.objects.map((o) => (a.ids.includes(o.id) ? { ...o, role: a.role } : o)), run: { status: 'idle' }, column: 0 };
+      return { ...s, objects: s.objects.map((o) => (a.ids.includes(o.id) ? { ...o, role: a.role } : o)), run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0 };
     case 'SELECT': {
       if (!a.additive) return { ...s, selected: new Set(a.ids) };
       const next = new Set(s.selected);
@@ -137,11 +144,17 @@ export function reducer(s: State, a: Action): State {
       const station = s.settings.weather.station ?? nearestStations(a.stations, lat, lon, 1)[0] ?? null;
       return { ...s, stations: a.stations, settings: { ...s.settings, weather: { ...s.settings.weather, station } } };
     }
-    case 'RUN': // a finished run shows its values on the meshes
+    case 'RUN': { // the last result stays until the next one lands; the first result after a load shows its values
+      const r = a.run, done = r.status === 'done';
+      if ((r.status === 'running' && s.run.status === 'running') || (r.status === 'queued' && s.run.status === 'queued' && r.position === s.run.position)) return s;
+      if (done && !r.result.receivers.every((id) => s.objects.some((o) => o.id === id && o.role === 'receiver'))) return { ...s, run: { status: 'idle' } }; // the model or the roles changed while it ran
       return {
-        ...s, run: a.run, probe: null, bin: null, column: a.run.status === 'done' ? Math.min(s.column, a.run.result.columns.length - 1) : s.column,
-        colourBy: a.run.status === 'done' ? 'value' : s.colourBy, errors: a.run.status === 'running' || a.run.status === 'queued' ? {} : s.errors,
+        ...s, run: r, result: done ? r.result : s.result, error: r.status === 'error' ? r.message : done || r.status === 'idle' ? null : s.error,
+        probe: done ? null : s.probe, bin: done ? null : s.bin,
+        column: done ? Math.min(s.column, r.result.columns.length - 1) : s.column, colourBy: done && !s.result ? 'value' : s.colourBy,
+        errors: (r.status === 'running' || r.status === 'queued') && Object.keys(s.errors).length ? {} : s.errors,
       };
+    }
     case 'COLUMN':
       return { ...s, column: a.column };
     case 'COLOUR_BY':
@@ -168,8 +181,8 @@ export function reducer(s: State, a: Action): State {
         : { ...s.settings.viz, ranges: drop(ranges), colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } };
       return { ...s, settings: { ...s.settings, viz } };
     }
-    case 'ERRORS':
-      return { ...s, errors: a.errors };
+    case 'ERRORS': // a run clicks through here every time: no errors before and after = no re-render
+      return !Object.keys(a.errors).length && !Object.keys(s.errors).length ? s : { ...s, errors: a.errors };
   }
 }
 

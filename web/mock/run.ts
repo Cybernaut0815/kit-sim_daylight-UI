@@ -80,7 +80,10 @@ async function compute(req: IncomingMessage): Promise<{ status: number; text: st
   const arg = (k: string, d: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
   const sides = arg('--sides', 'front'), on = arg('--on', 'faces');
   const columns = arg('--quantity', 'radiation').split(',').flatMap((q) => (sides === 'both' ? ['front', 'back'] : [sides]).map((s) => `${q}_${s}`));
-  const duration_h = args.includes('--time') ? 1 : args.includes('--from') ? hours(arg('--to', '')) - hours(arg('--from', '')) : 8760;
+  const from = hours(arg('--from', '')), to = hours(arg('--to', '')), win = /^(\d+):(\d+)-(\d+):(\d+)$/.exec(arg('--hours', ''));
+  const duration_h = args.includes('--time') ? 1 : !args.includes('--from') ? 8760
+    : win ? (Math.floor((to - 1e-9) / 24) - Math.floor(from / 24) + 1) * (+win[3] + +win[4] / 60 - +win[1] - +win[2] / 60) // --hours: the window every day
+    : to - from;
   let first = 0;
   const mm = sensors.map((id) => { const m = meshes.get(id)!, count = on === 'vertices' ? m.points : m.faces, r = { name: m.name, first, count }; first += count; return r; });
   const scale = (col: string) => { const q = col.split('_')[0]; return q === 'sunhours' ? Math.min(duration_h, 4380) : q === 'irradiance' ? 900 : q === 'illuminance' ? 90000 : (1100 * duration_h) / 8760; };

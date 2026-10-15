@@ -1,6 +1,6 @@
 // Calendar helpers for the time panel: day of year <-> 'YYYY-MM-DD', CLI timestamps, suncalc day bounds.
 import { getPosition, getTimes } from 'suncalc';
-import type { TimePoint } from '../store';
+import type { Settings } from '../store';
 
 export const pad = (n: number): string => String(n).padStart(2, '0');
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
@@ -17,6 +17,9 @@ export function dateFromDoy(n: number, year: number): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
+/** 'YYYY-MM-DD' -> '21 Jun'. */
+export const fmtDay = (date: string): string => utc(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
 /** Minutes of day -> 'HH:MM' (1440 -> '24:00'). */
 export const fmtClock = (minutes: number): string => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 
@@ -28,8 +31,8 @@ export function fmtTime(date: string, minutes: number): string {
   return `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-/** Position in the year, in minutes, for ordering two TimePoints. */
-export const toMinutes = (t: TimePoint): number => doy(t.date) * 1440 + t.hour;
+/** Snap step of the time controls and the sun-path handles: 10 min for an instant, the range step for a range. */
+export const timeStep = (t: Settings['time']): number => (t.mode === 'range' ? t.stepMin : 10);
 
 /** Sunrise / sunset as minutes of standard-time day `tz` at the site, via suncalc. Polar day -> [0, 1440], polar night -> [0, 0]. */
 export function dayBounds(lat: number, lon: number, tz: number, date: string): { sunrise: number; sunset: number } {

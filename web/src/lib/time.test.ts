@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dateFromDoy, dayBounds, daysInYear, doy, fmtClock, fmtTime, toMinutes } from './time';
+import { defaultSettings } from '../store';
+import { dateFromDoy, dayBounds, daysInYear, doy, fmtClock, fmtTime, timeStep } from './time';
 
 describe('day of year', () => {
   it('round-trips through the calendar', () => {
@@ -22,9 +23,10 @@ describe('timestamps', () => {
     expect(fmtClock(1440)).toBe('24:00');
     expect(fmtClock(65)).toBe('01:05');
   });
-  it('orders time points', () => {
-    expect(toMinutes({ date: '2025-01-02', hour: 0 })).toBe(1440);
-    expect(toMinutes({ date: '2025-01-01', hour: 1439 })).toBeLessThan(toMinutes({ date: '2025-01-02', hour: 0 }));
+  it('snaps instants to 10 minutes and ranges to their step', () => {
+    const t = defaultSettings().time;
+    expect(timeStep({ ...t, mode: 'instant', stepMin: 30 })).toBe(10);
+    expect(timeStep({ ...t, mode: 'range', stepMin: 30 })).toBe(30);
   });
 });
 

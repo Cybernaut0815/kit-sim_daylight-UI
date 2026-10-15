@@ -1,34 +1,33 @@
 // Results: what the column means, run summary, colour scale and problem range (with resets), legend / histogram /
 // cumulative area curve in the result colours, the cursor readout, the range split, and the per-mesh table. Every
 // region keeps its size whatever the data or the hover state, so the panel does not jump.
-import { useMemo, type Dispatch } from 'react';
+import { memo, useMemo, type Dispatch } from 'react';
 import { AreaCurve } from '../charts/AreaCurve';
 import { Donut } from '../charts/Donut';
 import { Histogram } from '../charts/Histogram';
 import { Legend } from '../charts/Legend';
 import { GRADIENTS, hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, columnStats, cumulative, fmtNum, globalRange, histogram, percentile, rangeShares, shareBelow, unitFor } from '../lib/result';
-import type { Action, ObjectRow, Probe, Run, Settings } from '../store';
+import type { Action, ObjectRow, Probe, Run, RunResult, Settings } from '../store';
 import { Alert, ColorQuad, Illustration, NumberField, ResetButton, Segmented, Swatch, knob, pct, rowKeys } from '../ui';
 
 interface Props {
-  run: Run; objects: ObjectRow[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; selected: Set<string>;
+  result: RunResult | null; run: Run; error: string | null; stale: boolean; auto: boolean; // result: the last finished run, kept while the next one runs
+  objects: ObjectRow[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; selected: Set<string>;
   probe: Probe | null; bin: [number, number] | null; scale: Scale | null; viz: Settings['viz'];
   weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined; dispatch: Dispatch<Action>;
 }
 
-const cacheLine = (c?: Record<string, string>) => {
-  if (!c) return '';
-  if (c.response === 'hit') return ', identical run replayed from the server cache';
-  return `, scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}`;
-};
+const cacheLine = (c: Record<string, string> | undefined) =>
+  !c ? '' : c.response === 'hit' ? 'Identical run, replayed from the server cache.'
+    : `Scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}.`;
 
 const orNull = (v: number) => (Number.isFinite(v) ? v : null);
 
-export function ResultsPanel({ run, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ result, run, error, stale, auto, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
   const data = useMemo(() => {
-    if (run.status !== 'done') return null;
-    const r = run.result, col = Math.min(column, r.columns.length - 1), [quantity, side] = r.columns[col].split('_');
+    if (!result) return null;
+    const r = result, col = Math.min(column, r.columns.length - 1), [quantity, side] = r.columns[col].split('_');
     const groups = r.manifest.meshes, weights = r.receivers.map((id, i) => weightsFor(id, r.on) ?? new Float64Array(groups[i].count).fill(1));
     const rows = r.receivers.map((id, i) => {
       const o = objects.find((x) => x.id === id), g = groups[i];
@@ -39,20 +38,25 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
     const bins = Math.min(64, Math.max(12, Math.round(1.5 * Math.sqrt(cum.v.length)))); // more detail with more elements
     const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
     return { r, col, quantity, side, rows, total, cum, domain, markers, hist: histogram(r.values, col, groups, weights, bins, domain), unit: unitFor(r.columns[col]) };
-  }, [run, column, objects, weightsFor]);
+  }, [result, column, objects, weightsFor]);
+  const running = run.status === 'running' || run.status === 'queued';
+  // While a run is on its way the last result stays; the run line says so for a click (Auto runs refresh silently,
+  // many times a second while dragging), and always when other users' jobs are ahead.
+  const ahead = run.status === 'queued' ? run.position : 0;
+  const status = ahead ? `Waiting for the GPU, ${ahead} job${ahead > 1 ? 's' : ''} ahead` : running && !auto ? 'Running with the new inputs' : null;
 
   return (
-    <section className="stack" aria-labelledby="h-results">
+    <section className="stack" aria-labelledby="h-results" aria-busy={running}>
       <h2 id="h-results">Results</h2>
-      {run.status === 'idle' && (
+      {!result && run.status === 'idle' && (
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="results" /></div>
           <h3>No results yet</h3>
           <p>Mark a receiver mesh, set the site and time, then run the simulation. The values appear on the meshes and in the distribution charts here.</p>
         </div>
       )}
-      {(run.status === 'running' || run.status === 'queued') && (
-        <div className="stack" aria-busy="true">
+      {!result && running && (
+        <div className="stack">
           <div className="grid" style={knob('--grid-min', '8rem')}>
             {[0, 1, 2, 3].map((n) => <div key={n} className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;</div>)}
           </div>
@@ -60,7 +64,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
           <p className="text-muted"><span className="spinner" aria-hidden="true" /> {run.status === 'queued' ? `Waiting for the GPU${run.position ? `, ${run.position} job${run.position > 1 ? 's' : ''} ahead` : ''}` : 'Tracing on the GPU'}</p>
         </div>
       )}
-      {run.status === 'error' && <Alert title="Run failed">{run.message}</Alert>}
+      {error && <Alert title="Run failed">{error}</Alert>}
       {data && scale && (() => {
         const { r, col, quantity, side, rows, total, cum, domain, markers, hist, unit } = data;
         const hov = rows.find((x) => x.id === hovered), probeRow = probe ? rows.find((x) => x.id === probe.id) : undefined;
@@ -71,6 +75,7 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
           for (let i = 0; i < x.g.count; i++) { const v = r.values[x.g.first + i][col]; if (Number.isFinite(v) && (scale.lo === null || v >= scale.lo) && (scale.hi === null || v <= scale.hi)) w += x.w[i]; }
           return x.stats.area ? w / x.stats.area : 0;
         };
+        const what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, ${fmtNum(r.values.length)} ${r.on} on ${rows.length} ${rows.length === 1 ? 'mesh' : 'meshes'}.`;
         const select = (id: string, additive: boolean) => dispatch({ type: 'SELECT', ids: [id], additive });
         const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
         const readout = probe && probeRow
@@ -92,7 +97,15 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
               <Segmented name="colour-by" label="Colour the meshes" value={colourBy} options={[['value', 'Values'], ['plain', 'Plain']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
             </div>
             <p className="text-muted lines-5">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
-            <p className="text-muted lines-2">{r.manifest.run_s !== undefined ? `${r.manifest.run_s.toFixed(2)} s on the GPU` : 'Done'}{cacheLine(r.cache)}. {r.manifest.duration_h} h evaluated, {r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, {fmtNum(r.values.length)} {r.on} on {rows.length} {rows.length === 1 ? 'mesh' : 'meshes'}.</p>
+            {/* three fixed lines whatever the run, the cache or the panel width: nothing below them moves */}
+            <div className="text-muted">
+              <div className="line">
+                {status ? <><span className="spinner" aria-hidden="true" /> {status}</>
+                  : `${r.manifest.run_s !== undefined && r.cache?.response !== 'hit' ? `${r.manifest.run_s.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip`}
+              </div>
+              <div className="line">{stale ? 'Inputs changed since this run.' : cacheLine(r.cache)}</div>
+              <div className="line" title={what}>{what}</div>
+            </div>
             <div className="cols-2">
               <div className="stat"><span className="stat__label">Total</span><span className="stat__value">{fmtNum(total)}</span><span className="stat__delta">{unit.total}</span></div>
               <div className="stat"><span className="stat__label">Mean</span><span className="stat__value">{fmtNum(markers.mean)}</span><span className="stat__delta">{unit.value}, area-weighted</span></div>
@@ -101,8 +114,8 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
             </div>
             <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
             <div className="readout" role="status" aria-live="polite">{readout}</div>
-            <fieldset className="field">
-              <div className="cluster cluster--between"><legend>Colour scale</legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
+            <fieldset className="field" aria-labelledby="lg-scale">
+              <div className="cluster cluster--between"><legend id="lg-scale">Colour scale</legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
               <div className="field">
                 <label className="field__label" htmlFor="gradient">Gradient</label>
                 <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
@@ -114,8 +127,8 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
                 <NumberField id="scale-max" label={`Max ${unit.value}`} value={viz.scales[quantity]?.max ?? NaN} help={`Blank: ${fmtNum(domain[1])}`} onCommit={(v) => setViz({ max: orNull(v) })} />
               </div>
             </fieldset>
-            <fieldset className="field">
-              <div className="cluster cluster--between"><legend>Problem range</legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
+            <fieldset className="field" aria-labelledby="lg-range">
+              <div className="cluster cluster--between"><legend id="lg-range">Problem range</legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
               <div className="cols-2">
                 <NumberField
                   id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} help="Blank: no lower bound" onCommit={(v) => setViz({ lo: orNull(v) })}
@@ -188,4 +201,4 @@ export function ResultsPanel({ run, objects, column, colourBy, hovered, selected
       })()}
     </section>
   );
-}
+});

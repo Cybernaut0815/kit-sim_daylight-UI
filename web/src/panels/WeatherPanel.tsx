@@ -1,6 +1,6 @@
 // Weather: source, station choice (nearest first), clear-sky parameters, and the EPW digest charts. Every region keeps
 // its size while data loads (a disabled select, a one-line status, chart placeholders).
-import { useEffect, useMemo, useState, type Dispatch } from 'react';
+import { memo, useEffect, useMemo, useState, type Dispatch } from 'react';
 import { EpwCharts } from '../charts/EpwCharts';
 import { epwMonthly } from '../lib/epw';
 import { STATION_INDEX_URL, epwHeader, haversineKm, nearestStations, parseStationIndex, proxyUrl, pvgisUrl } from '../lib/geo';
@@ -10,10 +10,12 @@ import { Alert, NumberField, Segmented } from '../ui';
 
 const SOURCES: readonly (readonly [WeatherSource, string])[] = [['station', 'Nearest station'], ['pvgis', 'PVGIS'], ['upload', 'Upload'], ['clear-sky', 'Clear sky']];
 
-interface Props { settings: Settings; stations: Station[] | null; errors: Record<string, string>; dispatch: Dispatch<Action> }
+interface Props {
+  weather: Settings['weather']; site: Settings['site']; epwMeta: Settings['epwMeta']; viz: Settings['viz'];
+  stations: Station[] | null; errors: Record<string, string>; dispatch: Dispatch<Action>;
+}
 
-export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
-  const { weather, site, epwMeta, viz } = settings;
+export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta, viz, stations, errors, dispatch }: Props) {
   const [indexError, setIndexError] = useState<string | null>(null);
   const [headerError, setHeaderError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -109,4 +111,4 @@ export function WeatherPanel({ settings, stations, errors, dispatch }: Props) {
       {errors.weather && <p className="field__error">{errors.weather}</p>}
     </section>
   );
-}
+});

@@ -1,6 +1,6 @@
 // Model: file input and the mesh tree (scene-graph groups, filter, collapse, roles per mesh or per group). The tree
 // sits in a fixed-height, user-resizable box, so loading a model never moves the panels below it.
-import { useEffect, useMemo, useState, type Dispatch, type KeyboardEvent } from 'react';
+import { memo, useEffect, useMemo, useState, type Dispatch, type KeyboardEvent } from 'react';
 import { groupKeys, visibleRows, type TreeNode } from '../lib/tree';
 import type { Action, ObjectRow, Role } from '../store';
 import { Alert, Icon } from '../ui';
@@ -15,7 +15,7 @@ interface Props {
   onFiles: (files: File[]) => void; dispatch: Dispatch<Action>;
 }
 
-export function ModelPanel({ tree, objects, selected, loading, error, errors, onFiles, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ tree, objects, selected, loading, error, errors, onFiles, dispatch }: Props) {
   const [filter, setFilter] = useState('');
   const groups = useMemo(() => groupKeys(tree), [tree]);
   const total = objects.length;
@@ -112,4 +112,4 @@ export function ModelPanel({ tree, objects, selected, loading, error, errors, on
       </details>
     </section>
   );
-}
+});

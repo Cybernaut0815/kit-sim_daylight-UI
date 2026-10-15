@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch } from 'react';
+import { memo, useEffect, useRef, useState, type Dispatch } from 'react';
 import { photonReverse, photonSearch, type Place } from '../lib/geo';
 import { SiteMap } from '../map/SiteMap';
 import type { Action, Settings, Station } from '../store';
@@ -8,7 +8,7 @@ interface Props {
   site: Settings['site']; tz: number; stations: Station[] | null; selectedHref: string | null; errors: Record<string, string>; theme: string; dispatch: Dispatch<Action>;
 }
 
-export function LocationPanel({ site, tz, stations, selectedHref, errors, theme, dispatch }: Props) {
+export const LocationPanel = memo(function LocationPanel({ site, tz, stations, selectedHref, errors, theme, dispatch }: Props) {
   const [q, setQ] = useState('');
   const [places, setPlaces] = useState<Place[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -58,4 +58,4 @@ export function LocationPanel({ site, tz, stations, selectedHref, errors, theme,
       </div>
     </section>
   );
-}
+});
