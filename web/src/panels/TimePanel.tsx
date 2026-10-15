@@ -41,7 +41,7 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, leap, errors,
   return (
     <section className="stack" aria-labelledby="h-time">
       <h2 id="h-time">Time</h2>
-      <Segmented name="time-mode" label="Time mode" value={time.mode} options={[['annual', 'Annual'], ['instant', 'Instant'], ['range', 'Range']] as const} onChange={(mode) => set({ mode })} />
+      <Segmented name="time-mode" label="Time mode" value={time.mode} options={[['annual', 'Annual'], ['instant', 'Single date'], ['range', 'Date range']] as const} onChange={(mode) => set({ mode })} />
       {time.mode === 'annual' && <p className="text-muted">Every hour of the weather year, sun at mid-hour. The year of the dates below is ignored by the core.</p>}
       {time.mode === 'instant' && (
         <>

@@ -193,7 +193,7 @@ export default function App() {
   const probeLabel = state.probe && result
     ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
     : null;
-  const busyBar = running && !autoOn; // a click shows its progress on the button; Auto runs do not flash it
+  const busyBar = running && !autoOn; // a click run: the button waits and Cancel shows; Auto runs do not flash them
 
   return (
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
@@ -227,17 +227,15 @@ export default function App() {
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
             <Viewer group={group} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
-              <div className="cluster cluster--between">
-                <label title={annual ? 'Annual runs are not repeated automatically' : 'Run again whenever an input changes'}>
-                  <input type="checkbox" id="auto-run" checked={ui.auto} disabled={annual} aria-describedby={annual ? 'auto-run-why' : undefined} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Auto run
+              {/* right-aligned, the button's label never changes and Cancel appears on the left: the tickbox stays put;
+                  progress shows in the Results run line */}
+              <div className="cluster cluster--end">
+                {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
+                <label title={annual ? 'Annual runs are not repeated automatically' : 'Runs the simulation whenever the date, time, location or a setting changes'}>
+                  <input type="checkbox" id="auto-run" checked={ui.auto} disabled={annual} aria-describedby={annual ? 'auto-run-why' : undefined} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
                   {annual && <span id="auto-run-why" className="sr-only">Annual runs are not repeated automatically.</span>}
                 </label>
-                <div className="cluster">
-                  {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
-                  <button className="btn btn--primary" type="button" disabled={!receivers.length || busyBar} onClick={() => void onRun()}>
-                    {busyBar ? <><span className="spinner" aria-hidden="true" /> {state.run.status === 'queued' ? 'Queued' : 'Running'}</> : 'Run simulation'}
-                  </button>
-                </div>
+                <button className="btn btn--primary" type="button" disabled={!receivers.length || busyBar} aria-busy={busyBar} onClick={() => void onRun()}>Run simulation</button>
               </div>
             </Viewer>
           </div>
