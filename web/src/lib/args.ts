@@ -58,7 +58,8 @@ export function validate(s: Settings, hasReceiver: boolean): Record<string, stri
   }
   if (time.mode === 'instant' && !time.date) e.timeDate = 'Pick a date.';
   const feb29 = (date: string) => date.slice(5) === '02-29', noFeb29 = 'Feb 29 is not in the weather year. Pick Feb 28 or Mar 1.';
-  if (!weatherLeap(s) && time.mode === 'instant' && feb29(time.date)) e.timeDate = noFeb29;
-  if (!weatherLeap(s) && time.mode === 'range' && (feb29(time.from.date) || feb29(time.to.date))) e.timeTo = noFeb29;
+  const notLeap = (s.weather.source === 'clear-sky' || !!s.epwMeta) && !weatherLeap(s); // known only once the weather header is read
+  if (notLeap && time.mode === 'instant' && feb29(time.date)) e.timeDate = noFeb29;
+  if (notLeap && time.mode === 'range' && (feb29(time.from.date) || feb29(time.to.date))) e.timeTo = noFeb29;
   return e;
 }

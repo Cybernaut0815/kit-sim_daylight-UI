@@ -28,6 +28,8 @@ describe('buildArgs', () => {
     s.time.mode = 'instant';
     s.time.date = '2028-02-29';
     expect(validate(s, true).timeDate).toMatch(/Feb 29/);
+    s.weather.source = 'pvgis';
+    expect(validate(s, true).timeDate).toBeUndefined(); // the weather year is not known before its header arrives
     s.weather.source = 'upload';
     s.weather.file = new Blob(['x']) as File;
     s.epwMeta = { lat: 0, lon: 0, tz: 0, name: 'x', leap: true };

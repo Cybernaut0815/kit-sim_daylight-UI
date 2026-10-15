@@ -16,7 +16,7 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, e
   const set = (patch: Partial<Settings['time']>) => dispatch({ type: 'TIME', patch });
   const step = timeStep(time);
   // Every time here is local standard time (as weather files and Ladybug use); say which, and what summer clocks show.
-  const dst = zone.dst ? ` Summer clocks are ${zone.dst % 1 ? `${Math.round(zone.dst * 60)} min` : `${zone.dst} h`} ahead.` : '';
+  const dst = zone.dst ? ` With daylight saving, clocks are ${zone.dst % 1 ? `${Math.round(zone.dst * 60)} min` : `${zone.dst} h`} ahead.` : '';
   const clock = site.tz !== null ? `Times in standard time ${fmtOffset(tz)}, set by hand.` : `Times in local standard time, ${fmtOffset(tz)}${zone.name ? ` (${zone.name})` : ''}.${dst}`;
   const sunSite = { lat: site.lat, lon: site.lon, tz, leap };
   // A range is an analysis period: every day from the start date to the end date, from the start time to the end time.
