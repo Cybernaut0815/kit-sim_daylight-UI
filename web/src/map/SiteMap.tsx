@@ -52,6 +52,11 @@ export function SiteMap(p: Props) {
   useEffect(() => {
     const map = new MLMap({ container: host.current!, style: STYLE, center: [latest.current.lon, latest.current.lat], zoom: 4, attributionControl: { compact: true } });
     mapRef.current = map;
+    map.once('load', () => { // the compact attribution opens itself on load: start it folded, its "i" button unfolds it
+      const a = map.getContainer().querySelector('.maplibregl-ctrl-attrib');
+      a?.classList.remove('maplibregl-compact-show');
+      a?.removeAttribute('open');
+    });
     map.on('style.load', () => {
       repaint(map);
       map.addSource('stations', { type: 'geojson', data: fc([]) });

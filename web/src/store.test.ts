@@ -97,16 +97,11 @@ describe('site and weather', () => {
     expect(reducer(s, { type: 'WEATHER', patch: { source: 'pvgis' } }).settings.epwMeta).toBeNull();
     expect(reducer(s, { type: 'WEATHER', patch: { turbidity: 4 } }).settings.epwMeta).not.toBeNull();
   });
-  it('a move clears an explicit time zone and a station picked before the index arrived', () => {
-    let s = reducer(initialState(), { type: 'SITE', patch: { tz: 9 } });
-    expect(s.settings.site.tz).toBe(9);
-    expect(reducer(s, { type: 'SITE', patch: { place: 'x' } }).settings.site.tz).toBe(9); // not a move
-    s = reducer(s, { type: 'WEATHER', patch: { station: stations[0] } });
+  it('a move clears a station picked before the index arrived', () => {
+    let s = reducer(initialState(), { type: 'WEATHER', patch: { station: stations[0] } });
     s = reducer(s, { type: 'SITE', patch: { lat: 48.85, lon: 2.35 } });
-    expect(s.settings.site.tz).toBeNull();
     expect(s.settings.weather.station).toBeNull(); // no index yet: STATIONS picks the nearest
     expect(reducer(s, { type: 'STATIONS', stations }).settings.weather.station?.title).toBe('Paris Orly');
-    expect(reducer(s, { type: 'SITE', patch: { lat: 1, lon: 2, tz: 3 } }).settings.site.tz).toBe(3); // a move that sets the zone
   });
   it('mode switch keeps the all-quantities default and clamps sky density', () => {
     let s = reducer(initialState(), { type: 'SIM', patch: { skyDensity: 4 } });
@@ -125,10 +120,11 @@ describe('persistence', () => {
   it('round-trips without the File and survives garbage', () => {
     const d = defaultSettings();
     d.weather.file = new Blob(['x']) as File;
-    d.site.tz = 2;
+    d.site.place = 'Somewhere';
     const back = parseSettings(serializeSettings(d));
     expect(back.weather.file).toBeNull();
-    expect(back.site.tz).toBe(2);
+    expect(back.site.place).toBe('Somewhere');
+    expect(parseSettings('{"site":{"lat":40,"lon":-3,"tz":5,"place":"x"}}').site).toEqual({ lat: 40, lon: -3, place: 'x' }); // an old override is dropped
     expect(parseSettings('{not json').site.lat).toBe(d.site.lat);
     expect(parseSettings('{"site":{"lat":1}}').site.lon).toBe(d.site.lon);
     expect(parseSettings(null).sim.quantities).toHaveLength(6);

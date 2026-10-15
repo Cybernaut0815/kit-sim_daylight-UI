@@ -1,7 +1,7 @@
 // three.js viewport: render on demand, orbit, grid, pick / hover by raycast, materials painted from zha tokens or,
 // with results, from the result gradient and the problem range; the cursor's element is probed and read out. The sun
 // path is drawn around the model; dragging its suns, handles and arcs edits the time settings.
-import { useEffect, useRef, type Dispatch, type ReactNode } from 'react';
+import { useEffect, useRef, type Dispatch, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -30,11 +30,25 @@ interface Ctx {
   render: () => void;
 }
 
+/** The scene info at the top right of the view: meshes by role, faces and vertices, and the render loop's frame line. */
+function SceneInfo({ objects, stats }: { objects: ObjectRow[]; stats: RefObject<HTMLSpanElement | null> }) {
+  const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
+  const ignored = n('none');
+  return (
+    <div className="viewport__info" aria-hidden="true">
+      <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {f(n('shade'))} shading{ignored ? `, ${f(ignored)} ignored` : ''}</span>
+      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices</span>
+      <span ref={stats} />
+    </div>
+  );
+}
+
 export function Viewer({ group, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const tip = useRef<HTMLDivElement>(null);
   const labelsEl = useRef<HTMLDivElement>(null);
+  const stats = useRef<HTMLSpanElement>(null); // the frame line of the scene info, written by the render loop
   const ctx = useRef<Ctx | null>(null);
   const latest = useRef({ result, column, sun }); // read by the pointer handlers, which are bound once
   latest.current = { result, column, sun };
@@ -56,11 +70,26 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
     scene.add(sun);
     const sunPath = createSunPath();
     scene.add(sunPath.group);
-    let queued = false;
+    // Render on demand. Frame stats for the scene info: frames in the last second, the last frame's CPU time and draw
+    // calls, written straight to the DOM at most twice a second (no React render per frame); "idle" once frames stop.
+    let queued = false, times: number[] = [], shown = 0, idle = 0;
+    const stat = (text: string) => { if (stats.current) stats.current.textContent = text; };
     const render = () => {
       if (queued) return;
       queued = true;
-      requestAnimationFrame(() => { queued = false; renderer.render(scene, camera); labels.render(scene, camera); });
+      requestAnimationFrame((now) => {
+        queued = false;
+        const t0 = performance.now();
+        renderer.render(scene, camera);
+        const calls = renderer.info.render.calls;
+        labels.render(scene, camera);
+        const ms = (performance.now() - t0).toFixed(1);
+        times.push(now);
+        while (times[0] <= now - 1000) times.shift();
+        if (now - shown >= 500) { shown = now; stat(`${times.length} fps, ${ms} ms per frame, ${calls} draw calls`); }
+        clearTimeout(idle);
+        idle = window.setTimeout(() => { times = []; stat(`idle, last frame ${ms} ms, ${calls} draw calls`); }, 1100);
+      });
     };
     controls.addEventListener('change', render);
     const ro = new ResizeObserver(() => {
@@ -80,11 +109,14 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
     // element under the cursor (the face, or the nearest vertex of the hit face), one raycast per frame.
     // ponytail: linear raycast over every mesh; three-mesh-bvh past ~1M triangles
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3();
-    const pick = (e: PointerEvent) => {
+    const hitAt = (e: PointerEvent) => {
       const r = renderer.domElement.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
-      const hit = ray.intersectObjects(c.meshes, false)[0];
+      return ray.intersectObjects(c.meshes, false)[0] ?? null;
+    };
+    const pick = (e: PointerEvent) => {
+      const hit = hitAt(e), r = renderer.domElement.getBoundingClientRect();
       if (!hit) return null;
       const mesh = hit.object as THREE.Mesh, id = mesh.userData.id as string, { result, column } = latest.current;
       let element: number | null = null, value = NaN;
@@ -133,10 +165,14 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
     // canvas). A grab stops the event there, so a drag never orbits, selects or probes.
     let grab: Grab | null = null;
     const ptr = (e: PointerEvent): Ptr => { const r = dom.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height }; };
+    // The compass ring yields to the model standing in front of it (a click there still selects); geometry lying on the
+    // ground under the ring (a site plane) does not hide it.
+    const offModel = (e: PointerEvent) => () => { const h = hitAt(e); return !h || h.point.y < c.dome.y + 0.01 * c.dome.r; };
     const onGrab = (e: PointerEvent) => {
       const v = latest.current.sun;
       if (e.target !== dom || e.button !== 0 || !v || !c.model) return; // the run bar lives in the viewport too
-      grab = sunPath.grab(ptr(e), camera, v);
+      if (sunPath.hover(ptr(e), camera, offModel(e)).changed) render(); // a press with no hover before it (touch, pen) gets the look too
+      grab = sunPath.grab(ptr(e), camera, v, offModel(e));
       if (!grab) return;
       e.stopPropagation();
       dom.setPointerCapture(e.pointerId); // on the canvas: the cursor follows the capture target; the capture listeners above still run first
@@ -148,12 +184,13 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       const v = latest.current.sun;
       if (grab) {
         e.stopPropagation();
-        const patch = v && sunPath.drag(grab, ptr(e), camera, v);
-        if (patch) dispatch({ type: 'TIME', patch }); // the same fields the Time panel writes: its controls follow
+        const d = v && sunPath.drag(grab, ptr(e), camera, v);
+        if (d?.time) dispatch({ type: 'TIME', patch: d.time }); // the same fields the Time and Location panels write: their controls follow
+        if (d?.north !== undefined) dispatch({ type: 'SIM', patch: { north: d.north } });
         return;
       }
       if (e.target !== dom || !v || !c.model) return;
-      const { over, changed } = sunPath.hover(ptr(e), camera);
+      const { over, changed } = sunPath.hover(ptr(e), camera, offModel(e));
       dom.classList.toggle('viewport__grab', over);
       if (changed) render();
     };
@@ -163,6 +200,9 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       grab = null;
       if (dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId);
       dom.classList.remove('viewport__grabbing');
+      const { over, changed } = sunPath.hover(e.type === 'pointerup' ? ptr(e) : null, camera, offModel(e)); // the look of what is under the pointer now
+      dom.classList.toggle('viewport__grab', over);
+      if (changed) render();
     };
     const onOut = () => { dom.classList.remove('viewport__grab'); if (!grab && sunPath.hover(null, camera).changed) render(); };
     el.addEventListener('pointerdown', onGrab, true);
@@ -171,6 +211,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
     el.addEventListener('pointercancel', onDrop, true);
     dom.addEventListener('pointerleave', onOut);
     return () => {
+      clearTimeout(idle);
       ro.disconnect();
       controls.dispose();
       dom.removeEventListener('pointerdown', onDown);
@@ -298,6 +339,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       <canvas ref={canvas} aria-label="3D model viewport" />
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
+      {group && <SceneInfo objects={objects} stats={stats} />}
       {!group && (
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="model" /></div>

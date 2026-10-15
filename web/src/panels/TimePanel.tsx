@@ -4,7 +4,7 @@ import { dayBounds, stepHoys } from '../lib/sun';
 import { dateFromDoy, doy, fmtClock, fmtDay, timeStep, yearOf } from '../lib/time';
 import { fmtOffset, type Zone } from '../lib/zone';
 import type { Action, Settings } from '../store';
-import { ResetButton, Segmented, knob } from '../ui';
+import { ResetButton, Segmented, knob, Section } from '../ui';
 
 interface Props {
   time: Settings['time']; site: Settings['site']; tz: number; zone: Zone; leap: boolean; errors: Record<string, string>; dispatch: Dispatch<Action>; // zone: the site's civil zone; leap: the core's weather year
@@ -17,7 +17,7 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, e
   const step = timeStep(time);
   // Every time here is local standard time (as weather files and Ladybug use); say which, and what summer clocks show.
   const dst = zone.dst ? ` With daylight saving, clocks are ${zone.dst % 1 ? `${Math.round(zone.dst * 60)} min` : `${zone.dst} h`} ahead.` : '';
-  const clock = site.tz !== null ? `Times in standard time ${fmtOffset(tz)}, set by hand.` : `Times in local standard time, ${fmtOffset(tz)}${zone.name ? ` (${zone.name})` : ''}.${dst}`;
+  const clock = `Times in local standard time, ${fmtOffset(tz)}${zone.name ? ` (${zone.name})` : ''}.${dst}`;
   const sunSite = { lat: site.lat, lon: site.lon, tz, leap };
   // A range is an analysis period: every day from the start date to the end date, from the start time to the end time.
   const days = doy(time.to.date) - doy(time.from.date) + 1, perDay = Math.ceil((time.to.hour - time.from.hour) / step);
@@ -44,8 +44,7 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, e
   );
 
   return (
-    <section className="stack" aria-labelledby="h-time">
-      <h2 id="h-time">Time</h2>
+    <Section id="time" title="Time">
       <Segmented name="time-mode" label="Time mode" value={time.mode} options={[['annual', 'Annual'], ['instant', 'Single date'], ['range', 'Date range']] as const} onChange={(mode) => set({ mode })} />
       <p className="text-muted lines-2">{clock}</p>
       {time.mode === 'annual' && <p className="text-muted">Every hour of the weather year, sun at mid-hour. The year of the dates below is ignored by the core.</p>}
@@ -87,8 +86,8 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, e
           <input id="sunpath-size" type="range" min={-2} max={2} step={0.1} value={Math.log2(sunScale)} aria-valuetext={`${Math.round(sunScale * 100)} %`} disabled={!sunPath} onChange={(e) => onSunScale(2 ** e.target.valueAsNumber)} />
           <span className="slider-row__value">{Math.round(sunScale * 100)} %</span>
         </label>
-        <p className="text-muted lines-2">{time.mode === 'annual' ? 'Annual: the arcs of every month (the 21st) and the loop of every hour span the whole year.' : 'Drag the sun or a handle along its arc to change the time, an arc across the sky to change the date.'}</p>
+        <p className="text-muted lines-2">{time.mode === 'annual' ? 'Annual: the arcs of every month (the 21st) and the loop of every hour span the whole year.' : 'Drag the sun or a handle to set its date and time, an arc for the date, the compass ring for north.'}</p>
       </fieldset>
-    </section>
+    </Section>
   );
 });

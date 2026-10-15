@@ -57,9 +57,7 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
       )}
       {!result && running && (
         <div className="stack">
-          <div className="grid" style={knob('--grid-min', '8rem')}>
-            {[0, 1, 2, 3].map((n) => <div key={n} className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;<br />&nbsp;</div>)}
-          </div>
+          <div className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;</div>
           <div className="skeleton chart-ph" aria-hidden="true" />
           <p className="text-muted"><span className="spinner" aria-hidden="true" /> {run.status === 'queued' ? `Waiting for the GPU${run.position ? `, ${run.position} job${run.position > 1 ? 's' : ''} ahead` : ''}` : 'Tracing on the GPU'}</p>
         </div>
@@ -106,36 +104,45 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
               <div className="line">{stale ? 'Inputs changed since this run.' : cacheLine(r.cache)}</div>
               <div className="line" title={what}>{what}</div>
             </div>
-            <div className="cols-2">
-              <div className="stat"><span className="stat__label">Total</span><span className="stat__value">{fmtNum(total)}</span><span className="stat__delta">{unit.total}</span></div>
-              <div className="stat"><span className="stat__label">Mean</span><span className="stat__value">{fmtNum(markers.mean)}</span><span className="stat__delta">{unit.value}, area-weighted</span></div>
-              <div className="stat"><span className="stat__label">P10</span><span className="stat__value">{fmtNum(markers.p10)}</span><span className="stat__delta">10 % of the area gets less</span></div>
-              <div className="stat"><span className="stat__label">P90</span><span className="stat__value">{fmtNum(markers.p90)}</span><span className="stat__delta">10 % of the area gets more</span></div>
-            </div>
+            <table className="data-table">
+              <caption className="sr-only">Summary over every receiver</caption>
+              <thead>
+                <tr>
+                  <th scope="col" className="num" title="Over every receiver">Total <span className="th-unit">{unit.total}</span></th>
+                  <th scope="col" className="num" title="Area-weighted">Mean <span className="th-unit">{unit.value}</span></th>
+                  <th scope="col" className="num" title="10 % of the area gets less">P10</th>
+                  <th scope="col" className="num" title="10 % of the area gets more">P90</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="num">{fmtNum(total)}</td><td className="num">{fmtNum(markers.mean)}</td><td className="num">{fmtNum(markers.p10)}</td><td className="num">{fmtNum(markers.p90)}</td></tr>
+              </tbody>
+            </table>
             <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
             <div className="readout" role="status" aria-live="polite">{readout}</div>
             <fieldset className="field" aria-labelledby="lg-scale">
-              <div className="cluster cluster--between"><legend id="lg-scale">Colour scale</legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
-              <div className="field">
-                <label className="field__label" htmlFor="gradient">Gradient</label>
-                <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
-                  {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
-                </select>
-              </div>
-              <div className="cols-2">
-                <NumberField id="scale-min" label={`Min ${unit.value}`} value={viz.scales[quantity]?.min ?? NaN} help={`Blank: ${fmtNum(domain[0])}`} onCommit={(v) => setViz({ min: orNull(v) })} />
-                <NumberField id="scale-max" label={`Max ${unit.value}`} value={viz.scales[quantity]?.max ?? NaN} help={`Blank: ${fmtNum(domain[1])}`} onCommit={(v) => setViz({ max: orNull(v) })} />
+              <div className="cluster cluster--between"><legend id="lg-scale">Colour scale<span className="sr-only">. Min or Max left blank: the range of the data (the placeholder)</span></legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
+              <div className="grid" style={knob('--grid-min', '6rem')}>
+                <div className="field">
+                  <label className="field__label" htmlFor="gradient">Gradient</label>
+                  <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
+                    {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+                  </select>
+                </div>
+                {/* blank: the data's own bound, shown as the placeholder */}
+                <NumberField id="scale-min" label={`Min ${unit.value}`} value={viz.scales[quantity]?.min ?? NaN} placeholder={fmtNum(domain[0])} onCommit={(v) => setViz({ min: orNull(v) })} />
+                <NumberField id="scale-max" label={`Max ${unit.value}`} value={viz.scales[quantity]?.max ?? NaN} placeholder={fmtNum(domain[1])} onCommit={(v) => setViz({ max: orNull(v) })} />
               </div>
             </fieldset>
             <fieldset className="field" aria-labelledby="lg-range">
-              <div className="cluster cluster--between"><legend id="lg-range">Problem range</legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
+              <div className="cluster cluster--between"><legend id="lg-range">Problem range<span className="sr-only">. Below or Above left blank: no bound</span></legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
               <div className="cols-2">
                 <NumberField
-                  id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} help="Blank: no lower bound" onCommit={(v) => setViz({ lo: orNull(v) })}
+                  id="range-lo" label={`Below ${unit.value}`} value={scale.lo ?? NaN} placeholder="no bound" onCommit={(v) => setViz({ lo: orNull(v) })}
                   adorn={<ColorQuad id="colour-below" label="Colour below the range" value={scale.below} onChange={(below) => setViz({ below })} />}
                 />
                 <NumberField
-                  id="range-hi" label={`Above ${unit.value}`} value={scale.hi ?? NaN} help="Blank: no upper bound" onCommit={(v) => setViz({ hi: orNull(v) })}
+                  id="range-hi" label={`Above ${unit.value}`} value={scale.hi ?? NaN} placeholder="no bound" onCommit={(v) => setViz({ hi: orNull(v) })}
                   adorn={<ColorQuad id="colour-above" label="Colour above the range" value={scale.above} onChange={(above) => setViz({ above })} />}
                 />
               </div>

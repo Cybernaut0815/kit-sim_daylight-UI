@@ -6,6 +6,7 @@
 .fill > * { min-block-size: 0; min-inline-size: 0; } /* grid items default to min-content: a wide table or the map canvas would widen the column past the viewport */
 .panel-wrap { position: relative; display: grid; grid-template-rows: minmax(0, 1fr); } /* hosts a scrolling panel and its splitter, which hangs into the column gap */
 .panel { overflow: auto; }
+.panel > .accordion { flex-shrink: 0; } /* zha's accordion clips (overflow: hidden), so in the panel's flex column it would shrink to share the height; it keeps its content's and the panel scrolls */
 .splitter { position: absolute; inset-block: 0; inline-size: var(--space-6); cursor: col-resize; z-index: 1; }
 .splitter--left { inset-inline-end: calc(-1 * var(--space-6)); }
 .splitter--right { inset-inline-start: calc(-1 * var(--space-6)); }
@@ -22,6 +23,9 @@
 .sunpath-label { font-size: var(--fs-small); color: var(--chart-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sunpath-label--strong { color: var(--chart-text-strong); }
 .sunpath-label--at { padding: 0 0 var(--space-1) var(--space-2); } /* anchored by its corner at a handle: up and right of it */
+/* the scene info: quiet chart text at the top right, above the sun-path labels, never taking the pointer */
+.viewport__info { position: absolute; inset-block-start: var(--space-2); inset-inline-end: var(--space-2); z-index: 1; display: grid; justify-items: end;
+  pointer-events: none; font-size: var(--fs-small); color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: end; }
 .viewport > canvas.viewport__grab { cursor: grab; }
 .viewport > canvas.viewport__grabbing { cursor: grabbing; }
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }

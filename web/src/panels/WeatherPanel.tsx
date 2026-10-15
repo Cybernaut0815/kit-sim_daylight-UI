@@ -7,7 +7,7 @@ import { STATION_INDEX_URL, epwHeader, haversineKm, nearestStations, parseStatio
 import { gradientFor } from '../lib/gradients';
 import { fmtOffset } from '../lib/zone';
 import type { Action, Settings, Station, WeatherSource } from '../store';
-import { Alert, NumberField, Segmented } from '../ui';
+import { Alert, NumberField, Segmented, Section } from '../ui';
 
 const SOURCES: readonly (readonly [WeatherSource, string])[] = [['station', 'Nearest station'], ['pvgis', 'PVGIS'], ['upload', 'Upload'], ['clear-sky', 'Clear sky']];
 
@@ -66,8 +66,7 @@ export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta,
   }, [stations, site.lat, site.lon, sel]);
 
   return (
-    <section className="stack" aria-labelledby="h-weather">
-      <h2 id="h-weather">Weather</h2>
+    <Section id="weather" title="Weather">
       <Segmented name="weather" label="Weather source" value={weather.source} options={SOURCES} onChange={(source) => dispatch({ type: 'WEATHER', patch: { source } })} />
       {weather.source === 'station' && (
         <div className="field">
@@ -113,6 +112,6 @@ export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta,
             <EpwCharts monthly={epwMeta?.monthly ?? null} sun={gradientFor('sunhours', viz.gradients.sunhours)} rad={gradientFor('radiation', viz.gradients.radiation)} />
           </>)}
       {errors.weather && <p className="field__error">{errors.weather}</p>}
-    </section>
+    </Section>
   );
 });

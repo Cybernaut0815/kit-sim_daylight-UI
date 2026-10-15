@@ -1,7 +1,7 @@
 import { Object3D, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, type Settings, type TimePoint } from '../store';
-import { altAzi, analemma, dayBounds, dayPath, decOf, decTable, dragDay, hoyToDate, parseHoy, round2, startDayDrag, stepHoys, sunAt, sunDir, sunNoaa, type Site } from './sun';
+import { altAzi, analemma, dayBounds, dayPath, decOf, decTable, dragDay, hoyToDate, nearestMinute, parseHoy, round2, startDayDrag, stepHoys, sunAt, sunDir, sunNoaa, type Site } from './sun';
 import { doy, pad } from './time';
 
 // The core's tests/check_solar.cpp kGold (ladybug-core 0.44 Sunpath): lat, lon, tz, hoy, leap, alt, azi, up
@@ -154,6 +154,13 @@ describe('sampling', () => {
     expect(Math.abs(altAzi(p.xyz[3 * top], p.xyz[3 * top + 1], p.xyz[3 * top + 2]).azi - 180)).toBeLessThan(3);
     expect(dayPath(london, '02-29')).toEqual({ min: [], xyz: [], alt: [] });
     expect(dayPath({ ...london, leap: true }, '02-29').min).toHaveLength(289);
+  });
+  it('nearestMinute: the sample of a day path nearest a direction', () => {
+    const p = dayPath(london, '06-21'), at = (m: number) => p.xyz.slice(3 * (m / 5), 3 * (m / 5) + 3);
+    for (const m of [60, 300, 725, 1100]) expect(nearestMinute(p, at(m))).toBe(m);
+    const u = [0, 1, 2].map((k) => 0.7 * at(600)[k] + 0.3 * at(605)[k]), n = Math.hypot(...u);
+    expect(nearestMinute(p, u.map((x) => x / n))).toBe(600); // between two samples: the nearer one
+    expect(nearestMinute(dayPath(london, '02-29'), [0, 1, 0])).toBeNaN(); // no path (Feb 29 of a common year)
   });
   it('analemma: one sample per day of the core year', () => {
     const a = analemma(london, 720), b = analemma({ ...london, leap: true }, 720);

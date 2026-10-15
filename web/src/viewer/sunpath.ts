@@ -2,7 +2,8 @@
 // N E S W, 30 / 60 degree altitude rings, the 21st of every month (Jan-Jun solid, Jul-Dec dashed), one analemma per
 // hour and the band of every sun position of the year. Active layer: the chosen instant (day arc + sun) or analysis
 // period (the window on the end-date arcs, the band they span, the evaluated steps) with handles. Drag a sun or a
-// handle along its arc to change the time; drag an arc across the sky to change the date. Built at unit radius in the
+// handle across the sky to change its date and time; drag an arc to change the date; turn the compass ring to set
+// north. Built at unit radius in the
 // diagram frame (+Y up, true north -Z, east +X); the group carries the position, the radius and north. Everything
 // below the horizon is clipped.
 import * as THREE from 'three';
@@ -11,7 +12,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { cssVar } from '../lib/cssVar';
-import { altAzi, analemma, dayPath, decOf, decTable, dragDay, parseHoy, startDayDrag, stepHoys, sunAt, sunDir, type DayDrag, type Path, type Site } from '../lib/sun';
+import { altAzi, analemma, dayPath, decOf, decTable, dragDay, nearestMinute, parseHoy, startDayDrag, stepHoys, sunAt, sunDir, type DayDrag, type Path, type Site } from '../lib/sun';
 import { dateFromDoy, daysInYear, doy, fmtClock, fmtDay, fmtTime, pad, timeStep, yearOf } from '../lib/time';
 import type { Settings } from '../store';
 
@@ -19,12 +20,18 @@ type Time = Settings['time'];
 export interface SunView { site: Site; north: number; time: Time; scale: number } // what the viewer draws; scale x the fitted radius
 export interface Ptr { x: number; y: number; w: number; h: number } // pointer in CSS px within the canvas, and the canvas size
 type Which = 'sun' | 'from' | 'to'; // the instant's sun / arc, or a range end
+interface DayGrab { dec: number[]; drag: DayDrag; off: number; prev: THREE.Vector3; day: number; first: number; last: number; year: number } // the date part of a drag
 export type Grab =
-  | { kind: 'time'; which: Which; off: number; last: number }
-  | { kind: 'date'; which: Which; dec: number[]; drag: DayDrag; off: number; prev: THREE.Vector3; day: number; first: number; last: number; year: number };
+  | ({ kind: 'date'; which: Which } & DayGrab) // a day arc: its date
+  | ({ kind: 'sun'; which: Which; toff: number; minute: number } & DayGrab) // a sun or a handle: its date and its time
+  | { kind: 'north'; north0: number; psi0: number; last: number }; // the compass ring: model north
+export interface DragResult { time?: Partial<Time>; north?: number }
 
-const HANDLE_PX = 14, ARC_PX = 8, Y = 0.003; // pick radii; the compass floats just above the ground (no z-fighting)
+const HANDLE_PX = 14, ARC_PX = 8, RING_PX = 12, Y = 0.003; // pick radii; the compass floats just above the ground (no z-fighting)
 const rad = (d: number) => (d * Math.PI) / 180;
+const NESW = [0, 90, 180, 270].map((a) => [1.15 * Math.sin(rad(a)), Y, -1.15 * Math.cos(rad(a))]); // where N E S W stand
+const RING: Path = { min: [], xyz: [], alt: [] }; // the compass ring as a path, for the pointer's distance to it
+for (let i = 0; i <= 120; i++) { const a = (i / 120) * 2 * Math.PI; RING.min.push(i); RING.xyz.push(Math.sin(a), Y, -Math.cos(a)); RING.alt.push(0); }
 const mmdd = (date: string, leap: boolean) => fmtTime(date, 0, leap).slice(0, 5);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -83,7 +90,8 @@ export function createSunPath() {
   // pickable state of the active layer, rebuilt by show()
   let arcs: { which: Which; path: Path; line: LineSegments2; width: number }[] = [];
   let handles: { which: Which; obj: THREE.Object3D; up: boolean; tip: HTMLElement; short: string; long: string }[] = [];
-  let hot: string | null = null; // hovered or dragged handle / arc: 'h:sun', 'a:from', ...
+  let hot: string | null = null; // hovered or dragged handle / arc / compass ring: 'h:sun', 'a:from', 'c:sun', ...
+  let ring: LineSegments2 | null = null; // the compass ring, thickened while hovered
   const ray = new THREE.Raycaster(), v = new THREE.Vector3(), w = new THREE.Vector3();
 
   const lines = (seg: number[], tok: Tok, width: number, dashed = false, clip = true) => {
@@ -122,13 +130,13 @@ export function createSunPath() {
     empty(scaffold);
     const axis = token('--text-muted'), faint = token('--border-strong');
     // compass: ring, ticks every 5 / 15 / 90 degrees, N E S W
-    const ring = circle(1, Y, []), minor = circle(1.06, Y, []);
+    const major = circle(1, Y, []), minor = circle(1.06, Y, []);
     for (let a = 0; a < 360; a += 5) {
       const s = Math.sin(rad(a)), c = -Math.cos(rad(a)), r = a % 90 === 0 ? 1.07 : a % 15 === 0 ? 1.035 : 1.02;
-      (a % 15 === 0 ? ring : minor).push(s, Y, c, r * s, Y, r * c);
+      (a % 15 === 0 ? major : minor).push(s, Y, c, r * s, Y, r * c);
     }
-    scaffold.add(lines(ring, axis, 1.5, false, false), lines(minor, faint, 1, false, false));
-    ['N', 'E', 'S', 'W'].forEach((t, i) => scaffold.add(label(t, 'sunpath-label--strong', [1.15 * Math.sin(rad(90 * i)), Y, -1.15 * Math.cos(rad(90 * i))])));
+    scaffold.add(ring = lines(major, axis, hot === 'c:sun' ? 3 : 1.5, false, false), lines(minor, faint, 1, false, false));
+    ['N', 'E', 'S', 'W'].forEach((t, i) => scaffold.add(label(t, 'sunpath-label--strong', NESW[i])));
     // altitude rings, labelled on the side away from the sun
     const alts: number[] = [], away = site.lat >= 0 ? 0 : 180;
     for (const a of [30, 60]) {
@@ -266,10 +274,17 @@ export function createSunPath() {
     }
     return best;
   }
-  /** What the pointer is over: the nearest handle within HANDLE_PX, else the nearest arc within ARC_PX. */
-  function under(p: Ptr, cam: THREE.Camera) {
+  /** The angle around the centre (deg, the sense of rotation.y) of where the pointer's ray meets the ground; null when it does not. */
+  function ground(p: Ptr, cam: THREE.Camera) {
+    ray.setFromCamera(new THREE.Vector2((p.x / p.w) * 2 - 1, 1 - (p.y / p.h) * 2), cam);
+    const c = group.getWorldPosition(w), hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -c.y), new THREE.Vector3());
+    return hit && (Math.atan2(-(hit.z - c.z), hit.x - c.x) * 180) / Math.PI;
+  }
+  /** What the pointer is over: the nearest handle within HANDLE_PX, else the nearest arc within ARC_PX, else the compass
+   *  ring, unless `free` says something else (the model) is there. */
+  function under(p: Ptr, cam: THREE.Camera, free: () => boolean) {
     group.updateMatrixWorld();
-    let best: { kind: 'h' | 'a'; which: Which; d: number } | null = null;
+    let best: { kind: 'h' | 'a' | 'c'; which: Which; d: number } | null = null;
     for (const h of handles) {
       const s = screen(h.obj.position.x, h.obj.position.y, h.obj.position.z, p, cam), d = s ? Math.hypot(s[0] - p.x, s[1] - p.y) : Infinity;
       if (d < HANDLE_PX && (!best || d < best.d)) best = { kind: 'h', which: h.which, d };
@@ -279,7 +294,10 @@ export function createSunPath() {
       const d = nearest(a.path, p, cam).d;
       if (d < ARC_PX && (!best || d < best.d)) best = { kind: 'a', which: a.which, d };
     }
-    return best;
+    if (best) return best;
+    const near = (x: number, y: number, z: number) => { const s = screen(x, y, z, p, cam); return !!s && Math.hypot(s[0] - p.x, s[1] - p.y) < HANDLE_PX; };
+    const ring = nearest(RING, p, cam).d < RING_PX || NESW.some(([x, y, z]) => near(x, y, z)); // the ring (and its ticks) or a cardinal letter
+    return ring && free() ? { kind: 'c' as const, which: 'sun' as Which, d: 0 } : null;
   }
   /** The dome point under the pointer: the ray's sphere hit nearest `near` (the side the drag started on), else the silhouette. */
   function dome(p: Ptr, cam: THREE.Camera, near: THREE.Vector3) {
@@ -296,56 +314,76 @@ export function createSunPath() {
   };
   const arcOf = (which: Which) => arcs.find((a) => a.which === which) ?? arcs[0];
 
-  /** Start a drag if the pointer is on a handle (time) or an arc (date). */
-  function grab(p: Ptr, cam: THREE.Camera, view: SunView): Grab | null {
-    const hit = under(p, cam), t = view.time;
-    if (!hit) return null;
-    hot = `${hit.kind}:${hit.which}`;
-    const range = t.mode === 'range', a = arcOf(hit.which);
-    if (hit.kind === 'h') {
-      const cur = hit.which === 'sun' ? t.hour : hit.which === 'from' ? t.from.hour : t.to.hour, h = handles.find((x) => x.which === hit.which);
-      const n = a ? nearest(a.path, p, cam) : null, off = h?.up && n && Number.isFinite(n.t) ? cur - n.t : 0; // grabbed off-centre: no jump
-      return { kind: 'time', which: hit.which, off, last: cur };
-    }
-    const date = !range ? t.date : hit.which === 'to' ? t.to.date : t.from.date, year = yearOf(date), n = daysInYear(year);
-    const dec = decTable(view.site, year), day = doy(date), on = nearest(a.path, p, cam).u;
-    const prev = group.localToWorld(new THREE.Vector3(on[0], on[1], on[2])), start = dome(p, cam, prev);
-    const multi = range && t.from.date !== t.to.date;
-    const [first, last] = !multi ? [0, n - 1] : hit.which === 'from' ? [0, doy(t.to.date) - 1] : [doy(t.from.date) + 1, n - 1];
-    return { kind: 'date', which: hit.which, dec, drag: startDayDrag(dec, day), off: dec[day] - decAt(view.site, start), prev: start, day, first, last, year };
+  /** The date part of a drag from the dome point near `on` (diagram frame): the declination table of the year, the
+   *  half-year lock, the grab offset (no jump on press) and, for one end of a multi-day range, the days it may take. */
+  function dayGrab(which: Which, p: Ptr, cam: THREE.Camera, view: SunView, on: THREE.Vector3): DayGrab {
+    const t = view.time, range = t.mode === 'range', date = !range ? t.date : which === 'to' ? t.to.date : t.from.date;
+    const year = yearOf(date), n = daysInYear(year), dec = decTable(view.site, year), day = doy(date);
+    const start = dome(p, cam, group.localToWorld(on.clone())), multi = range && t.from.date !== t.to.date;
+    const [first, last] = !multi ? [0, n - 1] : which === 'from' ? [0, doy(t.to.date) - 1] : [doy(t.from.date) + 1, n - 1];
+    return { dec, drag: startDayDrag(dec, day), off: dec[day] - decAt(view.site, start), prev: start, day, first, last, year };
   }
 
-  /** Follow a drag: the TIME patch for the pointer, or null when the snapped value did not change. */
-  function drag(g: Grab, p: Ptr, cam: THREE.Camera, view: SunView): Partial<Time> | null {
+  /** Start a drag: a sun or handle (its date and time), an arc (its date) or the compass ring (north). */
+  function grab(p: Ptr, cam: THREE.Camera, view: SunView, free: () => boolean): Grab | null {
+    const hit = under(p, cam, free), t = view.time;
+    if (!hit) return null;
+    hot = `${hit.kind}:${hit.which}`;
+    if (hit.kind === 'c') {
+      const psi = ground(p, cam);
+      return psi === null ? null : { kind: 'north', north0: view.north, psi0: psi, last: Math.round(view.north) };
+    }
+    if (hit.kind === 'h') {
+      const h = handles.find((x) => x.which === hit.which)!, dg = dayGrab(hit.which, p, cam, view, h.obj.position);
+      const cur = hit.which === 'sun' ? t.hour : hit.which === 'from' ? t.from.hour : t.to.hour, a = arcOf(hit.which);
+      const u = group.worldToLocal(dg.prev.clone()).normalize(), m = a ? nearestMinute(a.path, [u.x, u.y, u.z]) : NaN;
+      return { kind: 'sun', which: hit.which, toff: h.up && Number.isFinite(m) ? cur - m : 0, minute: cur, ...dg }; // grabbed off-centre: no jump
+    }
+    const on = nearest(arcOf(hit.which).path, p, cam).u;
+    return { kind: 'date', which: hit.which, ...dayGrab(hit.which, p, cam, view, new THREE.Vector3(on[0], on[1], on[2])) };
+  }
+
+  /** Follow a drag: what changed under the pointer (a TIME patch and/or north), or null when nothing did after snapping. */
+  function drag(g: Grab, p: Ptr, cam: THREE.Camera, view: SunView): DragResult | null {
     const t = view.time;
     group.updateMatrixWorld();
-    if (g.kind === 'time') {
-      const a = arcOf(g.which);
-      if (!a) return null;
-      const n = nearest(a.path, p, cam);
-      if (!Number.isFinite(n.t)) return null;
-      let m = n.t + g.off;
-      if (a.path.alt[0] >= 0 && a.path.alt[a.path.alt.length - 1] >= 0) m += 1440 * Math.round((g.last - m) / 1440); // polar day: the arc is a loop
-      const step = timeStep(t), lo = g.which === 'to' ? t.from.hour + step : 0, hi = g.which === 'from' ? t.to.hour - step : 1440;
-      const val = Math.max(lo, Math.min(hi, Math.round(m / step) * step)); // a window shorter than a step: lo wins
+    if (g.kind === 'north') { // the ring turns under the pointer: north follows the pointer's angle around the centre
+      const psi = ground(p, cam);
+      if (psi === null) return null;
+      const val = ((Math.round(g.north0 + psi - g.psi0) % 360) + 360) % 360;
       if (val === g.last) return null;
       g.last = val;
-      return g.which === 'sun' ? { hour: val } : g.which === 'from' ? { from: { ...t.from, hour: val } } : { to: { ...t.to, hour: val } };
+      return { north: val };
     }
+    // the date follows the declination of the dome point under the pointer (half-year lock, range bounds)
     const at = dome(p, cam, g.prev);
     g.prev = at;
-    const d = dragDay(g.dec, decAt(view.site, at) + g.off, g.drag, g.day, g.first, g.last);
-    if (d < 0 || d === g.day) return null;
-    g.day = d;
-    const date = dateFromDoy(d, g.year);
-    if (t.mode !== 'range') return { date };
-    if (t.from.date === t.to.date) return { from: { ...t.from, date }, to: { ...t.to, date } };
-    return g.which === 'from' ? { from: { ...t.from, date } } : { to: { ...t.to, date } };
+    const d = dragDay(g.dec, decAt(view.site, at) + g.off, g.drag, g.day, g.first, g.last), moved = d >= 0 && d !== g.day;
+    if (moved) g.day = d;
+    const date = dateFromDoy(g.day, g.year), range = t.mode === 'range', sameDay = range && t.from.date === t.to.date;
+    if (g.kind === 'date') {
+      if (!moved) return null;
+      return { time: !range ? { date } : sameDay ? { from: { ...t.from, date }, to: { ...t.to, date } } : g.which === 'from' ? { from: { ...t.from, date } } : { to: { ...t.to, date } } };
+    }
+    // a sun or handle: also the time, as the minute of that date's path nearest the pointer (snapped, clamped as the panel)
+    const path = dayPath(view.site, mmdd(date, view.site.leap), 5);
+    if (!path.alt.length) return null;
+    const u = group.worldToLocal(at.clone()).normalize();
+    let m = nearestMinute(path, [u.x, u.y, u.z]) + g.toff;
+    if (path.alt[0] >= 0 && path.alt[path.alt.length - 1] >= 0) m += 1440 * Math.round((g.minute - m) / 1440); // polar day: the arc is a loop
+    const step = timeStep(t), lo = g.which === 'to' ? t.from.hour + step : 0, hi = g.which === 'from' ? t.to.hour - step : 1440;
+    const val = Math.max(lo, Math.min(hi, Math.round(m / step) * step)); // a window shorter than a step: lo wins
+    if (val === g.minute && !moved) return null;
+    g.minute = val;
+    if (!range) return { time: { date, hour: val } };
+    const from = { date: sameDay || g.which === 'from' ? date : t.from.date, hour: g.which === 'from' ? val : t.from.hour };
+    const to = { date: sameDay || g.which === 'to' ? date : t.to.date, hour: g.which === 'to' ? val : t.to.hour };
+    return { time: g.which === 'from' && !sameDay ? { from } : g.which === 'to' && !sameDay ? { to } : { from, to } };
   }
 
   /** Highlight what the pointer is over (null pointer: nothing). Returns whether anything is grabbable there and whether the look changed. */
-  function hover(p: Ptr | null, cam: THREE.Camera) {
-    const hit = p && group.visible ? under(p, cam) : null, key = hit ? `${hit.kind}:${hit.which}` : null;
+  function hover(p: Ptr | null, cam: THREE.Camera, free: () => boolean = () => true) {
+    const hit = p && group.visible ? under(p, cam, free) : null, key = hit ? `${hit.kind}:${hit.which}` : null;
     if (key === hot) return { over: !!hit, changed: false };
     hot = key;
     for (const h of handles) {
@@ -354,6 +392,7 @@ export function createSunPath() {
       h.tip.textContent = on ? h.long : h.short;
     }
     for (const a of arcs) (a.line.material as LineMaterial).linewidth = a.width + (key === `a:${a.which}` ? 1.5 : 0);
+    if (ring) (ring.material as LineMaterial).linewidth = key === 'c:sun' ? 3 : 1.5;
     return { over: !!hit, changed: true };
   }
 

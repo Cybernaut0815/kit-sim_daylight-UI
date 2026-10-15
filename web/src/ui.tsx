@@ -1,4 +1,5 @@
-// Shared bits: knob helper, stroke icons, empty-state illustrations, alert, swatch, number field, segmented control.
+// Shared bits: knob helper, stroke icons, empty-state illustrations, alert, swatch, number field, segmented control,
+// collapsible panel section.
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 
 /** The only inline style the design system allows: one of its nine knobs. */
@@ -61,8 +62,8 @@ export function ColorQuad({ id, label, value, onChange }: { id: string; label: s
 }
 
 /** Numeric input committed on blur or Enter (typing "51." must not snap). `key` remounts it when the value changes elsewhere. */
-export function NumberField({ id, label, value, onCommit, step = 'any', min, max, help, error, adorn }: {
-  id: string; label: string; value: number; onCommit: (v: number) => void; step?: number | 'any'; min?: number; max?: number; help?: string; error?: string;
+export function NumberField({ id, label, value, onCommit, step = 'any', min, max, help, error, adorn, placeholder }: {
+  id: string; label: string; value: number; onCommit: (v: number) => void; step?: number | 'any'; min?: number; max?: number; help?: string; error?: string; placeholder?: string;
   adorn?: ReactNode; // e.g. a ColorQuad in front of the label
 }) {
   const lab = <label className="field__label" htmlFor={id}>{label}</label>;
@@ -71,7 +72,7 @@ export function NumberField({ id, label, value, onCommit, step = 'any', min, max
       {adorn ? <div className="cluster">{adorn}{lab}</div> : lab}
       <input
         key={value} className="input" id={id} type="number" inputMode="decimal" step={step} min={min} max={max}
-        defaultValue={Number.isFinite(value) ? value : ''} aria-invalid={error ? true : undefined}
+        defaultValue={Number.isFinite(value) ? value : ''} placeholder={placeholder} aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-error` : help ? `${id}-help` : undefined}
         onBlur={(e) => onCommit(e.currentTarget.valueAsNumber)}
         onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
@@ -99,3 +100,17 @@ export function Segmented<T extends string>({ name, label, value, options, onCha
 export const rowKeys = (fn: () => void) => (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); } };
 
 export const pct = (x: number): string => `${(100 * x).toFixed(x > 0 && x < 0.1 ? 1 : 0)} %`;
+
+// Which panel sections are open, per section id (collapsed ones are remembered; storage may be blocked).
+const OPEN_KEY = 'daylight.open';
+const readOpen = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}') ?? {}; } catch { return {}; } };
+
+/** A panel section whose heading folds it away (zha .accordion); open unless the user closed it before. */
+export function Section({ id, title, children, busy }: { id: string; title: string; children: ReactNode; busy?: boolean }) {
+  return (
+    <details className="accordion" open={readOpen()[id] ?? true} onToggle={(e) => { const open = e.currentTarget.open; try { localStorage.setItem(OPEN_KEY, JSON.stringify({ ...readOpen(), [id]: open })); } catch { /* not remembered */ } }}>
+      <summary><h2 id={`h-${id}`}>{title}</h2></summary>
+      <section className="accordion__body stack" aria-labelledby={`h-${id}`} aria-busy={busy}>{children}</section>
+    </details>
+  );
+}

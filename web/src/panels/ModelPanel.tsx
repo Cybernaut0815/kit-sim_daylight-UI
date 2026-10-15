@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useState, type Dispatch, type KeyboardEvent } from 'react';
 import { groupKeys, visibleRows, type TreeNode } from '../lib/tree';
 import type { Action, ObjectRow, Role } from '../store';
-import { Alert, Icon } from '../ui';
+import { Alert, Icon, Section } from '../ui';
 
 type Shown = Role | 'mixed';
 const LABEL: Record<Shown, string> = { receiver: 'Receiver', shade: 'Shade', none: 'Ignored', mixed: 'Mixed' };
@@ -40,8 +40,7 @@ export const ModelPanel = memo(function ModelPanel({ tree, objects, selected, lo
   };
 
   return (
-    <section className="stack" aria-labelledby="h-model">
-      <h2 id="h-model">Model</h2>
+    <Section id="model" title="Model">
       <div className="field">
         <label className="field__label" htmlFor="model-files">Model files</label>
         <input
@@ -110,6 +109,6 @@ export const ModelPanel = memo(function ModelPanel({ tree, objects, selected, lo
           <p className="text-muted line">{selected.size} of {total} selected{more ? `, ${more} more rows: narrow the filter` : ''}. Shift-click adds to the selection.</p>
         </div>
       </details>
-    </section>
+    </Section>
   );
 });

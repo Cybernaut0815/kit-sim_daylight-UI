@@ -18,7 +18,7 @@ export type WeatherSource = 'upload' | 'station' | 'pvgis' | 'clear-sky';
 export interface TimePoint { date: string; hour: number } // 'YYYY-MM-DD', minutes of day (0..1440)
 
 export interface Settings {
-  site: { lat: number; lon: number; tz: number | null; place: string }; // tz null = derived (EPW header, else round(lon/15))
+  site: { lat: number; lon: number; place: string }; // the time zone always comes from the place (lib/zone.ts)
   weather: { source: WeatherSource; file: File | null; station: Station | null; turbidity: number; altitude: number };
   epwMeta: EpwMeta | null; // header of the EPW the run will use; null until fetched / after the reference changed
   time: { mode: 'annual' | 'instant' | 'range'; date: string; hour: number; from: TimePoint; to: TimePoint; stepMin: number };
@@ -79,7 +79,7 @@ export type Action =
 const year = new Date().getFullYear();
 const solstice = `${year}-06-21`;
 export const defaultSettings = (): Settings => ({
-  site: { lat: 51.5074, lon: -0.1278, tz: null, place: 'London, United Kingdom' },
+  site: { lat: 51.5074, lon: -0.1278, place: 'London, United Kingdom' },
   weather: { source: 'station', file: null, station: null, turbidity: 3, altitude: 0 },
   epwMeta: null,
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
@@ -115,7 +115,6 @@ export function reducer(s: State, a: Action): State {
       const moved = site.lat !== s.settings.site.lat || site.lon !== s.settings.site.lon;
       let { weather, epwMeta } = s.settings;
       if (moved) {
-        if (!('tz' in a.patch)) site.tz = null; // an explicit zone belongs to the old place
         // the nearest station, or none until the index arrives (STATIONS then picks the nearest)
         weather = { ...weather, station: s.stations ? nearestStations(s.stations, site.lat, site.lon, 1)[0] ?? null : null };
         if (weather.source !== 'upload') epwMeta = null; // station / PVGIS reference changed: the header is re-fetched, the server re-serves from its cache
@@ -198,9 +197,10 @@ export function parseSettings(raw: string | null): Settings {
   if (!raw) return d;
   try {
     const p = JSON.parse(raw) as Partial<Record<keyof Settings, object>>;
-    const viz = (p.viz ?? {}) as Partial<Settings['viz']>;
+    const viz = (p.viz ?? {}) as Partial<Settings['viz']>, site = (p.site ?? {}) as Record<string, unknown>; // an old record's tz override is dropped
+    const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
     return {
-      site: { ...d.site, ...p.site }, weather: { ...d.weather, ...p.weather, file: null },
+      site: { lat: num(site.lat, d.site.lat), lon: num(site.lon, d.site.lon), place: typeof site.place === 'string' ? site.place : d.site.place }, weather: { ...d.weather, ...p.weather, file: null },
       epwMeta: (p.epwMeta as EpwMeta | null | undefined) ?? null, time: { ...d.time, ...p.time }, sim: { ...d.sim, ...p.sim },
       viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges }, colors: { ...d.viz.colors, ...viz.colors } },
     };

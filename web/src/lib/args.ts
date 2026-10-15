@@ -5,9 +5,9 @@ import { pvgisUrl } from './geo';
 import { doy, fmtClock, fmtTime } from './time';
 import { zoneAt } from './zone';
 
-/** The clock of every time the user picks: the explicit value, else the site's civil standard offset. Sent as --tz;
- *  the core keeps EPW rows in their own zone and moves these times into it, so any weather source gives the same sun. */
-export const derivedTz = (s: Settings): number => s.site.tz ?? zoneAt(s.site.lat, s.site.lon).std;
+/** The clock of every time the user picks: the site's civil standard offset, from the place. Sent as --tz; the core keeps
+ *  EPW rows in their own zone and moves these times into it, so any weather source gives the same sun. */
+export const derivedTz = (s: Settings): number => zoneAt(s.site.lat, s.site.lon).std;
 
 /** Whether the core's weather year is a leap year (clear sky never is). */
 export const weatherLeap = (s: Settings): boolean => s.weather.source !== 'clear-sky' && !!s.epwMeta?.leap;

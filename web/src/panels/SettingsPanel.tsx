@@ -1,6 +1,6 @@
 import { memo, type Dispatch } from 'react';
 import { QUANTITIES, quantitiesFor, type Action, type Settings } from '../store';
-import { NumberField, Segmented, knob } from '../ui';
+import { NumberField, Segmented, knob, Section } from '../ui';
 
 interface Props { sim: Settings['sim']; errors: Record<string, string>; dispatch: Dispatch<Action> }
 
@@ -8,8 +8,7 @@ export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch
   const set = (patch: Partial<Settings['sim']>) => dispatch({ type: 'SIM', patch });
   const valid = quantitiesFor(sim.mode);
   return (
-    <section className="stack" aria-labelledby="h-sim">
-      <h2 id="h-sim">Simulation</h2>
+    <Section id="sim" title="Simulation">
       <div className="field">
         <span className="field__label">Sky model</span>
         <Segmented name="mode" label="Sky model" value={sim.mode} options={[['physical', 'Physical'], ['ladybug', 'Ladybug']] as const} onChange={(mode) => set({ mode })} />
@@ -60,14 +59,11 @@ export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch
             <input type="range" min={0} max={1} step={0.05} value={sim.ground} onChange={(e) => set({ ground: e.target.valueAsNumber })} />
             <span className="slider-row__value">{sim.ground.toFixed(2)}</span>
           </label>
-          <div className="grid" style={knob('--grid-min', '6rem')}>
-            <NumberField id="north" label="North (deg, ccw from +Y)" value={sim.north} step={1} onCommit={(v) => { if (Number.isFinite(v)) set({ north: v }); }} />
-            <NumberField id="offset" label="Sensor offset (m)" value={sim.offset} step={0.01} onCommit={(v) => { if (Number.isFinite(v)) set({ offset: v }); }} />
-          </div>
+          <NumberField id="offset" label="Sensor offset (m)" value={sim.offset} step={0.01} help="North is set in Location." onCommit={(v) => { if (Number.isFinite(v)) set({ offset: v }); }} />
           <label><input type="checkbox" checked={sim.cullBackfaces} onChange={(e) => set({ cullBackfaces: e.target.checked })} /> Occluders block only from their front side</label>
           <label><input type="checkbox" checked={sim.selfOcclude} onChange={(e) => set({ selfOcclude: e.target.checked })} /> Receivers block rays too (self-occlusion)</label>
         </div>
       </details>
-    </section>
+    </Section>
   );
 });

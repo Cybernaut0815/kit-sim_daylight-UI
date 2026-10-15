@@ -13,14 +13,13 @@ describe('buildArgs', () => {
     expect(p['--lon']).toBe('13.4');
     expect(p['--tz']).toBe('1');
   });
-  it('uses the civil zone of the site, never the weather file zone or the longitude; an explicit tz wins', () => {
+  it('uses the civil zone of the site, never the weather file zone or the longitude', () => {
     const s = defaultSettings();
     s.epwMeta = { lat: 0, lon: 0, tz: -5, name: 'x', leap: false };
     expect(derivedTz(s)).toBe(0); // London: the header's -5 is the file's own clock, the core converts
     s.site = { ...s.site, lat: 40.4168, lon: -3.7038 };
     expect(derivedTz(s)).toBe(1); // Madrid: CET, where round(lon / 15) would say 0
-    s.site.tz = 3;
-    expect(pairs(buildArgs(s))['--tz']).toBe('3');
+    expect(pairs(buildArgs(s))['--tz']).toBe('1');
   });
   it('rejects Feb 29 unless the weather year is a leap year', () => {
     const s = defaultSettings();

@@ -137,6 +137,16 @@ export function dayBounds(site: Site, date: string): { sunrise: number; sunset: 
   return { sunrise: Number.isNaN(sunrise) ? 0 : Math.round(sunrise), sunset: Number.isNaN(sunset) ? 1440 : Math.round(sunset) };
 }
 
+/** Minute of day of the sample of a day path nearest in direction to u (a unit vector of the diagram frame). */
+export function nearestMinute(p: Path, u: number[]): number {
+  let best = -Infinity, at = NaN;
+  for (let i = 0; i < p.min.length; i++) {
+    const d = p.xyz[3 * i] * u[0] + p.xyz[3 * i + 1] * u[1] + p.xyz[3 * i + 2] * u[2];
+    if (d > best) { best = d; at = p.min[i]; }
+  }
+  return at;
+}
+
 export interface DayDrag { half: 1 | -1; latch: boolean } // +1 rising half (Dec -> Jun solstice), -1 falling half
 
 const ext = (dec: number[]) => { let hi = 0, lo = 0; dec.forEach((v, d) => { if (v > dec[hi]) hi = d; if (v < dec[lo]) lo = d; }); return { hi, lo }; };
