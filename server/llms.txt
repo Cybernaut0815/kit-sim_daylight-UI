@@ -25,7 +25,9 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
 - Units: radiation, direct, diffuse kWh/m2 over the period; irradiance W/m2 mean; illuminance lux mean; sunhours h.
 - Columns: <quantity>_<side>, e.g. radiation_front.
 - Time (standard time, no DST): annual by default; --time MM-DDTHH:MM one instant; --from TS --to TS --step MIN a
-  range; add --hours HH:MM-HH:MM for only those hours of every day (e.g. 09:00-17:00 from 06-01 to 08-31).
+  range (the sun at the middle of each step); add --hours HH:MM-HH:MM for only those hours of every day (e.g.
+  09:00-17:00 from 06-01 to 08-31). --tz is the clock of these times (default: the EPW's zone); an EPW keeps its own
+  zone and the times are moved into it, so send the site's civil standard offset.
 - Weather: needed for every quantity except sunhours. Nearest measured station: GET /proxy with the EnergyPlus index
   URL (see proxyDownload); any location: a PVGIS TMY URL as epw_url.
 
