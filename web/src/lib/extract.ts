@@ -18,17 +18,18 @@ const stand = (geometry: BufferGeometry, world: Matrix4) => {
 };
 
 /**
- * Every shown mesh item of the stage, scaled to metres. An instanced item becomes one mesh of all its instances (a
- * shade), whose instance matrices are in stage space under the root's up-axis rotation.
+ * Every shown mesh item of the stage, scaled to metres, plus the hidden ones `keep` names (hidden in the view only). An
+ * instanced item becomes one mesh of all its instances (a shade), whose instance matrices are in stage space under the
+ * root's up-axis rotation.
  * ponytail: instance matrices come from the core as float32 (0.5 m steps at 5e6 m survey coordinates), unlike the
  * float64 matrices of plain meshes; send them as doubles in the viewer's protocol if georeferenced scatters matter.
  */
-export function extract(items: readonly RenderItem[], root: Object3D, scale: number): Extracted[] {
+export function extract(items: readonly RenderItem[], root: Object3D, scale: number, keep?: (path: string) => boolean): Extracted[] {
   root.updateMatrixWorld(true);
   const rootWorld = root.matrixWorld.clone(), out: Extracted[] = [];
   for (const item of items) {
     const o = item.object;
-    if (item.kind !== 'mesh' || !o?.visible) continue;
+    if (item.kind !== 'mesh' || !o || !(o.visible || keep?.(item.path))) continue;
     const g = (o as Mesh).geometry, im = o as InstancedMesh;
     if (!im.isInstancedMesh) {
       const obj = fromThree([stand(g, o.matrixWorld)], { scale })[0];

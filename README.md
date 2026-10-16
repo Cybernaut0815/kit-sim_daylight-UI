@@ -3,8 +3,8 @@
 Browser front end and HTTP server for [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) (GPU
 annual daylight / solar simulation): open a USD stage (`.usd` / `.usda` / `.usdc` / `.usdz`, as files or a folder with
 its assets) or a `.glb` / `.gltf` / `.obj` (turned into USD in the browser) in the
-[USD web viewer](https://github.com/Cybernaut0815/USD_WebViewer), pick shade-casting and receiving meshes, set the
-site on a map, the weather (upload, nearest station, PVGIS or clear sky), the time (a single date and time, a date
+[USD web viewer](https://github.com/Cybernaut0815/USD_WebViewer), pick shade-casting and receiving meshes (or whole
+groups) in the stage's prim tree, switch its variants, hide or lock prims as in the viewer, set the site on a map, the weather (upload, nearest station, PVGIS or clear sky), the time (a single date and time, a date
 range such as 09:00 to 17:00 every day of the summer, or the whole year) on timelines or by dragging the sun path
 drawn around the model, and every CLI option; run on the GPU box (or tick "Run on every change"), read the results
 on the meshes (per-quantity gradients, a problem range painted blue / red) and in charts (legend, area-weighted

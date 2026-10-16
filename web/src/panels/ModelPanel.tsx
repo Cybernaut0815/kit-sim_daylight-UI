@@ -10,10 +10,11 @@ const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none
 
 interface Props {
   objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
-  loading: boolean; error: string | null; errors: Record<string, string>; onFiles: (files: File[]) => void; dispatch: Dispatch<Action>;
+  loading: boolean; error: string | null; errors: Record<string, string>; stage: number;
+  onFiles: (files: File[]) => void; onVariant: (path: string, set: string, variant: string) => void; dispatch: Dispatch<Action>;
 }
 
-export const ModelPanel = memo(function ModelPanel({ objects, selection, selected, names, loading, error, errors, onFiles, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ objects, selection, selected, names, loading, error, errors, stage, onFiles, onVariant, dispatch }: Props) {
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
   return (
     <Section id="model" title="Model">
@@ -50,7 +51,7 @@ export const ModelPanel = memo(function ModelPanel({ objects, selection, selecte
               </button>
             ))}
           </div>
-          <PrimTree objects={objects} selection={selection} selected={selected} names={names} dispatch={dispatch} />
+          <PrimTree objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={onVariant} dispatch={dispatch} />
         </div>
       </details>
     </Section>

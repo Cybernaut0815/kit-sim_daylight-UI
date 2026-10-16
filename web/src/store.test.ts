@@ -25,6 +25,13 @@ describe('roles', () => {
     s = reducer(s, { type: 'LOAD', objects: rows });
     expect([s.selection.paths, s.selected.size]).toEqual([[], 0]);
   });
+  it('RELOAD (a variant switch) keeps the selection, maps it onto the new rows and drops the result', () => {
+    let s = reducer(initialState(), { type: 'LOAD', objects: [{ ...obj('a'), path: '/W/G/a' }] });
+    s = reducer(s, { type: 'SELECTION', paths: ['/W/G'], active: '/W/G', source: 'hierarchy' });
+    s = { ...s, result: { values: [], columns: [], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } } };
+    s = reducer(s, { type: 'RELOAD', objects: [{ ...obj('a2'), path: '/W/G/a' }, { ...obj('n', 'none'), path: '/W/G/new' }] });
+    expect([s.selection.paths, [...s.selected], s.result]).toEqual([['/W/G'], ['a2', 'n'], null]);
+  });
   it('an instanced mesh is never a receiver: Shade and Ignore only', () => {
     let s = reducer(initialState(), { type: 'LOAD', objects: [obj('a', 'none'), { ...obj('i', 'none'), instances: 3 }] });
     s = reducer(s, { type: 'ROLE', ids: ['a', 'i'], role: 'receiver' });

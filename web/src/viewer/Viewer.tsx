@@ -34,6 +34,7 @@ const drop = (m: THREE.Mesh) => { m.removeFromParent(); m.geometry.dispose(); re
 
 interface Props {
   meshes: ReadonlyMap<string, THREE.Object3D>; // row id -> the viewer's object for it
+  stage: number; // bumped per opened model: framed then (a variant switch keeps the camera)
   loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the run bar under the model
@@ -58,7 +59,7 @@ function SceneInfo({ objects, stats }: { objects: ObjectRow[]; stats: RefObject<
   );
 }
 
-export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+export function Viewer({ meshes, stage, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
   const labelsEl = useRef<HTMLDivElement>(null);
@@ -118,7 +119,7 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
       const r = canvas.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, usd.three.camera); // read again: the viewer swaps cameras
-      return ray.intersectObjects([...latest.current.meshes.values()], false)[0] ?? null;
+      return ray.intersectObjects([...latest.current.meshes.values()].filter((o) => o.visible), false)[0] ?? null; // hidden: H or the eye
     };
     const pick = (e: PointerEvent) => {
       const hit = hitAt(e), r = canvas.getBoundingClientRect();
@@ -261,7 +262,7 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
   }, [meshes, sun?.site, sun?.time, theme, shown]); // eslint-disable-line react-hooks/exhaustive-deps -- not north or size
 
   // The model and the dome in view, once the sun path is placed (the grid opts out of framing: it is a floor).
-  useEffect(() => { if (meshes.size) usd.frame(); }, [meshes]);
+  useEffect(() => { if (meshes.size) usd.frame(); }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps -- per model, not per variant
 
   // The ground grid under the model, in the theme's hairline colours.
   useEffect(() => {

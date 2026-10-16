@@ -20,7 +20,7 @@ import { ResultsPanel } from './panels/ResultsPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TimePanel } from './panels/TimePanel';
 import { WeatherPanel } from './panels/WeatherPanel';
-import { initialState, parseSettings, reducer, serializeSettings, type ObjectRow } from './store';
+import { initialState, parseSettings, reducer, serializeSettings, type ObjectRow, type Role } from './store';
 import { Icon, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import type { SunView } from './viewer/sunpath';
@@ -88,12 +88,49 @@ export default function App() {
     setMode(nextMode);
   };
 
+  const model = useRef({ mpu: 1, own: new Map<string, string>() as ReadonlyMap<string, string> }); // of the open stage: what a re-read needs
+  const rows = useRef(state.objects); // the rows now, for the stable onVariant
+  rows.current = state.objects;
+  const [stage, setStage] = useState(0); // bumped per opened model: the tree resets and the camera frames; a variant switch keeps both
+
+  // The drawn meshes -> rows, their conversions and the viewer's objects: after open(), and after a variant switch.
+  // roles: the old rows' roles by path (a new mesh is 'none'; a row hidden with the eye or H stays); without them a lone
+  // mesh is the receiver.
+  const readStage = async (roles?: ReadonlyMap<string, Role>) => {
+    const found = extract(usd.three.items(), usd.three.root, model.current.mpu, roles && ((p) => roles.has(p)));
+    // An instanced mesh's own path is Hydra's. A point instancer's prototype is re-rooted as <prototype>/ForInstancer<hash>:
+    // without that segment it is the prototype prim the tree shows; its row also answers to the instancer, which is what
+    // the viewer selects for a click on a copy. Native instances are prims of their own: every copy's path is kept.
+    const picks = await Promise.all(found.map((e) => (e.instances ? usd.usd.resolvePick(e.item.rid, 0).catch(() => null) : null)));
+    const seen = new Set<string>(), paths: string[] = [], copies: (string[] | undefined)[] = [];
+    for (const [i, e] of found.entries()) {
+      const p = picks[i];
+      let path = p?.instancer ? e.item.path.split('/').filter((s) => !s.startsWith('ForInstancer')).join('/') : p?.path ?? e.item.path;
+      for (let k = 2, base = path; seen.has(path); k++) path = `${base}_${k}`; // one prototype of two instancers
+      seen.add(path);
+      paths.push(path);
+      copies.push(!p ? undefined : p.instancer ? [path, p.instancer]
+        : await Promise.all(Array.from({ length: e.instances }, (_, j) => usd.usd.resolvePick(e.item.rid, j).then((r) => r?.path ?? path, () => path))));
+    }
+    const lone: Role = found.length === 1 && !found[0].instances ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
+    const labels = rowNames(paths, model.current.own), objects: ObjectRow[] = [], map = new Map<string, Object3D>();
+    conv.current.clear(); // after the awaits: a run started meanwhile still found its meshes
+    found.forEach((e, i) => {
+      const id = crypto.randomUUID(), name = labels[i], kept = roles ? roles.get(paths[i]) ?? 'none' : lone;
+      conv.current.set(id, e.obj ? { obj: Object.assign(e.obj, { id, name }) } : { make: () => Object.assign(e.make!(), { id, name }) });
+      map.set(id, e.item.object!);
+      objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role: kept === 'receiver' && e.instances ? 'none' : kept, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
+    });
+    return { objects, map };
+  };
+
   const onFiles = useCallback(async (picked: File[]) => { // stable: the memoised Model panel keeps its props across runs
     // macOS metadata (._x, .DS_Store, __MACOSX/) is never part of a model: an AppleDouble '._site.usda' would even be taken as the root layer
     const files = picked.filter((f) => !f.name.startsWith('.') && !/(^|\/)__MACOSX\//.test(f.webkitRelativePath));
     if (!files.length) return;
     setLoading(true);
     setLoadError(null);
+    let opened = false;
     try {
       // USD opens as picked (a folder keeps its layout, so references into subfolders resolve); glb / gltf / obj become a
       // USDA layer first, so every model takes the same path.
@@ -112,33 +149,16 @@ export default function App() {
       setNames(new Map());
       dispatch({ type: 'LOAD', objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
+      opened = true;
+      model.current = { mpu: info.metersPerUnit, own };
+      // Eye toggles, H / Shift+H and variant choices go to the session layer: never saved, nothing to save.
+      const session = (await usd.usd.layers()).find((l) => l.session);
+      if (session) await usd.usd.setEditTarget(session.identifier);
       // The bare viewer shows its messages nowhere: a referenced file that was not picked, or a failed page, still
       // resolves open() with part of the model. Say so, and keep what loaded.
       const problems = usd.session.log.slice(logged).filter((m) => m.level === 'error').map((m) => m.message);
-      const found = extract(usd.three.items(), usd.three.root, info.metersPerUnit);
-      if (!found.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
-      // An instanced mesh's own path is Hydra's. A point instancer's prototype is re-rooted as <prototype>/ForInstancer<hash>:
-      // without that segment it is the prototype prim the tree shows; its row also answers to the instancer, which is what
-      // the viewer selects for a click on a copy. Native instances are prims of their own: every copy's path is kept.
-      const picks = await Promise.all(found.map((e) => (e.instances ? usd.usd.resolvePick(e.item.rid, 0).catch(() => null) : null)));
-      const seen = new Set<string>(), paths: string[] = [], copies: (string[] | undefined)[] = [];
-      for (const [i, e] of found.entries()) {
-        const p = picks[i];
-        let path = p?.instancer ? e.item.path.split('/').filter((s) => !s.startsWith('ForInstancer')).join('/') : p?.path ?? e.item.path;
-        for (let k = 2, base = path; seen.has(path); k++) path = `${base}_${k}`; // one prototype of two instancers
-        seen.add(path);
-        paths.push(path);
-        copies.push(!p ? undefined : p.instancer ? [path, p.instancer]
-          : await Promise.all(Array.from({ length: e.instances }, (_, j) => usd.usd.resolvePick(e.item.rid, j).then((r) => r?.path ?? path, () => path))));
-      }
-      const role = found.length === 1 && !found[0].instances ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
-      const labels = rowNames(paths, own), objects: ObjectRow[] = [], map = new Map<string, Object3D>();
-      found.forEach((e, i) => {
-        const id = crypto.randomUUID(), name = labels[i];
-        conv.current.set(id, e.obj ? { obj: Object.assign(e.obj, { id, name }) } : { make: () => Object.assign(e.make!(), { id, name }) });
-        map.set(id, e.item.object!);
-        objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
-      });
+      const { objects, map } = await readStage();
+      if (!objects.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
       setMeshes(map);
       setSunScale(1);
       setNames(own);
@@ -147,9 +167,26 @@ export default function App() {
     } catch (e) {
       setLoadError((e as Error).message);
     } finally {
+      if (opened) setStage((n) => n + 1);
       setLoading(false);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- readStage reads refs only
+
+  // A variant switch (session layer, not saved) changes what is drawn: re-read the meshes, keeping each path's role.
+  const onVariant = useCallback(async (path: string, set: string, variant: string) => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      await usd.usd.setVariant(path, set, variant); // resolves once the view has the new meshes
+      const { objects, map } = await readStage(new Map(rows.current.map((o) => [o.path, o.role])));
+      setMeshes(map);
+      dispatch({ type: 'RELOAD', objects });
+    } catch (e) {
+      setLoadError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- readStage reads refs only
 
   const weightsFor = useCallback((id: string, on: 'faces' | 'vertices') => {
     const c = conv.current.get(id);
@@ -257,7 +294,7 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} onFiles={onFiles} dispatch={dispatch} />
+                <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} onFiles={onFiles} onVariant={onVariant} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
@@ -265,7 +302,7 @@ export default function App() {
               </aside>
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
-            <Viewer meshes={meshes} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
+            <Viewer meshes={meshes} stage={stage} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
               {/* right-aligned, the button's label never changes and Cancel appears on the left: the tickbox stays put;
                   progress shows in the Results run line */}
               <div className="cluster cluster--end">

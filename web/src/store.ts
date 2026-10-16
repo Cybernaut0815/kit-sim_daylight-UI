@@ -70,6 +70,7 @@ export interface State {
 
 export type Action =
   | { type: 'LOAD'; objects: ObjectRow[] }
+  | { type: 'RELOAD'; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection stays
   | { type: 'ROLE'; ids: string[]; role: Role }
   | { type: 'SELECT'; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
   | ({ type: 'SELECTION' } & Selection) // the viewer's selection changed
@@ -124,6 +125,8 @@ export function reducer(s: State, a: Action): State {
       for (const id of a.ids) next.has(id) ? next.delete(id) : next.add(id);
       return { ...s, selected: next };
     }
+    case 'RELOAD':
+      return { ...s, objects: a.objects, selected: new Set(idsUnder(s.selection.paths, a.objects)), hovered: null, probe: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0 };
     case 'SELECTION':
       return { ...s, selection: { paths: a.paths, active: a.active, source: a.source }, selected: new Set(idsUnder(a.paths, s.objects)) };
     case 'HOVER':

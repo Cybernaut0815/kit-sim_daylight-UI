@@ -61,7 +61,15 @@
 .tree > p { padding: var(--space-3); }
 .tree tbody { user-select: none; } /* shift-click extends the selection of prims, not of text */
 .tree tbody tr[aria-current="true"] { box-shadow: inset 2px 0 0 var(--accent); } /* the active prim, as in the viewer's hierarchy */
+.tree :is(th, td) { padding-inline: var(--space-2); } /* three columns in a 22rem panel */
 .tree__col-role { inline-size: 6.5rem; }
+.tree__col-variant { inline-size: 5rem; }
+.tree .select { --control-h: 24px; --control-pad-y: 2px; padding-inline: var(--space-1); font-size: var(--fs-small); } /* a variant set per line */
+/* lock and eye at the end of the prim cell, as in the viewer's hierarchy; with a mouse only on the hovered row, unless set */
+.tree__flags { float: inline-end; display: inline-flex; gap: var(--space-1); font-size: var(--fs-small); }
+.tree__flag { padding: 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; opacity: .55; }
+.tree__flag[aria-pressed="true"], .tree__flag:hover { color: var(--text-default); opacity: 1; }
+@media (hover: hover) { .tree tbody tr:not(:hover) .tree__flag:not([aria-pressed="true"]) { display: none; } }
 .tree td:first-child { overflow: hidden; text-overflow: ellipsis; }
 .tree__indent { display: inline-block; inline-size: var(--space-3); }
 .tree__toggle { display: inline-flex; inline-size: var(--space-4); padding: 0; border: 0; background: none; color: var(--text-muted); vertical-align: middle; cursor: pointer; }

@@ -3,8 +3,10 @@
 // (its modifySelect): click replaces, Shift adds, Ctrl removes, Shift+Ctrl adds the parent, Shift+Alt the parent with
 // its subtree, Alt the rows from the last click; arrows move and expand, a double-click frames. A pick in the view
 // opens the tree to the picked prim. The selection is the viewer's; the store mirrors it (SELECTION).
+// Also as there: a lock (not pickable in the view), an eye, F frames, H hides, Shift+H isolates, Alt+H shows all, and a
+// prim's variant sets switch here (App re-reads the meshes). Hiding and variants go to the session layer: never saved.
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type MouseEvent } from 'react';
-import { modifySelect, selectUpWithSubtree, type PrimSummary } from 'usd-viewer';
+import { modifySelect, selectUpWithSubtree, type PrimInfo, type PrimSummary, type UsdSessionEventMap } from 'usd-viewer';
 import { meshAt, underIndex } from '../lib/tree';
 import type { Action, ObjectRow, Role, Selection } from '../store';
 import { Icon } from '../ui';
@@ -19,15 +21,20 @@ const LIMIT = 400; // rows drawn at most (ponytail: no row windowing; the search
 /** '/A/B/C' -> ['/A', '/A/B']: the prims to open to show C. */
 const ancestors = (path: string) => path.split('/').slice(1, -1).map((_, i, segs) => `/${segs.slice(0, i + 1).join('/')}`);
 
-interface Row { path: string; name: string; type: string; depth: number; children: boolean; open: boolean; dim: boolean }
-interface Props { objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>; dispatch: Dispatch<Action> }
+interface Row { path: string; name: string; type: string; depth: number; children: boolean; open: boolean; dim: boolean; visible: boolean; variants: boolean; hit?: true }
+interface Props {
+  objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
+  stage: number; loading: boolean; onVariant: (path: string, set: string, variant: string) => void; dispatch: Dispatch<Action>;
+}
 
-export const PrimTree = memo(function PrimTree({ objects, selection, selected, names, dispatch }: Props) {
+export const PrimTree = memo(function PrimTree({ objects, selection, selected, names, stage, loading, onVariant, dispatch }: Props) {
   const [kids, setKids] = useState<ReadonlyMap<string, PrimSummary[]>>(new Map()); // loaded children per prim ('/' = the roots)
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<string[] | null>(null); // search hits, shown flat instead of the tree
   const [reveal, setReveal] = useState<string | null>(null); // a row to scroll into view once drawn
+  const [sets, setSets] = useState<ReadonlyMap<string, PrimInfo['variantSets']>>(new Map()); // variant sets of the drawn prims that have them
+  const [, setLocks] = useState(0); // bumped on lockchange: the locks live in the session
   const box = useRef<HTMLDivElement>(null);
   const anchor = useRef<string | null>(null); // the last row clicked without Alt: where an Alt-click range starts
   const generation = useRef(0); // answers for an older model are dropped
@@ -36,7 +43,7 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
   const under = useMemo(() => underIndex(objects), [objects]), exact = useMemo(() => meshAt(objects), [objects]);
   const byId = useMemo(() => new Map(objects.map((o) => [o.id, o])), [objects]);
   const picked = useMemo(() => new Set(selection.paths), [selection]);
-  const total = objects.length, model = objects[0]?.id ?? ''; // ids are new on every load: a new model, not a role change
+  const total = objects.length;
 
   /** Loads the children of `paths` (once) and opens them; merged into the state, so loads in flight never undo each other. */
   const openAll = async (paths: string[]) => {
@@ -51,19 +58,37 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
   // A new model: its roots, a lone root opened (as the viewer does), and every mesh shown when there are few.
   useEffect(() => {
     const gen = ++generation.current;
-    setKids(new Map());
+    setKids((loaded.current = new Map())); // at once: openAll below reads it before React renders
     setOpen(new Set());
+    setSets(new Map());
     setQuery('');
-    if (!model) return;
+    if (!total) return;
     (async () => {
       const roots = await usd.usd.children('/');
       if (gen !== generation.current) return;
-      setKids(new Map([['/', roots]]));
+      setKids((loaded.current = new Map([['/', roots]])));
       const paths = new Set(roots.length === 1 ? [roots[0].path] : []);
       if (total <= AUTO_OPEN) for (const o of objects) for (const a of ancestors(o.path)) paths.add(a);
       await openAll([...paths]);
     })().catch(() => {});
-  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps -- once per model
+  }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps -- once per model
+
+  // An edit (a variant, the eye, H): every loaded level again, as it is open; the summaries carry the new visibility.
+  useEffect(() => {
+    const onPrims = async (e: Event) => {
+      const { resynced, visibility } = (e as UsdSessionEventMap['primschange']).detail;
+      if (!resynced.length && !visibility) return;
+      const gen = generation.current;
+      const got = await Promise.all([...loaded.current.keys()].map((p) => usd.usd.children(p).then((k) => [p, k] as const, () => [p, null] as const)));
+      if (gen !== generation.current) return;
+      setKids((k) => { const n = new Map(k); for (const [p, v] of got) v ? n.set(p, v) : n.delete(p); return n; }); // a prim gone with its variant drops out
+      if (resynced.length) setSets(new Map());
+    };
+    const onLock = () => setLocks((n) => n + 1);
+    usd.addEventListener('primschange', onPrims);
+    usd.addEventListener('lockchange', onLock);
+    return () => { usd.removeEventListener('primschange', onPrims); usd.removeEventListener('lockchange', onLock); };
+  }, []);
 
   // A pick in the view: open the tree down to it and bring it into view.
   useEffect(() => {
@@ -85,19 +110,27 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
   }, [query]);
 
   const all = useMemo(() => {
-    if (results) return results.map((path): Row => ({ path, name: path, type: '', depth: 0, children: false, open: false, dim: false }));
+    if (results) return results.map((path): Row => ({ path, name: path, type: '', depth: 0, children: false, open: false, dim: false, visible: true, variants: false, hit: true }));
     const out: Row[] = [];
     const walk = (parent: string, depth: number) => {
       for (const s of kids.get(parent) ?? []) {
         const isOpen = open.has(s.path);
-        out.push({ path: s.path, name: names.get(s.path) ?? s.name, type: s.typeName, depth, children: s.hasChildren, open: isOpen, dim: !s.active || !s.visible });
+        out.push({ path: s.path, name: names.get(s.path) ?? s.name, type: s.typeName, depth, children: s.hasChildren, open: isOpen, dim: !s.active || !s.visible, visible: s.visible, variants: s.hasVariantSets });
         if (isOpen) walk(s.path, depth + 1);
       }
     };
     walk('/', 0);
     return out;
   }, [kids, open, results, names]);
-  const rows = all.slice(0, LIMIT), more = all.length - rows.length;
+  const rows = all.slice(0, LIMIT), more = all.length - rows.length, variants = rows.some((r) => r.variants);
+
+  // The variant sets of the drawn prims that have them, fetched once per prim (again after an edit).
+  useEffect(() => {
+    const want = all.slice(0, LIMIT).filter((r) => r.variants && !sets.has(r.path)), gen = generation.current;
+    if (!want.length) return;
+    Promise.all(want.map((r) => usd.usd.prim(r.path).then((p) => p.variantSets, () => []).then((v): [string, PrimInfo['variantSets']] => [r.path, v])))
+      .then((got) => gen === generation.current && setSets((m) => new Map([...m, ...got])), () => {});
+  }, [all, sets]);
 
   useEffect(() => {
     if (!reveal) return;
@@ -123,7 +156,14 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
     if (e.shiftKey && e.altKey) selectUpWithSubtree(usd.session, path, 'hierarchy').catch(() => {});
     else modifySelect(usd.session, [path], e.shiftKey && ctrl ? 'up' : e.shiftKey ? 'add' : ctrl ? 'remove' : 'replace', 'hierarchy');
   };
+  const pickVariant = (path: string, set: string, variant: string) => { // shown at once: the edit and the re-read take a moment
+    setSets((m) => new Map(m).set(path, (m.get(path) ?? []).map((v) => (v.name === set ? { ...v, selection: variant } : v))));
+    onVariant(path, set, variant);
+  };
   const onKey = (e: KeyboardEvent) => {
+    const mods = e.ctrlKey || e.metaKey;
+    if (e.code === 'KeyF' && !mods && !e.shiftKey && !e.altKey) return void (e.preventDefault(), usd.frame(selection.paths));
+    if (e.code === 'KeyH' && !mods) return void (e.preventDefault(), (e.altKey ? usd.showAll() : e.shiftKey ? usd.isolate() : usd.hide()).catch(() => {}));
     const current = rows.findIndex((r) => picked.has(r.path)), row = rows[current];
     let next = current;
     if (e.key === 'ArrowDown') next = Math.min(current + 1, rows.length - 1);
@@ -151,13 +191,13 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
       <div className="tree" ref={box} tabIndex={0} role="tree" aria-label="Prims" aria-multiselectable onKeyDown={onKey}>
         {total ? (
           <table className="data-table">
-            <colgroup><col /><col className="tree__col-role" /></colgroup>
-            <thead><tr><th scope="col">Prim</th><th scope="col">Role</th></tr></thead>
+            <colgroup><col />{variants && <col className="tree__col-variant" />}<col className="tree__col-role" /></colgroup>
+            <thead><tr><th scope="col">Prim</th>{variants && <th scope="col">Variant</th>}<th scope="col">Role</th></tr></thead>
             <tbody>
               {rows.map((r) => {
                 const ids = under.get(r.path) ?? [], mesh = byId.get(exact.get(r.path) ?? ''), first = byId.get(ids[0])?.role;
                 const role: Shown | null = !ids.length ? null : ids.every((id) => byId.get(id)?.role === first) ? first! : 'mixed';
-                const tris = ids.reduce((n, id) => n + (byId.get(id)?.tris ?? 0), 0);
+                const tris = ids.reduce((n, id) => n + (byId.get(id)?.tris ?? 0), 0), locked = usd.session.isLocked(r.path);
                 return (
                   <tr
                     key={r.path} data-path={r.path} aria-level={r.depth + 1} aria-expanded={r.children ? r.open : undefined}
@@ -168,13 +208,29 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
                     onPointerLeave={mesh ? () => dispatch({ type: 'HOVER', id: null }) : undefined}
                   >
                     <td>
+                      {!r.hit && (
+                        <span className="tree__flags" onDoubleClick={(e) => e.stopPropagation()}>
+                          <button className="tree__flag" type="button" tabIndex={-1} aria-pressed={locked} aria-label={`${locked ? 'Unlock' : 'Lock'} ${r.name}`} title={locked ? 'Unlock (selectable again)' : 'Lock (not selectable in the view)'} onClick={(e) => { e.stopPropagation(); usd.session.setLocked(r.path, !locked); }}>{locked ? '🔒' : '🔓'}</button>
+                          <button className="tree__flag" type="button" tabIndex={-1} aria-pressed={!r.visible} aria-label={`${r.visible ? 'Hide' : 'Show'} ${r.name}`} title={`${r.visible ? 'Hide in' : 'Show in'} the view (not saved; hidden meshes still run by their role)`} onClick={(e) => { e.stopPropagation(); usd.usd.setVisible(r.path, !r.visible).catch(() => {}); }}>{r.visible ? '●' : '○'}</button>
+                        </span>
+                      )}
                       {Array.from({ length: r.depth }, (_, i) => <span key={i} className="tree__indent" />)}
                       {r.children
                         ? <button className="tree__toggle" type="button" tabIndex={-1} aria-label={`${r.open ? 'Collapse' : 'Expand'} ${r.name}`} onClick={(e) => { e.stopPropagation(); toggle(r); }}><Icon name={r.open ? 'chevronDown' : 'chevronRight'} /></button>
                         : <span className="tree__indent" />}
-                      <span className={r.dim ? 'text-muted' : undefined}>{r.name}{mesh?.instances ? ` ×${mesh.instances}` : ''}</span>
+                      <span className={r.dim || locked ? 'text-muted' : undefined}>{r.name}{mesh?.instances ? ` ×${mesh.instances}` : ''}</span>
                       {r.type && <span className="text-muted"> {r.type}</span>}
                     </td>
+                    {variants && (
+                      <td onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                        {sets.get(r.path)?.map((v) => (
+                          <select key={v.name} className="select" title={v.name} aria-label={`${r.name}: variant set ${v.name}`} value={v.selection} disabled={loading} onChange={(e) => pickVariant(r.path, v.name, e.target.value)}>
+                            {!v.selection && <option value="">–</option>}
+                            {v.variants.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                        ))}
+                      </td>
+                    )}
                     <td>{role && <span className={`badge ${BADGE[role]}`}><span className="dot" />{LABEL[role]}</span>}</td>
                   </tr>
                 );
@@ -184,8 +240,8 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
         ) : <p className="text-muted">Open a model to list its prims.</p>}
       </div>
       <p className="text-muted line">{selected.size} of {total} meshes selected{more ? `, ${more} more rows: search to narrow` : ''}.</p>
-      <p className="text-muted line" title="Click selects a prim, Shift adds, Ctrl removes, Shift+Ctrl adds its parent, Shift+Alt the parent with everything below it, Alt the rows from the last click. A role applies to every mesh at or below the selected prims; instanced meshes (×n) only shade.">
-        Shift adds, Ctrl removes; a role goes to every mesh below.
+      <p className="text-muted line" title="Click selects a prim, Shift adds, Ctrl removes, Shift+Ctrl adds its parent, Shift+Alt the parent with everything below it, Alt the rows from the last click. A locked prim cannot be picked in the view. F frames the selection, H hides it, Shift+H shows only it, Alt+H shows everything; hiding and variants are not saved, and hidden meshes still run by their role. A role applies to every mesh at or below the selected prims; instanced meshes (×n) only shade.">
+        Shift adds, Ctrl removes, H hides; a role goes to every mesh below.
       </p>
     </>
   );
