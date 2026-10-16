@@ -1,5 +1,5 @@
-// Model: file input and the mesh tree (scene-graph groups, filter, collapse, roles per mesh or per group). The tree
-// sits in a fixed-height, user-resizable box, so loading a model never moves the panels below it.
+// Model: file and folder inputs and the mesh tree (the stage's prims, filter, collapse, roles per mesh or per group).
+// The tree sits in a fixed-height, user-resizable box, so loading a model never moves the panels below it.
 import { memo, useEffect, useMemo, useState, type Dispatch, type KeyboardEvent } from 'react';
 import { groupKeys, visibleRows, type TreeNode } from '../lib/tree';
 import type { Action, ObjectRow, Role } from '../store';
@@ -44,13 +44,23 @@ export const ModelPanel = memo(function ModelPanel({ tree, objects, selected, lo
       <div className="field">
         <label className="field__label" htmlFor="model-files">Model files</label>
         <input
-          className="input" id="model-files" type="file" multiple accept=".glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp" disabled={loading}
+          className="input" id="model-files" type="file" multiple accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp,.exr,.hdr" disabled={loading}
           aria-invalid={errors.model ? true : undefined}
           onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) onFiles(files); }}
         />
-        {errors.model ? <span className="field__error">{errors.model}</span> : <span className="field__help line">.glb, .gltf with its .bin and textures, or .obj</span>}
+        {errors.model
+          ? <span className="field__error">{errors.model}</span>
+          : <span className="field__help line">{loading ? <><span className="spinner" aria-hidden="true" /> Loading the model</> : '.usd, .usda, .usdc, .usdz, .glb, .gltf with its .bin and textures, or .obj'}</span>}
       </div>
-      {error && <Alert title="Could not load the model">{error}</Alert>}
+      <div className="field">
+        <label className="field__label" htmlFor="model-folder">Folder…</label>
+        <input
+          className="input" id="model-folder" type="file" {...{ webkitdirectory: '' }} disabled={loading}
+          onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) onFiles(files); }}
+        />
+        <span className="field__help line">A USD scene with its assets: opens its top-level USD file (the first by name)</span>
+      </div>
+      {error && <Alert title="Problems loading the model">{error}</Alert>}
       <details className="accordion" open>
         <summary>
           <span>Meshes</span>
@@ -88,7 +98,7 @@ export const ModelPanel = memo(function ModelPanel({ tree, objects, selected, lo
                         onClick={(e) => pick(node.meshIds, e.shiftKey || e.ctrlKey)} onKeyDown={onKey(node, isOpen)}
                         onPointerEnter={node.meshId ? () => dispatch({ type: 'HOVER', id: node.meshId! }) : undefined}
                         onPointerLeave={node.meshId ? () => dispatch({ type: 'HOVER', id: null }) : undefined}
-                        title={node.name}
+                        title={node.key}
                       >
                         <td>
                           {Array.from({ length: depth }, (_, i) => <span key={i} className="tree__indent" />)}
@@ -106,7 +116,7 @@ export const ModelPanel = memo(function ModelPanel({ tree, objects, selected, lo
               </table>
             ) : <p className="text-muted">Open a model to list its meshes.</p>}
           </div>
-          <p className="text-muted line">{selected.size} of {total} selected{more ? `, ${more} more rows: narrow the filter` : ''}. Shift-click adds to the selection.</p>
+          <p className="text-muted line">{selected.size} of {total} selected{more ? `, ${more} more rows: narrow the filter` : ''}. Shift-click adds; instanced meshes (×n) only shade.</p>
         </div>
       </details>
     </Section>

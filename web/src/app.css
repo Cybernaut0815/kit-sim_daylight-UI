@@ -13,7 +13,6 @@
 .splitter:hover, .splitter:focus-visible { background: var(--accent-subtle); outline: none; }
 .viewport { position: relative; block-size: 100%; min-block-size: 24rem; overflow: hidden;
   border: 1px solid var(--border-subtle); background: var(--bg-surface-2); }
-.viewport > canvas { display: block; inline-size: 100%; block-size: 100%; }
 .viewport > .empty-state { position: absolute; inset: 0; justify-content: center; }
 .viewport__bar { position: absolute; inset-inline: 0; inset-block-end: 0; padding: var(--space-3) var(--space-4);
   background: var(--bg-surface-1); border-block-start: 1px solid var(--border-subtle); } /* the run bar: always visible under the model */
@@ -26,8 +25,9 @@
 /* the scene info: quiet chart text at the top right, above the sun-path labels, never taking the pointer */
 .viewport__info { position: absolute; inset-block-start: var(--space-2); inset-inline-end: var(--space-2); z-index: 1; display: grid; justify-items: end;
   pointer-events: none; font-size: var(--fs-small); color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: end; }
-.viewport > canvas.viewport__grab { cursor: grab; }
-.viewport > canvas.viewport__grabbing { cursor: grabbing; }
+/* the USD viewer (its canvas inherits the cursor through its shadow root) */
+.viewport > usd-viewer.viewport__grab { cursor: grab; }
+.viewport > usd-viewer.viewport__grabbing { cursor: grabbing; }
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
 /* fixed-size regions: text and data that load or change never move what is below them */

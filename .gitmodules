@@ -1,3 +1,6 @@
 [submodule "kit-sim_daylight"]
 	path = kit-sim_daylight
 	url = ../kit-sim_daylight
+[submodule "USD_WebViewer"]
+	path = USD_WebViewer
+	url = ../USD_WebViewer

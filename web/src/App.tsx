@@ -1,14 +1,18 @@
-// Shell: app bar, inputs panel, viewport with the run bar, results panel; owns the model, the per-mesh conversion
-// cache, the run (by click or Auto), the theme mode and the view preferences (sidebar widths, Auto).
+// Shell: app bar, inputs panel, viewport with the run bar, results panel; owns the model (opened in the USD viewer, its
+// meshes converted once), the per-mesh conversion cache, the run (by click or Auto), the theme mode and the view
+// preferences (sidebar widths, Auto).
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { Group } from 'three';
-import { fromThree, runRemote, type ObjMesh } from 'daylight-mesh';
+import type { Object3D } from 'three';
+import { runRemote, type ObjMesh } from 'daylight-mesh';
+import type { LocalFile } from 'usd-viewer';
 import { Splitter } from './Splitter';
 import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args';
 import { zoneAt } from './lib/zone';
+import { extract } from './lib/extract';
 import { gradientFor, type Scale } from './lib/gradients';
-import { listMeshes, loadFiles } from './lib/loaders';
-import { buildTree, type TreeNode } from './lib/tree';
+import { loadFiles } from './lib/loaders';
+import { rowNames, treeFromPaths, type TreeNode } from './lib/tree';
+import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, globalRange, unitFor, vertexAreas } from './lib/result';
 import { LocationPanel } from './panels/LocationPanel';
 import { ModelPanel } from './panels/ModelPanel';
@@ -20,6 +24,7 @@ import { initialState, parseSettings, reducer, serializeSettings, type ObjectRow
 import { Icon, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import type { SunView } from './viewer/sunpath';
+import { usd } from './viewer/usd';
 
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
 // One id per browser tab for the server's per-client job limit (sessionStorage: a new tab is a new client).
@@ -46,7 +51,7 @@ export default function App() {
   const [system, setSystem] = useState<'light' | 'dark'>(media.matches ? 'dark' : 'light');
   const theme = mode === 'auto' ? system : mode;
   const [ui, setUi] = useState(readUi);
-  const [group, setGroup] = useState<Group | null>(null);
+  const [meshes, setMeshes] = useState<ReadonlyMap<string, Object3D>>(new Map()); // row id -> the viewer's object for it
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -86,27 +91,53 @@ export default function App() {
     setLoading(true);
     setLoadError(null);
     try {
-      const g = await loadFiles(files);
-      g.updateMatrixWorld(true);
+      // USD opens as picked (a folder keeps its layout, so references into subfolders resolve); glb / gltf / obj become a
+      // USDA layer first, so every model takes the same path.
+      // ponytail: a folder with several top-level USD files opens the first by name; add a root chooser when that is a real case
+      let names = new Map<string, string>(), source: LocalFile[] | File;
+      if (files.some((f) => /\.usd[acz]?$/i.test(f.name))) source = files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
+      else {
+        const usda = toUsda(await loadFiles(files));
+        names = usda.names;
+        source = new File(usda.parts, `${files[0].name.replace(/\.[^.]*$/, '')}.usda`);
+      }
+      const logged = usd.session.log.length, info = await usd.open(source);
+      // The bare viewer shows its messages nowhere: a referenced file that was not picked, or a failed page, still
+      // resolves open() with part of the model. Say so, and keep what loaded.
+      const problems = usd.session.log.slice(logged).filter((m) => m.level === 'error').map((m) => m.message);
       conv.current.clear();
-      const meshes = listMeshes(g);
-      const role = meshes.length === 1 ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
       // ponytail: every mesh converted at load (one pass, about 2x geometry memory); convert per role lazily if huge models hurt
-      const objects: ObjectRow[] = meshes.map((m) => {
+      const found = extract(usd.three.items(), usd.three.root, info.metersPerUnit);
+      if (!found.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
+      const role = found.length === 1 && !found[0].instances ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
+      // An instanced mesh's own path is Hydra's prototype path: name and place it by its instancer (or its first instance),
+      // which is also what the viewer selects for a click on one of them.
+      const seen = new Set<string>(), paths: string[] = [];
+      for (const { item, instances } of found) {
+        const pick = instances ? await usd.usd.resolvePick(item.rid, 0).catch(() => null) : null;
+        let path = pick?.instancer ?? pick?.path ?? item.path;
+        if (seen.has(path)) path += `/${item.path.slice(item.path.lastIndexOf('/') + 1)}`; // several prototypes of one instancer
+        seen.add(path);
+        paths.push(path);
+      }
+      const labels = rowNames(paths, names), objects: ObjectRow[] = [], map = new Map<string, Object3D>();
+      found.forEach(({ item, obj, instances }, i) => {
         const id = crypto.randomUUID();
-        m.userData.id = id;
-        const obj = fromThree([m])[0];
         obj.id = id;
-        obj.name = m.name;
+        obj.name = labels[i];
         conv.current.set(id, { obj });
-        const pos = m.geometry.attributes.position;
-        return { id, name: m.name, tris: (m.geometry.index ? m.geometry.index.count : pos.count) / 3, verts: pos.count, role };
+        map.set(id, item.object!);
+        objects.push({ id, name: labels[i], path: paths[i], tris: obj.indices.length / 3, verts: obj.positions.length / 3, role, ...(instances ? { instances } : {}) });
       });
-      setGroup(g);
+      setMeshes(map);
       setSunScale(1);
-      setTree(buildTree(g, meshes));
+      setTree(treeFromPaths(objects, names));
       dispatch({ type: 'LOAD', objects });
+      if (problems.length) setLoadError(problems.slice(0, 3).join(' '));
     } catch (e) {
+      setMeshes(new Map()); // open() closed the previous stage already
+      setTree([]);
+      dispatch({ type: 'LOAD', objects: [] });
       setLoadError((e as Error).message);
     } finally {
       setLoading(false);
@@ -227,7 +258,7 @@ export default function App() {
               </aside>
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
-            <Viewer group={group} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
+            <Viewer meshes={meshes} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
               {/* right-aligned, the button's label never changes and Cancel appears on the left: the tickbox stays put;
                   progress shows in the Results run line */}
               <div className="cluster cluster--end">

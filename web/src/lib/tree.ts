@@ -1,27 +1,65 @@
-// The mesh tree: the scene graph reduced to the nodes that hold meshes, and the rows a collapsed / filtered view shows.
-import type { BufferGeometry, Mesh, Object3D } from 'three';
+// The mesh tree: the stage's prim paths reduced to the prims that hold meshes, and the rows a collapsed / filtered view shows.
 
 export interface TreeNode { key: string; name: string; meshId?: string; tris: number; meshIds: string[]; children: TreeNode[] }
 export interface Row { node: TreeNode; depth: number; open: boolean }
 
-const trisOf = (g: BufferGeometry) => (g.index ? g.index.count : g.attributes.position.count) / 3;
-
-/** Scene graph -> tree of the nodes that hold meshes (ids from `userData.id`); wrappers with one child and no mesh are lifted. */
-export function buildTree(root: Object3D, meshes: Mesh[]): TreeNode[] {
-  const ids = new Map<Object3D, string>(meshes.map((m) => [m, m.userData.id as string]));
-  const walk = (o: Object3D): TreeNode | null => {
-    const kids = o.children.map(walk).filter((n): n is TreeNode => n !== null);
-    const meshId = ids.get(o);
-    if (!meshId && kids.length === 0) return null;
-    if (!meshId && kids.length === 1) return kids[0];
-    const own = meshId ? trisOf((o as Mesh).geometry) : 0;
+/**
+ * Mesh rows by prim path -> tree of the prims that hold meshes (key = path, name = the model's own from `names`, else
+ * the path's last segment, '×n' after an instanced mesh); wrappers with one child and no mesh are lifted, the
+ * pseudo-root is never a row.
+ */
+export function treeFromPaths(rows: readonly { id: string; path: string; tris: number; instances?: number }[], names: ReadonlyMap<string, string> = new Map()): TreeNode[] {
+  interface Prim { key: string; name: string; meshId?: string; tris: number; kids: Map<string, Prim> }
+  const root: Prim = { key: '', name: '', tris: 0, kids: new Map() };
+  for (const r of rows) {
+    let p = root;
+    for (const seg of r.path.split('/').filter(Boolean)) {
+      const key = `${p.key}/${seg}`;
+      let k = p.kids.get(seg);
+      if (!k) p.kids.set(seg, (k = { key, name: names.get(key) ?? seg, tris: 0, kids: new Map() }));
+      p = k;
+    }
+    p.meshId = r.id;
+    p.tris = r.tris;
+    if (r.instances) p.name += ` ×${r.instances}`;
+  }
+  const walk = (p: Prim): TreeNode | null => {
+    const kids = [...p.kids.values()].map(walk).filter((n): n is TreeNode => n !== null);
+    if (!p.meshId && kids.length === 0) return null;
+    if (!p.meshId && kids.length === 1) return kids[0];
     return {
-      key: o.uuid, name: o.name || (meshId ? 'Mesh' : 'Group'), meshId, children: kids,
-      tris: own + kids.reduce((s, k) => s + k.tris, 0), meshIds: [...(meshId ? [meshId] : []), ...kids.flatMap((k) => k.meshIds)],
+      key: p.key, name: p.name, meshId: p.meshId, children: kids,
+      tris: p.tris + kids.reduce((s, k) => s + k.tris, 0), meshIds: [...(p.meshId ? [p.meshId] : []), ...kids.flatMap((k) => k.meshIds)],
     };
   };
   const top = walk(root);
-  return !top ? [] : top.meshId ? [top] : top.children; // the root group itself is never a row
+  return !top ? [] : top.meshId ? [top] : top.children;
+}
+
+/**
+ * Row labels: the model's own name (`names`) or the prim name, with parent names put in front while two rows share one
+ * (USD files name many meshes alike: 'Block_A/Mesh').
+ */
+export function rowNames(paths: readonly string[], names: ReadonlyMap<string, string> = new Map()): string[] {
+  const segs = paths.map((p) => { const s = p.split('/').filter(Boolean); return s.map((seg, i) => names.get(`/${s.slice(0, i + 1).join('/')}`) ?? seg); });
+  const out = segs.map((s) => s[s.length - 1] ?? '');
+  for (let k = 2; ; k++) {
+    const count = new Map<string, number>();
+    for (const n of out) count.set(n, (count.get(n) ?? 0) + 1);
+    let grew = false;
+    out.forEach((n, i) => { if (count.get(n)! > 1 && segs[i].length >= k) { out[i] = segs[i].slice(-k).join('/'); grew = true; } });
+    if (!grew) return out;
+  }
+}
+
+/** Ids of the rows at or under any of `paths`: a viewer selection may name an Xform, a subtree or a prim with no row. */
+export function idsUnder(paths: readonly string[], rows: readonly { id: string; path: string }[]): string[] {
+  const sel = new Set(paths);
+  const hit = (p: string) => {
+    for (let q = p; q; q = q.slice(0, q.lastIndexOf('/'))) if (sel.has(q)) return true;
+    return sel.has('/');
+  };
+  return rows.filter((r) => hit(r.path)).map((r) => r.id);
 }
 
 /**

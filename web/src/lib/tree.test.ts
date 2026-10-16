@@ -1,24 +1,48 @@
-import { BoxGeometry, Group, Mesh } from 'three';
 import { describe, expect, it } from 'vitest';
-import { buildTree, groupKeys, visibleRows } from './tree';
+import { groupKeys, idsUnder, rowNames, treeFromPaths, visibleRows } from './tree';
 
-const mesh = (name: string) => { const m = new Mesh(new BoxGeometry()); m.name = name; m.userData.id = name; return m; };
-const group = (name: string, ...kids: (Group | Mesh)[]) => { const g = new Group(); g.name = name; g.add(...kids); return g; };
+// a converted file: everything under /Model; a building group, a lone mesh, and a wrapper around one mesh
+const rows = [
+  { id: 'a1', path: '/Model/scene/Building_A/a1', tris: 12 },
+  { id: 'a2', path: '/Model/scene/Building_A/a2', tris: 12 },
+  { id: 'b', path: '/Model/scene/b', tris: 12 },
+  { id: 'c', path: '/Model/scene/wrapper/c', tris: 12 },
+];
+const tree = treeFromPaths(rows, new Map([['/Model/scene/Building_A', 'Building A']]));
 
-// loadFiles wraps everything in an unnamed root; a file scene with a building group, a lone mesh, and a wrapper around one mesh
-const a1 = mesh('a1'), a2 = mesh('a2'), b = mesh('b'), c = mesh('c');
-const root = group('', group('scene', group('Building A', a1, a2), b, group('wrapper', c)));
-const tree = buildTree(root, [a1, a2, b, c]);
-
-describe('buildTree', () => {
-  it('drops the root and single-child wrappers, keeps groups with their mesh ids and triangle counts', () => {
+describe('treeFromPaths', () => {
+  it('drops the root and single-child wrappers, keeps groups with their mesh ids, triangle counts and own names', () => {
     expect(tree.map((n) => n.name)).toEqual(['Building A', 'b', 'c']);
+    expect(tree[0].key).toBe('/Model/scene/Building_A');
     expect(tree[0].meshIds).toEqual(['a1', 'a2']);
     expect(tree[0].tris).toBe(24);
     expect(tree[1].meshId).toBe('b');
     expect(tree[1].children).toEqual([]);
     expect(groupKeys(tree)).toEqual([tree[0].key]);
-    expect(buildTree(group(''), [])).toEqual([]);
+    expect(treeFromPaths([])).toEqual([]);
+  });
+  it('a mesh holding meshes keeps both; a single mesh is its own row', () => {
+    const t = treeFromPaths([{ id: 'p', path: '/W/P', tris: 2 }, { id: 'k', path: '/W/P/K', tris: 3 }]);
+    expect(t.map((n) => [n.name, n.meshId, n.tris, n.meshIds])).toEqual([['P', 'p', 5, ['p', 'k']]]);
+    expect(treeFromPaths([{ id: 'x', path: '/X', tris: 1 }]).map((n) => n.name)).toEqual(['X']);
+    expect(treeFromPaths([{ id: 'x', path: '/X', tris: 1, instances: 3 }])[0].name).toBe('X ×3');
+  });
+});
+
+describe('rowNames', () => {
+  it('names rows by their own name, with parents in front only while names repeat', () => {
+    expect(rowNames(['/A/Geom/Mesh', '/B/Geom/Mesh', '/C/x', '/Model/Block_A'], new Map([['/Model/Block_A', 'Block A']]))).toEqual(['A/Geom/Mesh', 'B/Geom/Mesh', 'x', 'Block A']);
+    expect(rowNames(['/A/m', '/B/m', '/B/n'])).toEqual(['A/m', 'B/m', 'n']);
+  });
+});
+
+describe('idsUnder', () => {
+  it('maps a viewer selection of prims, ancestors or subtrees to the rows at or under them', () => {
+    expect(idsUnder(['/Model/scene/Building_A'], rows)).toEqual(['a1', 'a2']);
+    expect(idsUnder(['/Model/scene/b', '/Model/scene/wrapper/c'], rows)).toEqual(['b', 'c']);
+    expect(idsUnder(['/Model/scene/Building'], rows)).toEqual([]); // a path prefix is not an ancestor
+    expect(idsUnder(['/'], rows)).toHaveLength(4);
+    expect(idsUnder([], rows)).toEqual([]);
   });
 });
 

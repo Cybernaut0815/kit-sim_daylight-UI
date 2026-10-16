@@ -9,7 +9,7 @@ const defaults = { below: '#0000ff', above: '#ff0000' };
 
 describe('result visualisation state', () => {
   it('a finished run shows values, clears the probe and the bin', () => {
-    let s = reducer(initialState(), { type: 'LOAD', objects: [{ id: 'a', name: 'a', tris: 2, verts: 4, role: 'receiver' }] });
+    let s = reducer(initialState(), { type: 'LOAD', objects: [{ id: 'a', name: 'a', path: '/a', tris: 2, verts: 4, role: 'receiver' }] });
     s = reducer(s, { type: 'PROBE', probe: { id: 'a', element: 1, value: 2 } });
     s = reducer(s, { type: 'BIN', bin: [1, 2] });
     expect(s.probe?.value).toBe(2);

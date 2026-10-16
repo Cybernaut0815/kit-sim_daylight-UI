@@ -1,130 +1,131 @@
-// three.js viewport: render on demand, orbit, grid, pick / hover by raycast, materials painted from zha tokens or,
-// with results, from the result gradient and the problem range; the cursor's element is probed and read out. The sun
-// path is drawn around the model; dragging its suns, handles and arcs edits the time settings.
-import { useEffect, useRef, type Dispatch, type ReactNode, type RefObject } from 'react';
+// The 3D view. The USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation and selection
+// (kept in step with the store); on top of it: the result colours as overlays on the receivers, the hover tint, the
+// sun path and the ground grid in the viewer's overlay group, the probe readout and the scene info. Dragging the sun
+// path's suns, handles, arcs and compass ring edits the time settings and north.
+import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { applyToThree } from 'daylight-mesh';
+import type { UsdSessionEventMap } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
 import { rgbFor, type Scale } from '../lib/gradients';
-import { listMeshes } from '../lib/loaders';
+import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult } from '../store';
 import { Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
+import { usd } from './usd';
 
-const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background: three.js drops alpha
-const GREY = 0xb4b4b4; // every unpainted mesh: a neutral, opaque, lit grey (a scene material colour, not UI chrome)
+const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
+const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4); // rgbFor speaks the legend's sRGB; colour attributes are linear
+// Neutral tone mapping (the Plain view) lowers every colour by up to 0.04 (linear) before output; add it back so the grid
+// keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
+// ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
+const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m < 0.04 ? 0.4 * Math.sqrt(m) - m : 0.04; return c.setRGB(c.r + off, c.g + off, c.b + off); };
+// Result colours: unlit, so with tone mapping off (the Value view) they are exactly the legend's
+const PAINT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+// The hover tint, over the paint (-1) and the viewer's selection fill (-2); it borrows the hovered object's geometry
+const TINT = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+const tint = new THREE.Mesh(new THREE.BufferGeometry(), TINT); // never dispose its geometry: it is the viewer's
+tint.raycast = () => {}; // the viewer's pick walks its objects' children
 
 interface Props {
-  group: THREE.Group | null; loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
+  meshes: ReadonlyMap<string, THREE.Object3D>; // row id -> the viewer's object for it
+  loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the run bar under the model
   sun: SunView | null; // the sun path to draw (null: hidden)
 }
 
 interface Ctx {
-  renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls;
-  model: THREE.Group | null; meshes: THREE.Mesh[]; gridSpec: { size: number; x: number; y: number; z: number };
-  sun: SunPath; dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
-  render: () => void;
+  canvas: HTMLCanvasElement; sun: SunPath; gridSpec: { size: number; x: number; y: number; z: number };
+  dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
 }
 
-/** The scene info at the top right of the view: meshes by role, faces and vertices, and the render loop's frame line. */
+/** The scene info at the top right of the view: meshes by role, faces and vertices, units, and the frame line. */
 function SceneInfo({ objects, stats }: { objects: ObjectRow[]; stats: RefObject<HTMLSpanElement | null> }) {
   const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
-  const ignored = n('none');
+  const ignored = n('none'), unit = usd.stage?.metersPerUnit ?? 1;
   return (
     <div className="viewport__info" aria-hidden="true">
       <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {f(n('shade'))} shading{ignored ? `, ${f(ignored)} ignored` : ''}</span>
-      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices</span>
+      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
       <span ref={stats} />
     </div>
   );
 }
 
-export function Viewer({ group, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
   const host = useRef<HTMLDivElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
   const tip = useRef<HTMLDivElement>(null);
   const labelsEl = useRef<HTMLDivElement>(null);
-  const stats = useRef<HTMLSpanElement>(null); // the frame line of the scene info, written by the render loop
+  const stats = useRef<HTMLSpanElement>(null); // the frame line of the scene info, written per frame
   const ctx = useRef<Ctx | null>(null);
-  const latest = useRef({ result, column, sun }); // read by the pointer handlers, which are bound once
-  latest.current = { result, column, sun };
+  const paint = useRef(new Map<string, THREE.Mesh>()); // receiver id -> its result overlay, a child of the viewer's object
+  const [ready, setReady] = useState(false); // the core is up: until then the viewer shows its own status
+  const byObject = useMemo(() => new Map([...meshes].map(([id, o]) => [o, id])), [meshes]);
+  const latest = useRef({ result, column, sun, objects, meshes, byObject }); // read by the handlers, which are bound once
+  latest.current = { result, column, sun, objects, meshes, byObject };
+  const byValue = result && scale && colourBy === 'value' ? result : null;
+  const hasModel = meshes.size > 0, site = sun?.site ?? null, shown = !!sun && hasModel;
+
+  useEffect(() => { usd.ready.then(() => setReady(true), () => {}); }, []); // a failed start: the viewer shows why
 
   useEffect(() => {
-    const el = host.current!;
-    const renderer = new THREE.WebGLRenderer({ canvas: canvas.current!, antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setClearColor(0x000000, 0); // transparent: the .viewport token background shows through in both themes
-    renderer.localClippingEnabled = true; // the sun path is cut at the horizon
+    const el = host.current!, canvas = usd.three.renderer.domElement;
+    el.prepend(usd); // first child: the labels, readout, empty state and run bar come later and paint over the viewer's positioned <main>
     const labels = new CSS2DRenderer({ element: labelsEl.current! });
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
-    camera.position.set(8, 6, 8);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 2)); // white light, not a palette colour
-    const sun = new THREE.DirectionalLight(0xffffff, 2);
-    sun.position.set(5, 10, 7);
-    scene.add(sun);
     const sunPath = createSunPath();
-    scene.add(sunPath.group);
-    // Render on demand. Frame stats for the scene info: frames in the last second, the last frame's CPU time and draw
-    // calls, written straight to the DOM at most twice a second (no React render per frame); "idle" once frames stop.
-    let queued = false, times: number[] = [], shown = 0, idle = 0;
+    usd.three.overlay.add(sunPath.group);
+    const c: Ctx = { canvas, sun: sunPath, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 } };
+    ctx.current = c;
+
+    // Every frame, with that frame's camera: the sun-path labels (the sun path only, never the stage), and the scene
+    // info's frame line: frames in the last second, the frame's CPU time and draw calls, at most twice a second.
+    let lw = 0, lh = 0, times: number[] = [], written = 0, idle = 0;
     const stat = (text: string) => { if (stats.current) stats.current.textContent = text; };
-    const render = () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame((now) => {
-        queued = false;
-        const t0 = performance.now();
-        renderer.render(scene, camera);
-        const calls = renderer.info.render.calls;
-        labels.render(scene, camera);
-        const ms = (performance.now() - t0).toFixed(1);
+    const onFrame = () => {
+      const t0 = performance.now();
+      if (canvas.clientWidth !== lw || canvas.clientHeight !== lh) labels.setSize((lw = canvas.clientWidth), (lh = canvas.clientHeight));
+      labels.render(sunPath.group as unknown as THREE.Scene, usd.three.camera); // ponytail: typed Scene, takes any Object3D
+      queueMicrotask(() => { // after the viewer's renderer.render, in the same task
+        const now = performance.now(), ms = (now - t0).toFixed(1), calls = usd.three.renderer.info.render.drawCalls;
         times.push(now);
         while (times[0] <= now - 1000) times.shift();
-        if (now - shown >= 500) { shown = now; stat(`${times.length} fps, ${ms} ms per frame, ${calls} draw calls`); }
+        if (now - written >= 500) { written = now; stat(`${times.length} fps, ${ms} ms per frame, ${calls} draw calls`); }
         clearTimeout(idle);
         idle = window.setTimeout(() => { times = []; stat(`idle, last frame ${ms} ms, ${calls} draw calls`); }, 1100);
       });
     };
-    controls.addEventListener('change', render);
-    const ro = new ResizeObserver(() => {
-      const w = el.clientWidth, h = el.clientHeight;
-      if (!w || !h) return;
-      renderer.setSize(w, h, false);
-      labels.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      render();
-    });
-    ro.observe(el);
-    const c: Ctx = { renderer, scene, camera, controls, model: null, meshes: [], gridSpec: { size: 20, x: 0, y: 0, z: 0 }, sun: sunPath, dome: { x: 0, y: 0, z: 0, r: 10 }, render };
-    ctx.current = c;
+    usd.three.beforeRender.add(onFrame);
 
-    // Picking: pointerup within 4 px of pointerdown selects (shift / ctrl toggles); pointermove hovers and probes the
-    // element under the cursor (the face, or the nearest vertex of the hit face), one raycast per frame.
+    // The viewer selects (click, Shift adds, Ctrl removes, Shift+drag a box): its selection becomes the rows at or under it.
+    const onSel = (e: Event) => {
+      const { paths, source } = (e as UsdSessionEventMap['selectionchange']).detail;
+      if (source === 'viewport') dispatch({ type: 'SELECT', ids: idsUnder(paths, latest.current.objects) }); // replaces: the viewer applied Shift / Ctrl
+    };
+    usd.addEventListener('selectionchange', onSel);
+
+    // Hover and probe: pointermove raycasts the rows' objects (not their children: the overlays) once per frame; the
+    // element is the face, or the nearest vertex of the hit face.
     // ponytail: linear raycast over every mesh; three-mesh-bvh past ~1M triangles
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3();
     const hitAt = (e: PointerEvent) => {
-      const r = renderer.domElement.getBoundingClientRect();
+      const r = canvas.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-      ray.setFromCamera(ndc, camera);
-      return ray.intersectObjects(c.meshes, false)[0] ?? null;
+      ray.setFromCamera(ndc, usd.three.camera); // read again: the viewer swaps cameras
+      return ray.intersectObjects([...latest.current.meshes.values()], false)[0] ?? null;
     };
     const pick = (e: PointerEvent) => {
-      const hit = hitAt(e), r = renderer.domElement.getBoundingClientRect();
-      if (!hit) return null;
-      const mesh = hit.object as THREE.Mesh, id = mesh.userData.id as string, { result, column } = latest.current;
+      const hit = hitAt(e), r = canvas.getBoundingClientRect();
+      const id = hit && latest.current.byObject.get(hit.object);
+      if (!hit || !id) return null;
+      const { result, column } = latest.current;
       let element: number | null = null, value = NaN;
       const k = result?.receivers.indexOf(id) ?? -1;
-      if (result && k >= 0 && hit.faceIndex !== undefined) {
+      if (result && k >= 0 && hit.faceIndex != null) {
         if (result.on === 'faces') element = hit.faceIndex;
         else if (hit.face) { // per-vertex results keep the geometry indexed, so the face corners are the row indices
-          const pos = mesh.geometry.attributes.position;
+          const mesh = hit.object as THREE.Mesh, pos = mesh.geometry.attributes.position;
           let best = Infinity;
           for (const vi of [hit.face.a, hit.face.b, hit.face.c]) {
             const d = p.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld).distanceToSquared(hit.point);
@@ -136,16 +137,7 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       }
       return { id, element, value, x: e.clientX - r.left, y: e.clientY - r.top };
     };
-    let down: [number, number] | null = null, raf = 0;
-    const dom = renderer.domElement;
-    const onDown = (e: PointerEvent) => { down = [e.clientX, e.clientY]; };
-    const onUp = (e: PointerEvent) => {
-      if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 4) {
-        const id = pick(e)?.id ?? null;
-        dispatch({ type: 'SELECT', ids: id ? [id] : [], additive: e.shiftKey || e.ctrlKey });
-      }
-      down = null;
-    };
+    let raf = 0;
     const onMove = (e: PointerEvent) => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
@@ -156,194 +148,202 @@ export function Viewer({ group, loading, objects, selected, hovered, colourBy, r
       });
     };
     const onLeave = () => { cancelAnimationFrame(raf); dispatch({ type: 'HOVER', id: null }); dispatch({ type: 'PROBE', probe: null }); };
-    dom.addEventListener('pointerdown', onDown);
-    dom.addEventListener('pointerup', onUp);
-    dom.addEventListener('pointermove', onMove);
-    dom.addEventListener('pointerleave', onLeave);
+    canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('pointerleave', onLeave);
 
-    // Sun path drags: capture listeners on the viewport run before OrbitControls and the handlers above (all on the
-    // canvas). A grab stops the event there, so a drag never orbits, selects or probes.
+    // Sun path drags: capture listeners on the viewport run before the viewer's own (its selection tool and orbit, on
+    // the canvas inside its shadow root). A grab stops the event there, so a drag never orbits, selects or probes.
     let grab: Grab | null = null;
-    const ptr = (e: PointerEvent): Ptr => { const r = dom.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height }; };
+    const ours = (e: PointerEvent) => e.composedPath()[0] === canvas; // events from the shadow canvas are retargeted to <usd-viewer>
+    const ptr = (e: PointerEvent): Ptr => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height }; };
     // The compass ring yields to the model standing in front of it (a click there still selects); geometry lying on the
     // ground under the ring (a site plane) does not hide it.
     const offModel = (e: PointerEvent) => () => { const h = hitAt(e); return !h || h.point.y < c.dome.y + 0.01 * c.dome.r; };
     const onGrab = (e: PointerEvent) => {
       const v = latest.current.sun;
-      if (e.target !== dom || e.button !== 0 || !v || !c.model) return; // the run bar lives in the viewport too
-      if (sunPath.hover(ptr(e), camera, offModel(e)).changed) render(); // a press with no hover before it (touch, pen) gets the look too
-      grab = sunPath.grab(ptr(e), camera, v, offModel(e));
+      if (!ours(e) || e.button !== 0 || !v || !latest.current.meshes.size) return; // the run bar lives in the viewport too
+      if (sunPath.hover(ptr(e), usd.three.camera, offModel(e)).changed) usd.three.invalidate(); // a press with no hover before it (touch, pen) gets the look too
+      grab = sunPath.grab(ptr(e), usd.three.camera, v, offModel(e));
       if (!grab) return;
       e.stopPropagation();
-      dom.setPointerCapture(e.pointerId); // on the canvas: the cursor follows the capture target; the capture listeners above still run first
-      dom.classList.add('viewport__grabbing');
+      canvas.setPointerCapture(e.pointerId);
+      usd.classList.add('viewport__grabbing');
       cancelAnimationFrame(raf);
-      render();
+      usd.three.invalidate();
     };
     const onDrag = (e: PointerEvent) => {
       const v = latest.current.sun;
       if (grab) {
         e.stopPropagation();
-        const d = v && sunPath.drag(grab, ptr(e), camera, v);
+        const d = v && sunPath.drag(grab, ptr(e), usd.three.camera, v);
         if (d?.time) dispatch({ type: 'TIME', patch: d.time }); // the same fields the Time and Location panels write: their controls follow
         if (d?.north !== undefined) dispatch({ type: 'SIM', patch: { north: d.north } });
         return;
       }
-      if (e.target !== dom || !v || !c.model) return;
-      const { over, changed } = sunPath.hover(ptr(e), camera, offModel(e));
-      dom.classList.toggle('viewport__grab', over);
-      if (changed) render();
+      if (!ours(e) || !v || !latest.current.meshes.size) return;
+      const { over, changed } = sunPath.hover(ptr(e), usd.three.camera, offModel(e));
+      usd.classList.toggle('viewport__grab', over);
+      if (changed) usd.three.invalidate();
     };
     const onDrop = (e: PointerEvent) => {
       if (!grab) return;
       e.stopPropagation();
       grab = null;
-      if (dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId);
-      dom.classList.remove('viewport__grabbing');
-      const { over, changed } = sunPath.hover(e.type === 'pointerup' ? ptr(e) : null, camera, offModel(e)); // the look of what is under the pointer now
-      dom.classList.toggle('viewport__grab', over);
-      if (changed) render();
+      if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+      usd.classList.remove('viewport__grabbing');
+      const { over, changed } = sunPath.hover(e.type === 'pointerup' ? ptr(e) : null, usd.three.camera, offModel(e)); // the look of what is under the pointer now
+      usd.classList.toggle('viewport__grab', over);
+      if (changed) usd.three.invalidate();
     };
-    const onOut = () => { dom.classList.remove('viewport__grab'); if (!grab && sunPath.hover(null, camera).changed) render(); };
+    const onOut = () => { usd.classList.remove('viewport__grab'); if (!grab && sunPath.hover(null, usd.three.camera).changed) usd.three.invalidate(); };
     el.addEventListener('pointerdown', onGrab, true);
     el.addEventListener('pointermove', onDrag, true);
     el.addEventListener('pointerup', onDrop, true);
     el.addEventListener('pointercancel', onDrop, true);
-    dom.addEventListener('pointerleave', onOut);
+    canvas.addEventListener('pointerleave', onOut);
+    // The element outlives this effect (StrictMode runs it twice, Fast Refresh on edits): undo every addition.
     return () => {
       clearTimeout(idle);
-      ro.disconnect();
-      controls.dispose();
-      dom.removeEventListener('pointerdown', onDown);
-      dom.removeEventListener('pointerup', onUp);
-      dom.removeEventListener('pointermove', onMove);
-      dom.removeEventListener('pointerleave', onLeave);
+      cancelAnimationFrame(raf);
+      usd.three.beforeRender.delete(onFrame);
+      usd.removeEventListener('selectionchange', onSel);
+      canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('pointerleave', onLeave);
       el.removeEventListener('pointerdown', onGrab, true);
       el.removeEventListener('pointermove', onDrag, true);
       el.removeEventListener('pointerup', onDrop, true);
       el.removeEventListener('pointercancel', onDrop, true);
-      dom.removeEventListener('pointerleave', onOut);
+      canvas.removeEventListener('pointerleave', onOut);
+      usd.three.overlay.remove(sunPath.group);
       sunPath.dispose();
       labelsEl.current?.replaceChildren();
-      renderer.dispose();
+      usd.three.invalidate();
       ctx.current = null;
     };
   }, [dispatch]);
 
-  // New model: swap it in, give every mesh its own material, frame the camera.
+  // A new model: the sun path's dome and the grid fit every mesh, whatever its role.
   useEffect(() => {
     const c = ctx.current;
-    if (!c) return;
-    if (c.model) c.scene.remove(c.model);
-    c.model = group;
-    c.meshes = group ? listMeshes(group) : [];
-    if (!group) return c.render();
-    c.scene.add(group);
-    for (const m of c.meshes) {
-      m.userData.source = m.geometry; // the untouched geometry; value painting works on a clone
-      m.material = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, side: THREE.DoubleSide });
-    }
-    const box = new THREE.Box3().setFromObject(group), size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
-    const r0 = Math.hypot(size.x / 2, size.y, size.z / 2) || 1; // the sun path's dome stands on the ground and encloses the model
+    if (!c || !meshes.size) return;
+    const box = new THREE.Box3();
+    for (const o of meshes.values()) box.expandByObject(o); // an InstancedMesh by the bounds of its instances
+    const size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
+    const r0 = Math.hypot(size.x / 2, size.y, size.z / 2) || 1; // the dome stands on the ground and encloses the model
     c.dome = { x: centre.x, y: box.min.y, z: centre.z, r: r0 };
-    const dim = Math.max(size.x, size.y, size.z, 2.3 * r0), dist = (dim / Math.tan((c.camera.fov * Math.PI) / 360)) * 0.75; // the dome and its labels in view
-    c.camera.position.copy(centre).add(new THREE.Vector3(1, 0.7, 1).normalize().multiplyScalar(dist));
-    c.camera.near = dist / 500;
-    c.camera.far = dist * 50;
-    c.camera.updateProjectionMatrix();
-    c.controls.target.copy(centre);
-    c.controls.update();
-    c.gridSpec = { size: dim * 2, x: centre.x, y: box.min.y, z: centre.z };
-  }, [group]);
+    c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * r0), x: centre.x, y: box.min.y, z: centre.z };
+  }, [meshes]);
 
   // Sun path: the scaffold follows the site and the theme, the frame the model, north and size, the active layer the time.
-  const site = sun?.site ?? null, shown = !!sun && !!group;
   useEffect(() => {
     const c = ctx.current;
     if (!c) return;
     c.sun.group.visible = shown;
     if (shown && site) c.sun.build(site);
-    c.render();
+    usd.three.invalidate();
   }, [site, theme, shown]);
   useEffect(() => {
     const c = ctx.current;
-    if (!c || !sun) return;
-    c.sun.frame(c.dome.x, c.dome.y, c.dome.z, c.dome.r * sun.scale, sun.north);
-    c.render();
-  }, [group, sun?.north, sun?.scale]); // eslint-disable-line react-hooks/exhaustive-deps -- only north and size move the frame
+    if (!c) return;
+    c.sun.frame(c.dome.x, c.dome.y, c.dome.z, c.dome.r * (sun?.scale ?? 1), sun?.north ?? 0); // placed while hidden too
+    usd.three.invalidate();
+  }, [meshes, sun?.north, sun?.scale]); // eslint-disable-line react-hooks/exhaustive-deps -- only north and size move the frame
   useEffect(() => {
     const c = ctx.current;
-    if (!c || !sun || !group) return;
+    if (!c || !sun || !hasModel) return;
     c.sun.show(sun.site, sun.time);
-    c.render();
-  }, [group, sun?.site, sun?.time, theme, shown]); // eslint-disable-line react-hooks/exhaustive-deps -- not north or size
+    usd.three.invalidate();
+  }, [meshes, sun?.site, sun?.time, theme, shown]); // eslint-disable-line react-hooks/exhaustive-deps -- not north or size
+
+  // The model and the dome in view: after the sun path is placed, before the new grid goes in (React runs every cleanup
+  // first, so the old grid is out): the grid is a floor, not part of what to frame.
+  useEffect(() => { if (meshes.size) usd.frame(); }, [meshes]);
 
   // The ground grid under the model, in the theme's hairline colours.
   useEffect(() => {
     const c = ctx.current;
     if (!c) return;
-    const { size, x, y, z } = c.gridSpec, grid = new THREE.GridHelper(size, 20, solid('--border-default'), solid('--border-subtle'));
+    const col = (name: string) => { const k = new THREE.Color(solid(name)); return byValue ? k : untone(k); };
+    const { size, x, y, z } = c.gridSpec, grid = new THREE.GridHelper(size, 20, col('--border-default'), col('--border-subtle'));
     grid.position.set(x, y, z);
-    c.scene.add(grid);
-    c.render();
-    return () => { c.scene.remove(grid); grid.dispose(); };
-  }, [group, theme]);
+    usd.three.overlay.add(grid);
+    usd.three.invalidate();
+    return () => { usd.three.overlay.remove(grid); grid.dispose(); };
+  }, [meshes, theme, !!byValue]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
-  // Paint: role colours from tokens, hover / selection as accent emissive, or the result colours per element.
+  // The look: the stage's materials in the Plain view; plain grey with tone mapping off (exact legend colours) in the
+  // Value view; the selection fill in the accent colour, fainter over results.
   useEffect(() => {
-    const c = ctx.current;
-    if (!c) return;
+    usd.displayMode = byValue ? 'plain' : 'shaded';
+    usd.toneMapping = byValue ? 'none' : 'neutral';
+    usd.highlight = { color: `#${new THREE.Color(solid('--accent')).getHexString()}`, opacity: byValue ? 0.12 : 0.14 };
+  }, [!!byValue, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
+
+  // Paint: each receiver gets a result overlay (its geometry copied, coloured per element, a child of the viewer's
+  // object); a scale, range or bin change repaints in place.
+  useEffect(() => {
     let stale = false;
     (async () => {
-      const accent = solid('--accent');
-      const byValue = result && scale && colourBy === 'value' ? result : null;
-      for (const mesh of c.meshes) {
-        const id = mesh.userData.id as string, row = objects.find((o) => o.id === id);
-        if (!row) continue;
-        const mat = mesh.material as THREE.MeshStandardMaterial, source = mesh.userData.source as THREE.BufferGeometry;
-        const k = byValue?.receivers.indexOf(id) ?? -1, painted = !!byValue && !!scale && k >= 0 && row.role === 'receiver';
-        if (byValue && scale && painted) {
-          const g = byValue.manifest.meshes[k], vals = new Float64Array(g.count);
-          for (let i = 0; i < g.count; i++) vals[i] = byValue.values[g.first + i][column];
-          const rgb = rgbFor(scale, vals, bin), perFace = byValue.on === 'faces';
-          const attr = mesh.geometry !== source ? (mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined) : undefined;
-          if (attr && attr.count === (perFace ? 3 * g.count : g.count)) { // repaint in place (scale, range or bin changed)
-            const arr = attr.array as Float32Array;
-            if (perFace) for (let i = 0; i < arr.length; i++) arr[i] = rgb[3 * Math.floor(i / 9) + (i % 3)];
-            else arr.set(rgb);
-            attr.needsUpdate = true;
-          } else {
-            if (mesh.geometry !== source) mesh.geometry.dispose();
-            mesh.geometry = source.clone(); // the per-face path goes non-indexed, so paint a copy and keep the source for picking
-            await applyToThree(mesh, vals, { material: false, rgb });
-            if (stale) return;
-          }
-          mat.color.setRGB(1, 1, 1);
-        } else {
-          if (mesh.geometry !== source) { mesh.geometry.dispose(); mesh.geometry = source; }
-          mat.color.set(GREY);
+      const keep = new Set<string>();
+      for (const [id, obj] of meshes) {
+        const k = byValue && objects.find((o) => o.id === id)?.role === 'receiver' ? byValue.receivers.indexOf(id) : -1;
+        if (!byValue || !scale || k < 0) continue;
+        keep.add(id);
+        const g = byValue.manifest.meshes[k], vals = new Float64Array(g.count), perFace = byValue.on === 'faces';
+        for (let i = 0; i < g.count; i++) vals[i] = byValue.values[g.first + i][column];
+        const rgb = rgbFor(scale, vals, bin).map(lin);
+        const m = paint.current.get(id), attr = m?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+        if (attr && attr.count === (perFace ? 3 * g.count : g.count)) { // repaint in place
+          const arr = attr.array as Float32Array;
+          if (perFace) for (let i = 0; i < arr.length; i++) arr[i] = rgb[3 * Math.floor(i / 9) + (i % 3)];
+          else arr.set(rgb);
+          attr.needsUpdate = true;
+          continue;
         }
-        if (mat.vertexColors !== painted) { mat.vertexColors = painted; mat.needsUpdate = true; } // a shader switch; colours are uniforms
-        // a value-painted mesh keeps its colours readable: a faint tint only; grey stays grey: a light accent tint
-        const hi = hovered === id ? (painted ? 0.1 : 0.22) : selected.has(id) ? (painted ? 0.12 : 0.14) : 0;
-        mat.emissive.set(hi ? accent : 0x000000);
-        mat.emissiveIntensity = hi;
+        if (m) { m.removeFromParent(); m.geometry.dispose(); paint.current.delete(id); }
+        const next = new THREE.Mesh((obj as THREE.Mesh).geometry.clone(), PAINT); // a copy: the viewer's geometry gets no colour stream
+        next.raycast = () => {}; // the viewer's pick walks its objects' children
+        await applyToThree(next, vals, { material: false, rgb }); // per face: non-indexed, one colour per triangle
+        if (stale) { next.geometry.dispose(); return; }
+        obj.add(next); // follows the object and leaves with it when the stage closes
+        paint.current.set(id, next);
       }
-      c.render();
+      for (const [id, m] of paint.current) if (!keep.has(id)) { m.removeFromParent(); m.geometry.dispose(); paint.current.delete(id); }
+      usd.three.invalidate();
     })();
     return () => { stale = true; };
-  }, [group, objects, selected, hovered, colourBy, result, column, scale, bin, theme]);
+  }, [meshes, objects, byValue, column, scale, bin]);
+
+  // Hover: a light accent tint over the mesh, fainter over results.
+  useEffect(() => {
+    const o = hovered ? meshes.get(hovered) : undefined;
+    if (!o || (o as THREE.InstancedMesh).isInstancedMesh) return; // ponytail: no tint on instanced shades (a child draws once, not per instance)
+    tint.geometry = (o as THREE.Mesh).geometry;
+    TINT.color.set(solid('--accent'));
+    TINT.opacity = paint.current.has(hovered!) ? 0.1 : 0.22;
+    o.add(tint);
+    usd.three.invalidate();
+    return () => { tint.removeFromParent(); usd.three.invalidate(); };
+  }, [hovered, meshes, byValue, theme]);
+
+  // The store's selection (tree, results table, All / None) shown by the viewer, unless it already covers exactly these rows.
+  useEffect(() => {
+    const have = idsUnder(usd.selection, objects);
+    if (have.length === selected.size && have.every((id) => selected.has(id))) return;
+    // ponytail: the viewer fills at most 2000 prims; instanced rows carry prototype paths, so they do not highlight
+    usd.select(objects.filter((o) => selected.has(o.id)).map((o) => o.path));
+  }, [selected, objects]);
 
   return (
     <div ref={host} className="viewport">
-      <canvas ref={canvas} aria-label="3D model viewport" />
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
-      {group && <SceneInfo objects={objects} stats={stats} />}
-      {!group && (
+      {hasModel && <SceneInfo objects={objects} stats={stats} />}
+      {ready && !hasModel && !loading && (
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="model" /></div>
-          {loading ? <><span className="spinner" aria-hidden="true" /><p>Loading the model</p></> : <><h3>Open a model</h3><p>Pick a .glb, .gltf or .obj in the Model panel. Click a mesh to select it, shift-click to add.</p></>}
+          <h3>Open a model</h3>
+          <p>Pick a .usd, .usda, .usdc, .usdz, .glb, .gltf or .obj in the Model panel. Click a mesh to select it; Shift adds, Ctrl removes, Shift+drag selects a box.</p>
         </div>
       )}
       {children && <div className="viewport__bar">{children}</div>}

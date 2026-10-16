@@ -5,11 +5,13 @@
 // handle across the sky to change its date and time; drag an arc to change the date; turn the compass ring to set
 // north. Built at unit radius in the
 // diagram frame (+Y up, true north -Z, east +X); the group carries the position, the radius and north. Everything
-// below the horizon is clipped.
+// below the horizon is clipped, except the handles (drawn faint there). Drawn by the USD viewer's WebGPURenderer: fat
+// lines and sized dots are its node-material kinds, the horizon cut is a ClippingGroup.
 import * as THREE from 'three';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { instancedBufferAttribute } from 'three/tsl';
+import { ClippingGroup, Line2NodeMaterial, PointsNodeMaterial } from 'three/webgpu';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/webgpu/LineSegments2.js';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { cssVar } from '../lib/cssVar';
 import { altAzi, analemma, dayPath, decOf, decTable, dragDay, nearestMinute, parseHoy, startDayDrag, stepHoys, sunAt, sunDir, type DayDrag, type Path, type Site } from '../lib/sun';
@@ -35,12 +37,9 @@ for (let i = 0; i <= 120; i++) { const a = (i / 120) * 2 * Math.PI; RING.min.pus
 const mmdd = (date: string, leap: boolean) => fmtTime(date, 0, leap).slice(0, 5);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** A zha token as a three.js colour plus its alpha (three.js colours have none, so translucent tokens become opacity). */
-function token(name: string) {
-  const s = cssVar(name, '#808080'), m = /^rgba\((.*), ([\d.]+)\)$/.exec(s);
-  return { color: new THREE.Color(m ? `rgb(${m[1]})` : s), opacity: m ? Number(m[2]) : 1 };
-}
-type Tok = ReturnType<typeof token>;
+/** A zha token as an opaque three.js colour, composited over the viewport background: fat lines cannot blend. */
+const token = (name: string) => new THREE.Color(cssVar(name, '#808080', '--bg-surface-2'));
+type Tok = THREE.Color;
 
 /** Segment pairs of a polyline (flat xyz) from sample a to b (b = n closes the loop) where at least one end is up. */
 function upSegs(xyz: number[], alt: number[], out: number[], a = 0, b = alt.length - 1) {
@@ -76,17 +75,20 @@ function label(text: string, cls: string, [x, y, z]: number[], cx = 0.5, cy = 0.
 function empty(layer: THREE.Object3D) {
   layer.traverse((o) => {
     const m = o as THREE.Mesh;
-    m.geometry?.dispose();
+    if (!(o as THREE.Sprite).isSprite) m.geometry?.dispose(); // every Sprite shares one module-wide quad (the viewer's too)
     for (const x of Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) x.dispose();
   });
   layer.clear();
 }
 
 export function createSunPath() {
-  const group = new THREE.Group(), scaffold = new THREE.Group(), active = new THREE.Group();
-  group.add(scaffold, active);
+  // cut at the horizon: the scaffold and the active layer (the compass at Y and the sun's ray lie above it); the handles
+  // and the halo stay whole, faint below it
+  const group = new THREE.Group(), scaffold = new ClippingGroup(), active = new ClippingGroup(), balls = new THREE.Group();
+  group.add(scaffold, active, balls);
   group.visible = false;
   const horizon = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // world space: set by frame()
+  scaffold.clippingPlanes = active.clippingPlanes = [horizon];
   // pickable state of the active layer, rebuilt by show()
   let arcs: { which: Which; path: Path; line: LineSegments2; width: number }[] = [];
   let handles: { which: Which; obj: THREE.Object3D; up: boolean; tip: HTMLElement; short: string; long: string }[] = [];
@@ -94,21 +96,24 @@ export function createSunPath() {
   let ring: LineSegments2 | null = null; // the compass ring, thickened while hovered
   const ray = new THREE.Raycaster(), v = new THREE.Vector3(), w = new THREE.Vector3();
 
-  const lines = (seg: number[], tok: Tok, width: number, dashed = false, clip = true) => {
-    const m = new LineMaterial({ color: tok.color, linewidth: width, dashed, dashSize: 0.02, gapSize: 0.015, transparent: tok.opacity < 1, depthWrite: tok.opacity >= 1, clippingPlanes: clip ? [horizon] : null });
-    m.opacity = tok.opacity;
-    const l = new LineSegments2(new LineSegmentsGeometry().setPositions(seg), m);
+  const lines = (seg: number[], color: Tok, width: number, dashed = false) => {
+    const l = new LineSegments2(new LineSegmentsGeometry().setPositions(seg), new Line2NodeMaterial({ color, linewidth: width, dashed, dashSize: 0.02, gapSize: 0.015 }));
     if (dashed) l.computeLineDistances();
     return l;
   };
-  const dots = (xyz: number[], tok: Tok, size: number) => {
-    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(xyz, 3));
-    return new THREE.Points(g, new THREE.PointsMaterial({ color: tok.color, size, sizeAttenuation: false, clippingPlanes: [horizon] }));
+  /** Dots `size` CSS px across (WebGPU points are 1 px): one instanced sprite. */
+  const dots = (xyz: number[], color: Tok, size: number) => {
+    const m = new PointsNodeMaterial({ color, size, sizeAttenuation: false });
+    m.positionNode = instancedBufferAttribute(new THREE.InstancedBufferAttribute(new Float32Array(xyz), 3));
+    const s = new THREE.Sprite(m);
+    s.count = xyz.length / 3;
+    s.frustumCulled = false; // its bounds are the unit quad, not the dots
+    return s;
   };
-  const surface = (pos: number[], index: number[], tok: Tok, opacity: number) => {
+  const surface = (pos: number[], index: number[], color: Tok, opacity: number) => {
     const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setIndex(index);
-    return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: tok.color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, clippingPlanes: [horizon] }));
+    return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }));
   };
   /** Quads between consecutive rows of n samples each (flat xyz rows of equal length). */
   const strip = (rows: number[][], tok: Tok, opacity: number) => {
@@ -119,8 +124,8 @@ export function createSunPath() {
     }
     return surface(pos, index, tok, opacity);
   };
-  const ball = (r: number, tok: Tok, opacity = 1) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 12), new THREE.MeshBasicMaterial({ color: tok.color, transparent: true, opacity, depthTest: false, depthWrite: false }));
+  const ball = (r: number, color: Tok, opacity = 1) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false }));
     m.renderOrder = 10; // handles stay visible through the model
     return m;
   };
@@ -135,7 +140,7 @@ export function createSunPath() {
       const s = Math.sin(rad(a)), c = -Math.cos(rad(a)), r = a % 90 === 0 ? 1.07 : a % 15 === 0 ? 1.035 : 1.02;
       (a % 15 === 0 ? major : minor).push(s, Y, c, r * s, Y, r * c);
     }
-    scaffold.add(ring = lines(major, axis, hot === 'c:sun' ? 3 : 1.5, false, false), lines(minor, faint, 1, false, false));
+    scaffold.add(ring = lines(major, axis, hot === 'c:sun' ? 3 : 1.5), lines(minor, faint, 1));
     ['N', 'E', 'S', 'W'].forEach((t, i) => scaffold.add(label(t, 'sunpath-label--strong', NESW[i])));
     // altitude rings, labelled on the side away from the sun
     const alts: number[] = [], away = site.lat >= 0 ? 0 : 180;
@@ -164,6 +169,7 @@ export function createSunPath() {
   /** Rebuild the active layer: the instant or the analysis period, and its handles. */
   function show(site: Site, t: Time) {
     empty(active);
+    empty(balls);
     arcs = [];
     handles = [];
     if (t.mode === 'annual') return;
@@ -189,7 +195,8 @@ export function createSunPath() {
       if (hot === `h:${which}`) obj.scale.setScalar(1.35);
       const short = fmtClock(minute), long = `${short}, altitude ${Math.round(s.alt)}°, azimuth ${Math.round(s.azi)}°`;
       const tip = label(hot === `h:${which}` ? long : short, 'sunpath-label--strong sunpath-label--at', d, 0, 1, ['handle', which]);
-      active.add(obj, tip);
+      balls.add(obj);
+      active.add(tip);
       handles.push({ which, obj, up: s.up, tip: tip.element, short, long });
       return { s, d };
     };
@@ -213,10 +220,10 @@ export function createSunPath() {
       if (!h) return;
       const halo = ball(1 / 15, glow, h.s.up ? 0.35 : 0.1);
       halo.position.copy(handles[0].obj.position);
-      active.add(halo);
+      balls.add(halo);
       if (h.s.up) { // the sun's ray to the centre, its drop to the ground, its azimuth on the compass
         const [x, y, z] = h.d, g = Math.hypot(x, z) || 1;
-        active.add(lines([0, Y, 0, x, y, z, x, y, z, x, Y, z, 0, Y, 0, x / g, Y, z / g], tok, 1, true, false));
+        active.add(lines([0, Y, 0, x, y, z, x, y, z, x, Y, z, 0, Y, 0, x / g, Y, z / g], tok, 1, true));
       }
       return;
     }
@@ -391,8 +398,8 @@ export function createSunPath() {
       h.obj.scale.setScalar(on ? 1.35 : 1);
       h.tip.textContent = on ? h.long : h.short;
     }
-    for (const a of arcs) (a.line.material as LineMaterial).linewidth = a.width + (key === `a:${a.which}` ? 1.5 : 0);
-    if (ring) (ring.material as LineMaterial).linewidth = key === 'c:sun' ? 3 : 1.5;
+    for (const a of arcs) a.line.material.linewidth = a.width + (key === `a:${a.which}` ? 1.5 : 0);
+    if (ring) ring.material.linewidth = key === 'c:sun' ? 3 : 1.5;
     return { over: !!hit, changed: true };
   }
 
@@ -405,7 +412,7 @@ export function createSunPath() {
       group.rotation.y = rad(north);
       horizon.constant = -(y - 1e-4 * r);
     },
-    dispose() { empty(scaffold); empty(active); },
+    dispose() { empty(scaffold); empty(active); empty(balls); },
   };
 }
 export type SunPath = ReturnType<typeof createSunPath>;

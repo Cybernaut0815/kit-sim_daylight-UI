@@ -18,7 +18,11 @@
     "noFallthroughCasesInSwitch": true,
     "paths": {
       "daylight-mesh": ["../kit-sim_daylight/bindings/ts/src/index.ts"],
+      "usd-viewer": ["../USD_WebViewer/web/src/index.ts"],
       "three": ["./node_modules/@types/three/index.d.ts"],
+      "three/webgpu": ["./node_modules/@types/three/src/Three.WebGPU.d.ts"],
+      "three/tsl": ["./node_modules/@types/three/src/Three.TSL.d.ts"],
+      "three/addons/*": ["./node_modules/@types/three/examples/jsm/*"],
       "@gltf-transform/core": ["./node_modules/@gltf-transform/core"]
     }
   },

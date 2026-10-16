@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, initialState, parseSettings, reducer, serializeSettings, type ObjectRow, type RunResult, type Station } from './store';
 
-const obj = (id: string, role: ObjectRow['role'] = 'receiver'): ObjectRow => ({ id, name: id, tris: 2, verts: 4, role });
+const obj = (id: string, role: ObjectRow['role'] = 'receiver'): ObjectRow => ({ id, name: id, path: `/${id}`, tris: 2, verts: 4, role });
 const stations: Station[] = [
   { title: 'London Gatwick', href: 'https://energyplus-weather.s3.amazonaws.com/GBR_London.Gatwick.epw', lat: 51.15, lon: -0.18 },
   { title: 'Paris Orly', href: 'https://energyplus-weather.s3.amazonaws.com/FRA_Paris.Orly.epw', lat: 48.73, lon: 2.4 },
@@ -13,6 +13,12 @@ describe('roles', () => {
     expect(s.colourBy).toBe('plain');
     s = reducer(s, { type: 'ROLE', ids: ['b', 'c'], role: 'shade' });
     expect(s.objects.map((o) => o.role)).toEqual(['receiver', 'shade', 'shade']);
+  });
+  it('an instanced mesh is never a receiver: Shade and Ignore only', () => {
+    let s = reducer(initialState(), { type: 'LOAD', objects: [obj('a', 'none'), { ...obj('i', 'none'), instances: 3 }] });
+    s = reducer(s, { type: 'ROLE', ids: ['a', 'i'], role: 'receiver' });
+    expect(s.objects.map((o) => o.role)).toEqual(['receiver', 'none']);
+    expect(reducer(s, { type: 'ROLE', ids: ['i'], role: 'shade' }).objects[1].role).toBe('shade');
   });
 });
 
