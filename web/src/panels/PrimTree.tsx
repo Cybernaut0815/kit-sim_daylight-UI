@@ -1,10 +1,11 @@
 // The Model panel's prim tree: the stage's hierarchy as the USD viewer shows it (every prim, loaded as it is expanded),
-// with the triangles and the role of the meshes at or under each prim. Selecting works as in the viewer's own hierarchy
-// (its modifySelect): click replaces, Shift adds, Ctrl removes, Shift+Ctrl adds the parent, Shift+Alt the parent with
-// its subtree, Alt the rows from the last click; arrows move and expand, a double-click frames. A pick in the view
-// opens the tree to the picked prim. The selection is the viewer's; the store mirrors it (SELECTION).
-// Also as there: a lock (not pickable in the view), an eye, F frames, H hides, Shift+H isolates, Alt+H shows all, and a
-// prim's variant sets switch here (App re-reads the meshes). Hiding and variants go to the session layer: never saved.
+// with the triangles and the role of the meshes at or under each prim. Selecting uses the viewer's own modifySelect,
+// with file-list keys: click replaces, Shift selects the rows from the last click, Ctrl toggles, Ctrl+Shift adds the
+// rows, Alt adds the parent, Shift+Alt the parent with its subtree; arrows move and expand, a double-click frames. A
+// pick in the view opens the tree to the picked prim. The selection is the viewer's; the store mirrors it (SELECTION).
+// As in the viewer: a lock (not pickable in the view) and an eye per row, acting on the whole selection when their row
+// is selected; F frames, H hides, Shift+H isolates, Alt+H shows all; a prim's variant sets switch here (App re-reads
+// the meshes). Hiding and variants go to the session layer: never saved.
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type MouseEvent } from 'react';
 import { modifySelect, selectUpWithSubtree, type PrimInfo, type PrimSummary, type UsdSessionEventMap } from 'usd-viewer';
 import { meshAt, underIndex } from '../lib/tree';
@@ -150,11 +151,18 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
     return from <= to ? slice : slice.reverse();
   };
   const onClick = (e: MouseEvent, path: string) => {
-    if (e.altKey && !e.shiftKey) return modifySelect(usd.session, range(path), 'add', 'hierarchy');
-    anchor.current = path;
     const ctrl = e.ctrlKey || e.metaKey;
-    if (e.shiftKey && e.altKey) selectUpWithSubtree(usd.session, path, 'hierarchy').catch(() => {});
-    else modifySelect(usd.session, [path], e.shiftKey && ctrl ? 'up' : e.shiftKey ? 'add' : ctrl ? 'remove' : 'replace', 'hierarchy');
+    if (e.shiftKey && !e.altKey) return modifySelect(usd.session, range(path), ctrl ? 'add' : 'replace', 'hierarchy'); // the anchor stays
+    anchor.current = path;
+    if (e.shiftKey) selectUpWithSubtree(usd.session, path, 'hierarchy').catch(() => {});
+    else modifySelect(usd.session, [path], e.altKey ? 'up' : ctrl ? (picked.has(path) ? 'remove' : 'add') : 'replace', 'hierarchy');
+  };
+  /** What a row's lock or eye acts on: the whole selection when the row is part of it, else the row. */
+  const targets = (path: string) => (picked.has(path) ? selection.paths : [path]);
+  const setVisible = async (path: string, visible: boolean) => {
+    const paths = targets(path);
+    if (!visible) return usd.usd.hide(paths); // one edit (session layer)
+    for (const p of paths) await usd.usd.setVisible(p, true); // ponytail: an edit per prim; fine for hand-picked selections
   };
   const pickVariant = (path: string, set: string, variant: string) => { // shown at once: the edit and the re-read take a moment
     setSets((m) => new Map(m).set(path, (m.get(path) ?? []).map((v) => (v.name === set ? { ...v, selection: variant } : v))));
@@ -210,8 +218,8 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
                     <td>
                       {!r.hit && (
                         <span className="tree__flags" onDoubleClick={(e) => e.stopPropagation()}>
-                          <button className="tree__flag" type="button" tabIndex={-1} aria-pressed={locked} aria-label={`${locked ? 'Unlock' : 'Lock'} ${r.name}`} title={locked ? 'Unlock (selectable again)' : 'Lock (not selectable in the view)'} onClick={(e) => { e.stopPropagation(); usd.session.setLocked(r.path, !locked); }}>{locked ? '🔒' : '🔓'}</button>
-                          <button className="tree__flag" type="button" tabIndex={-1} aria-pressed={!r.visible} aria-label={`${r.visible ? 'Hide' : 'Show'} ${r.name}`} title={`${r.visible ? 'Hide in' : 'Show in'} the view (not saved; hidden meshes still run by their role)`} onClick={(e) => { e.stopPropagation(); usd.usd.setVisible(r.path, !r.visible).catch(() => {}); }}>{r.visible ? '●' : '○'}</button>
+                          <button className="tree__flag" type="button" tabIndex={-1} aria-pressed={locked} aria-label={`${locked ? 'Unlock' : 'Lock'} ${r.name}`} title={`${locked ? 'Unlock (selectable again)' : 'Lock (not selectable in the view)'}${picked.has(r.path) ? ': every selected prim' : ''}`} onClick={(e) => { e.stopPropagation(); for (const p of targets(r.path)) usd.session.setLocked(p, !locked); }}>{locked ? '🔒' : '🔓'}</button>
+                          <button className="tree__flag" type="button" tabIndex={-1} aria-pressed={!r.visible} aria-label={`${r.visible ? 'Hide' : 'Show'} ${r.name}`} title={`${r.visible ? 'Hide in' : 'Show in'} the view${picked.has(r.path) ? ', every selected prim' : ''} (not saved; hidden meshes still run by their role)`} onClick={(e) => { e.stopPropagation(); setVisible(r.path, !r.visible).catch(() => {}); }}>{r.visible ? '●' : '○'}</button>
                         </span>
                       )}
                       {Array.from({ length: r.depth }, (_, i) => <span key={i} className="tree__indent" />)}
@@ -240,8 +248,8 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
         ) : <p className="text-muted">Open a model to list its prims.</p>}
       </div>
       <p className="text-muted line">{selected.size} of {total} meshes selected{more ? `, ${more} more rows: search to narrow` : ''}.</p>
-      <p className="text-muted line" title="Click selects a prim, Shift adds, Ctrl removes, Shift+Ctrl adds its parent, Shift+Alt the parent with everything below it, Alt the rows from the last click. A locked prim cannot be picked in the view. F frames the selection, H hides it, Shift+H shows only it, Alt+H shows everything; hiding and variants are not saved, and hidden meshes still run by their role. A role applies to every mesh at or below the selected prims; instanced meshes (×n) only shade.">
-        Shift adds, Ctrl removes, H hides; a role goes to every mesh below.
+      <p className="text-muted line" title="Click selects a prim, Shift the rows from the last click, Ctrl adds or removes one, Ctrl+Shift adds the rows, Alt adds the parent, Shift+Alt the parent with everything below it. A locked prim cannot be picked in the view; the lock and the eye of a selected row act on every selected prim. F frames the selection, H hides it, Shift+H shows only it, Alt+H shows everything; hiding and variants are not saved, and hidden meshes still run by their role. A role applies to every mesh at or below the selected prims; instanced meshes (×n) only shade.">
+        Shift selects a range, Ctrl toggles, H hides; a role goes to every mesh below.
       </p>
     </>
   );
