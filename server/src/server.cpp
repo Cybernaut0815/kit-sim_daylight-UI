@@ -448,7 +448,9 @@ int main(int argc, char** argv) {
   httplib::Server svr;
   svr.new_task_queue = [] { return new httplib::ThreadPool(16, 128); };   // long polls and waiting /run calls never starve uploads
   svr.set_payload_max_length(maxMb << 20);
-  if (!web.empty() && !svr.set_mount_point("/", web)) { std::fprintf(stderr, "error: --web %s is not a directory\n", web.c_str()); return 1; }
+  // The page's USD viewer runs a threaded wasm core (SharedArrayBuffer): its files must come cross-origin isolated.
+  const httplib::Headers isolation{{"Cross-Origin-Opener-Policy", "same-origin"}, {"Cross-Origin-Embedder-Policy", "require-corp"}};
+  if (!web.empty() && !svr.set_mount_point("/", web, isolation)) { std::fprintf(stderr, "error: --web %s is not a directory\n", web.c_str()); return 1; }
   svr.set_logger([](const httplib::Request& req, const httplib::Response& res) {
     std::fprintf(stderr, "%s %s -> %d\n", req.method.c_str(), req.path.c_str(), res.status);
   });

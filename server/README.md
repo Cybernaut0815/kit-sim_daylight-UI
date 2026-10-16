@@ -8,6 +8,11 @@ cmake --preset vs2022 && cmake --build --preset release && ctest --preset releas
 build\RelWithDebInfo\daylight_server.exe --web ..\web\dist                           # also serves the built frontend on :8080
 ```
 
+The frontend's 3D view (the USD viewer) runs a threaded wasm core, so `--web` serves its files cross-origin isolated
+(`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`; the API and the docs pages
+are unchanged). Browsers honour isolation only in a secure context: `http://localhost` works, LAN browsers need HTTPS
+in front of the server (a TLS reverse proxy) or a port forward to their own localhost.
+
 ## API documentation (served by the server)
 
 | URL | What |
