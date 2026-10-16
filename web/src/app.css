@@ -59,11 +59,11 @@
 .tree { block-size: 15rem; min-block-size: 8rem; overflow: auto; resize: vertical; border: 1px solid var(--border-subtle); --row-h: 28px; }
 .tree > .data-table { table-layout: fixed; }
 .tree > p { padding: var(--space-3); }
-.tree tbody { user-select: none; } /* shift-click extends the selection of meshes, not of text */
-.tree__col-num { inline-size: 5.5rem; }
+.tree tbody { user-select: none; } /* shift-click extends the selection of prims, not of text */
+.tree tbody tr[aria-current="true"] { box-shadow: inset 2px 0 0 var(--accent); } /* the active prim, as in the viewer's hierarchy */
 .tree__col-role { inline-size: 6.5rem; }
 .tree td:first-child { overflow: hidden; text-overflow: ellipsis; }
-.tree__indent { display: inline-block; inline-size: var(--space-4); }
+.tree__indent { display: inline-block; inline-size: var(--space-3); }
 .tree__toggle { display: inline-flex; inline-size: var(--space-4); padding: 0; border: 0; background: none; color: var(--text-muted); vertical-align: middle; cursor: pointer; }
 /* zha-ui 0.1.4: the segmented radios are position:absolute without a positioned ancestor, so inside a scrolling panel
    they extend the document's scrollable overflow and focusing one scrolls the whole page. Upstream fix pending. */

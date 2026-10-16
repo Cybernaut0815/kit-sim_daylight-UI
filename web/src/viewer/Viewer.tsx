@@ -102,10 +102,11 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
     };
     usd.three.beforeRender.add(onFrame);
 
-    // The viewer selects (click, Shift adds, Ctrl removes, Shift+drag a box): its selection becomes the rows at or under it.
+    // The viewer's selection is the app's (the view, the hierarchy, the results table through usd.select): the store
+    // mirrors its prims and the rows at or under them.
     const onSel = (e: Event) => {
-      const { paths, source } = (e as UsdSessionEventMap['selectionchange']).detail;
-      if (source === 'viewport') dispatch({ type: 'SELECT', ids: idsUnder(paths, latest.current.objects) }); // replaces: the viewer applied Shift / Ctrl
+      const { paths, source, active } = (e as UsdSessionEventMap['selectionchange']).detail;
+      dispatch({ type: 'SELECTION', paths: [...paths], active, source });
     };
     usd.addEventListener('selectionchange', onSel);
 

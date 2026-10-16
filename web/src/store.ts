@@ -3,6 +3,7 @@ import type { RemoteManifest } from 'daylight-mesh';
 import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
 import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
+import { idsUnder } from './lib/tree';
 
 export type Role = 'receiver' | 'shade' | 'none';
 /**
@@ -50,8 +51,15 @@ export interface RunResult {
 }
 export type Run = { status: 'idle' } | { status: 'queued'; position: number } | { status: 'running' } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
 
+/** The viewer's selection: prim paths (any prim: a parent stands for every mesh below it), the active one, who made it. */
+export interface Selection { paths: string[]; active: string | null; source: string }
+const NO_SELECTION: Selection = { paths: [], active: null, source: 'api' };
+
 export interface State {
-  objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
+  objects: ObjectRow[];
+  selection: Selection;
+  selected: Set<string>; // the rows at or under the selection: what the role buttons apply to
+  hovered: string | null;
   probe: Probe | null; // element under the cursor in the viewport
   bin: [number, number] | null; // hovered histogram bin [lo, hi): the viewer fades everything else
   settings: Settings; stations: Station[] | null; run: Run; column: number; colourBy: 'plain' | 'value';
@@ -63,7 +71,8 @@ export interface State {
 export type Action =
   | { type: 'LOAD'; objects: ObjectRow[] }
   | { type: 'ROLE'; ids: string[]; role: Role }
-  | { type: 'SELECT'; ids: string[]; additive?: boolean }
+  | { type: 'SELECT'; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
+  | ({ type: 'SELECTION' } & Selection) // the viewer's selection changed
   | { type: 'HOVER'; id: string | null }
   | { type: 'SITE'; patch: Partial<Settings['site']> }
   | { type: 'WEATHER'; patch: Partial<Settings['weather']> }
@@ -92,7 +101,7 @@ export const defaultSettings = (): Settings => ({
 });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  objects: [], selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', result: null, error: null, errors: {},
+  objects: [], selection: NO_SELECTION, selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', result: null, error: null, errors: {},
 });
 
 // A job still on its way when the model or the roles change keeps its status (the button stays busy until it ends);
@@ -103,7 +112,7 @@ const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.l
 export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case 'LOAD':
-      return { ...s, objects: a.objects, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain' };
+      return { ...s, objects: a.objects, selection: NO_SELECTION, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain' };
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
       const objects = s.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o));
       if (objects.every((o, i) => o === s.objects[i])) return s; // nothing changed: keep the result
@@ -115,6 +124,8 @@ export function reducer(s: State, a: Action): State {
       for (const id of a.ids) next.has(id) ? next.delete(id) : next.add(id);
       return { ...s, selected: next };
     }
+    case 'SELECTION':
+      return { ...s, selection: { paths: a.paths, active: a.active, source: a.source }, selected: new Set(idsUnder(a.paths, s.objects)) };
     case 'HOVER':
       return s.hovered === a.id ? s : { ...s, hovered: a.id };
     case 'SITE': {

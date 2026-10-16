@@ -14,6 +14,17 @@ describe('roles', () => {
     s = reducer(s, { type: 'ROLE', ids: ['b', 'c'], role: 'shade' });
     expect(s.objects.map((o) => o.role)).toEqual(['receiver', 'shade', 'shade']);
   });
+  it("SELECTION mirrors the viewer's prims; a parent selects every mesh below it, and LOAD clears it", () => {
+    const rows = [{ ...obj('a'), path: '/W/G/a' }, { ...obj('b'), path: '/W/G/b' }, { ...obj('c'), path: '/W/c' }];
+    let s = reducer(initialState(), { type: 'LOAD', objects: rows });
+    s = reducer(s, { type: 'SELECTION', paths: ['/W/G'], active: '/W/G', source: 'hierarchy' });
+    expect([...s.selected]).toEqual(['a', 'b']);
+    expect(s.selection).toEqual({ paths: ['/W/G'], active: '/W/G', source: 'hierarchy' });
+    s = reducer(s, { type: 'ROLE', ids: [...s.selected], role: 'shade' });
+    expect(s.objects.map((o) => o.role)).toEqual(['shade', 'shade', 'receiver']);
+    s = reducer(s, { type: 'LOAD', objects: rows });
+    expect([s.selection.paths, s.selected.size]).toEqual([[], 0]);
+  });
   it('an instanced mesh is never a receiver: Shade and Ignore only', () => {
     let s = reducer(initialState(), { type: 'LOAD', objects: [obj('a', 'none'), { ...obj('i', 'none'), instances: 3 }] });
     s = reducer(s, { type: 'ROLE', ids: ['a', 'i'], role: 'receiver' });

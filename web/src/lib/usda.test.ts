@@ -49,5 +49,6 @@ describe('toUsda', () => {
     expect(t).toContain('def Mesh "Mesh"');
     expect(t).toContain('def Mesh "Instances_2"'); // the child, beside the instancer
     expect(n.get('/Model/Oak_trees/Instances')).toBe('Oak trees');
+    expect(n.get('/Model/Oak_trees/Instances/Mesh')).toBe('Oak trees');
   });
 });

@@ -46,7 +46,8 @@ export function toUsda(root: Object3D): { parts: string[]; names: Map<string, st
     out.push('def Mesh "Mesh"\n{\n');
     mesh(o);
     out.push('}\n}\n');
-    names.set(`${path}/Instances`, o.name || path.slice(path.lastIndexOf('/') + 1)); // the row is named by its instancer
+    const own = o.name || path.slice(path.lastIndexOf('/') + 1);
+    names.set(`${path}/Instances`, own).set(`${path}/Instances/Mesh`, own); // instancer and prototype: the node's own name
   };
   const prim = (o: Object3D, name: string, path: string) => {
     if (o.name && o.name !== name) names.set(path, o.name);

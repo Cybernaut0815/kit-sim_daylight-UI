@@ -11,7 +11,7 @@ import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
 import { gradientFor, type Scale } from './lib/gradients';
 import { loadFiles } from './lib/loaders';
-import { rowNames, treeFromPaths, type TreeNode } from './lib/tree';
+import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, globalRange, unitFor, vertexAreas } from './lib/result';
 import { LocationPanel } from './panels/LocationPanel';
@@ -53,7 +53,7 @@ export default function App() {
   const theme = mode === 'auto' ? system : mode;
   const [ui, setUi] = useState(readUi);
   const [meshes, setMeshes] = useState<ReadonlyMap<string, Object3D>>(new Map()); // row id -> the viewer's object for it
-  const [tree, setTree] = useState<TreeNode[]>([]);
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map()); // prim path -> the model's own name (glb / gltf / obj)
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh (+ areas on demand): converted once, uploaded once, referenced by id
@@ -98,18 +98,18 @@ export default function App() {
       // USD opens as picked (a folder keeps its layout, so references into subfolders resolve); glb / gltf / obj become a
       // USDA layer first, so every model takes the same path.
       // ponytail: a folder with several top-level USD files opens the first by name; add a root chooser when that is a real case
-      let names = new Map<string, string>(), source: LocalFile[] | File;
+      let own = new Map<string, string>(), source: LocalFile[] | File;
       if (files.some((f) => /\.usd[acz]?$/i.test(f.name))) source = files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
       else {
         const usda = toUsda(await loadFiles(files));
-        names = usda.names;
+        own = usda.names;
         source = new File(usda.parts, 'model.usda');
       }
       // open() closes the current stage first: drop its rows and conversions now, so nothing hovers, probes or runs a
       // model that is no longer drawn. A failure before this point keeps the current model.
       conv.current.clear();
       setMeshes(new Map());
-      setTree([]);
+      setNames(new Map());
       dispatch({ type: 'LOAD', objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
       // The bare viewer shows its messages nowhere: a referenced file that was not picked, or a failed page, still
@@ -117,24 +117,22 @@ export default function App() {
       const problems = usd.session.log.slice(logged).filter((m) => m.level === 'error').map((m) => m.message);
       const found = extract(usd.three.items(), usd.three.root, info.metersPerUnit);
       if (!found.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
-      // An instanced mesh's own path is Hydra's prototype path. A point instancer's copies are named and placed by the
-      // instancer, which is what the viewer selects for a click on any of them (by instancer/prototype when it has
-      // several); native instances are prims of their own, so every copy's path is kept for the selection.
+      // An instanced mesh's own path is Hydra's. A point instancer's prototype is re-rooted as <prototype>/ForInstancer<hash>:
+      // without that segment it is the prototype prim the tree shows; its row also answers to the instancer, which is what
+      // the viewer selects for a click on a copy. Native instances are prims of their own: every copy's path is kept.
       const picks = await Promise.all(found.map((e) => (e.instances ? usd.usd.resolvePick(e.item.rid, 0).catch(() => null) : null)));
-      const protos = new Map<string, number>();
-      for (const p of picks) if (p?.instancer) protos.set(p.instancer, (protos.get(p.instancer) ?? 0) + 1);
-      const leaf = (p: string) => p.split('/').filter((s) => s && !s.startsWith('ForInstancer')).pop() ?? 'Mesh'; // Hydra re-roots prototypes as ForInstancer<hash>
       const seen = new Set<string>(), paths: string[] = [], copies: (string[] | undefined)[] = [];
       for (const [i, e] of found.entries()) {
         const p = picks[i];
-        let path = p?.instancer ? (protos.get(p.instancer)! > 1 ? `${p.instancer}/${leaf(e.item.path)}` : p.instancer) : p?.path ?? e.item.path;
-        for (let k = 2, base = path; seen.has(path); k++) path = `${base}_${k}`;
+        let path = p?.instancer ? e.item.path.split('/').filter((s) => !s.startsWith('ForInstancer')).join('/') : p?.path ?? e.item.path;
+        for (let k = 2, base = path; seen.has(path); k++) path = `${base}_${k}`; // one prototype of two instancers
         seen.add(path);
         paths.push(path);
-        copies.push(p && !p.instancer ? await Promise.all(Array.from({ length: e.instances }, (_, j) => usd.usd.resolvePick(e.item.rid, j).then((r) => r?.path ?? path, () => path))) : undefined);
+        copies.push(!p ? undefined : p.instancer ? [path, p.instancer]
+          : await Promise.all(Array.from({ length: e.instances }, (_, j) => usd.usd.resolvePick(e.item.rid, j).then((r) => r?.path ?? path, () => path))));
       }
       const role = found.length === 1 && !found[0].instances ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
-      const labels = rowNames(paths, names), objects: ObjectRow[] = [], map = new Map<string, Object3D>();
+      const labels = rowNames(paths, own), objects: ObjectRow[] = [], map = new Map<string, Object3D>();
       found.forEach((e, i) => {
         const id = crypto.randomUUID(), name = labels[i];
         conv.current.set(id, e.obj ? { obj: Object.assign(e.obj, { id, name }) } : { make: () => Object.assign(e.make!(), { id, name }) });
@@ -143,7 +141,7 @@ export default function App() {
       });
       setMeshes(map);
       setSunScale(1);
-      setTree(treeFromPaths(objects, names));
+      setNames(own);
       dispatch({ type: 'LOAD', objects });
       if (problems.length) setLoadError(problems.slice(0, 3).join(' '));
     } catch (e) {
@@ -259,7 +257,7 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel tree={tree} objects={state.objects} selected={state.selected} loading={loading} error={loadError} errors={state.errors} onFiles={onFiles} dispatch={dispatch} />
+                <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} onFiles={onFiles} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
