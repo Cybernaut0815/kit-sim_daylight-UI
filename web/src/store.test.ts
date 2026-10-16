@@ -19,6 +19,8 @@ describe('roles', () => {
     s = reducer(s, { type: 'ROLE', ids: ['a', 'i'], role: 'receiver' });
     expect(s.objects.map((o) => o.role)).toEqual(['receiver', 'none']);
     expect(reducer(s, { type: 'ROLE', ids: ['i'], role: 'shade' }).objects[1].role).toBe('shade');
+    expect(reducer(s, { type: 'ROLE', ids: ['i'], role: 'receiver' })).toBe(s); // refused: the state (and a result) stays
+    expect(reducer(s, { type: 'ROLE', ids: ['a'], role: 'receiver' })).toBe(s); // already so
   });
 });
 

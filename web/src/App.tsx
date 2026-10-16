@@ -39,7 +39,8 @@ const media = window.matchMedia('(prefers-color-scheme: dark)');
 const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_KEY); return m === 'light' || m === 'dark' ? m : 'auto'; } catch { return 'auto'; } };
 const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths } }; } catch { return UI; } };
 
-interface Conv { obj: ObjMesh; areas?: Float64Array; vareas?: Float64Array }
+interface Conv { obj?: ObjMesh; make?: () => ObjMesh; areas?: Float64Array; vareas?: Float64Array } // make: an instanced shade, built on first use
+const objOf = (c: Conv) => (c.obj ??= c.make!());
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => {
@@ -87,7 +88,10 @@ export default function App() {
     setMode(nextMode);
   };
 
-  const onFiles = useCallback(async (files: File[]) => { // stable: the memoised Model panel keeps its props across runs
+  const onFiles = useCallback(async (picked: File[]) => { // stable: the memoised Model panel keeps its props across runs
+    // macOS metadata (._x, .DS_Store, __MACOSX/) is never part of a model: an AppleDouble '._site.usda' would even be taken as the root layer
+    const files = picked.filter((f) => !f.name.startsWith('.') && !/(^|\/)__MACOSX\//.test(f.webkitRelativePath));
+    if (!files.length) return;
     setLoading(true);
     setLoadError(null);
     try {
@@ -99,35 +103,43 @@ export default function App() {
       else {
         const usda = toUsda(await loadFiles(files));
         names = usda.names;
-        source = new File(usda.parts, `${files[0].name.replace(/\.[^.]*$/, '')}.usda`);
+        source = new File(usda.parts, 'model.usda');
       }
+      // open() closes the current stage first: drop its rows and conversions now, so nothing hovers, probes or runs a
+      // model that is no longer drawn. A failure before this point keeps the current model.
+      conv.current.clear();
+      setMeshes(new Map());
+      setTree([]);
+      dispatch({ type: 'LOAD', objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
       // The bare viewer shows its messages nowhere: a referenced file that was not picked, or a failed page, still
       // resolves open() with part of the model. Say so, and keep what loaded.
       const problems = usd.session.log.slice(logged).filter((m) => m.level === 'error').map((m) => m.message);
-      conv.current.clear();
-      // ponytail: every mesh converted at load (one pass, about 2x geometry memory); convert per role lazily if huge models hurt
       const found = extract(usd.three.items(), usd.three.root, info.metersPerUnit);
       if (!found.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
-      const role = found.length === 1 && !found[0].instances ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
-      // An instanced mesh's own path is Hydra's prototype path: name and place it by its instancer (or its first instance),
-      // which is also what the viewer selects for a click on one of them.
-      const seen = new Set<string>(), paths: string[] = [];
-      for (const { item, instances } of found) {
-        const pick = instances ? await usd.usd.resolvePick(item.rid, 0).catch(() => null) : null;
-        let path = pick?.instancer ?? pick?.path ?? item.path;
-        if (seen.has(path)) path += `/${item.path.slice(item.path.lastIndexOf('/') + 1)}`; // several prototypes of one instancer
+      // An instanced mesh's own path is Hydra's prototype path. A point instancer's copies are named and placed by the
+      // instancer, which is what the viewer selects for a click on any of them (by instancer/prototype when it has
+      // several); native instances are prims of their own, so every copy's path is kept for the selection.
+      const picks = await Promise.all(found.map((e) => (e.instances ? usd.usd.resolvePick(e.item.rid, 0).catch(() => null) : null)));
+      const protos = new Map<string, number>();
+      for (const p of picks) if (p?.instancer) protos.set(p.instancer, (protos.get(p.instancer) ?? 0) + 1);
+      const leaf = (p: string) => p.split('/').filter((s) => s && !s.startsWith('ForInstancer')).pop() ?? 'Mesh'; // Hydra re-roots prototypes as ForInstancer<hash>
+      const seen = new Set<string>(), paths: string[] = [], copies: (string[] | undefined)[] = [];
+      for (const [i, e] of found.entries()) {
+        const p = picks[i];
+        let path = p?.instancer ? (protos.get(p.instancer)! > 1 ? `${p.instancer}/${leaf(e.item.path)}` : p.instancer) : p?.path ?? e.item.path;
+        for (let k = 2, base = path; seen.has(path); k++) path = `${base}_${k}`;
         seen.add(path);
         paths.push(path);
+        copies.push(p && !p.instancer ? await Promise.all(Array.from({ length: e.instances }, (_, j) => usd.usd.resolvePick(e.item.rid, j).then((r) => r?.path ?? path, () => path))) : undefined);
       }
+      const role = found.length === 1 && !found[0].instances ? 'receiver' : 'none'; // a single mesh runs as is; a scene is assigned by hand
       const labels = rowNames(paths, names), objects: ObjectRow[] = [], map = new Map<string, Object3D>();
-      found.forEach(({ item, obj, instances }, i) => {
-        const id = crypto.randomUUID();
-        obj.id = id;
-        obj.name = labels[i];
-        conv.current.set(id, { obj });
-        map.set(id, item.object!);
-        objects.push({ id, name: labels[i], path: paths[i], tris: obj.indices.length / 3, verts: obj.positions.length / 3, role, ...(instances ? { instances } : {}) });
+      found.forEach((e, i) => {
+        const id = crypto.randomUUID(), name = labels[i];
+        conv.current.set(id, e.obj ? { obj: Object.assign(e.obj, { id, name }) } : { make: () => Object.assign(e.make!(), { id, name }) });
+        map.set(id, e.item.object!);
+        objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
       });
       setMeshes(map);
       setSunScale(1);
@@ -135,9 +147,6 @@ export default function App() {
       dispatch({ type: 'LOAD', objects });
       if (problems.length) setLoadError(problems.slice(0, 3).join(' '));
     } catch (e) {
-      setMeshes(new Map()); // open() closed the previous stage already
-      setTree([]);
-      dispatch({ type: 'LOAD', objects: [] });
       setLoadError((e as Error).message);
     } finally {
       setLoading(false);
@@ -147,7 +156,7 @@ export default function App() {
   const weightsFor = useCallback((id: string, on: 'faces' | 'vertices') => {
     const c = conv.current.get(id);
     if (!c) return undefined;
-    const { positions, indices } = c.obj;
+    const { positions, indices } = objOf(c);
     return on === 'faces' ? (c.areas ??= faceAreas(positions, indices)) : (c.vareas ??= vertexAreas(positions, indices));
   }, []);
 
@@ -182,8 +191,8 @@ export default function App() {
     dispatch({ type: 'RUN', run: { status: 'queued', position: 0 } });
     try {
       const res = await runRemote('', {
-        sensors: receivers.map((o) => conv.current.get(o.id)!.obj),
-        context: shades.map((o) => conv.current.get(o.id)!.obj),
+        sensors: receivers.map((o) => objOf(conv.current.get(o.id)!)),
+        context: shades.map((o) => objOf(conv.current.get(o.id)!)),
         epw, args, signal: ctrl.signal, clientId: CLIENT_ID,
         onStatus: (job) => dispatch({ type: 'RUN', run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }),
       });

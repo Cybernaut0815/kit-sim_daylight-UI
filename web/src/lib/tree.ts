@@ -52,14 +52,17 @@ export function rowNames(paths: readonly string[], names: ReadonlyMap<string, st
   }
 }
 
-/** Ids of the rows at or under any of `paths`: a viewer selection may name an Xform, a subtree or a prim with no row. */
-export function idsUnder(paths: readonly string[], rows: readonly { id: string; path: string }[]): string[] {
+/**
+ * Ids of the rows at or under any of `paths`: a viewer selection may name an Xform, a subtree or a prim with no row. A
+ * row with `paths` (a natively instanced mesh: every copy is a prim) is hit through any of them.
+ */
+export function idsUnder(paths: readonly string[], rows: readonly { id: string; path: string; paths?: readonly string[] }[]): string[] {
   const sel = new Set(paths);
   const hit = (p: string) => {
     for (let q = p; q; q = q.slice(0, q.lastIndexOf('/'))) if (sel.has(q)) return true;
     return sel.has('/');
   };
-  return rows.filter((r) => hit(r.path)).map((r) => r.id);
+  return rows.filter((r) => (r.paths ?? [r.path]).some(hit)).map((r) => r.id);
 }
 
 /**

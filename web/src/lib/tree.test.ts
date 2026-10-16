@@ -43,6 +43,8 @@ describe('idsUnder', () => {
     expect(idsUnder(['/Model/scene/Building'], rows)).toEqual([]); // a path prefix is not an ancestor
     expect(idsUnder(['/'], rows)).toHaveLength(4);
     expect(idsUnder([], rows)).toEqual([]);
+    const copies = [{ id: 'chair', path: '/R/Chair_1/Geom/Mesh', paths: ['/R/Chair_1/Geom/Mesh', '/R/Chair_2/Geom/Mesh'] }];
+    expect(idsUnder(['/R/Chair_2/Geom/Mesh'], copies)).toEqual(['chair']); // a click on any native instance
   });
 });
 

@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { Agent } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
@@ -13,11 +14,18 @@ const isolation = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-E
 // `VITE_MOCK=1 vite` or `vite --mode mock` (npm run dev:mock): fake the server for GPU-free, offline UI work.
 export default defineConfig(({ command, mode }) => {
   const MOCK = !!process.env.VITE_MOCK || mode === 'mock';
-  // The viewer's wasm core is gitignored: without `npm run core` a dist builds, boots, and fails at the first model.
-  if (mode !== 'test' && !existsSync(new URL('../USD_WebViewer/web/public/core/usdcore.wasm', import.meta.url))) {
-    const missing = 'No USD core in USD_WebViewer/web/public/core: run `npm run core` (README).';
-    if (command === 'build') throw new Error(missing);
-    console.warn(missing);
+  // The viewer's wasm core is gitignored and fetched by `npm run core` for one viewer commit (usdcore.pin). Missing, or
+  // fetched for another commit (page and core never handshake), a dist would build, boot, and fail at the first model.
+  if (mode !== 'test') {
+    const pin = existsSync(new URL('./usdcore.pin', import.meta.url)) ? readFileSync(new URL('./usdcore.pin', import.meta.url), 'utf8').trim() : null;
+    let head: string | null = null;
+    try { head = execFileSync('git', ['-C', fileURLToPath(new URL('../USD_WebViewer', import.meta.url)), 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* no git: the existence check only */ }
+    const problem = !existsSync(new URL('../USD_WebViewer/web/public/core/usdcore.wasm', import.meta.url)) ? 'No USD core in USD_WebViewer/web/public/core'
+      : head && pin !== head ? `The USD core was fetched for ${pin?.slice(0, 7) ?? 'another commit'}, USD_WebViewer is at ${head.slice(0, 7)}` : null;
+    if (problem) {
+      if (command === 'build') throw new Error(`${problem}: run \`npm run core\` (README).`);
+      console.warn(`${problem}: run \`npm run core\` (README).`);
+    }
   }
   return {
     plugins: [react(), ...(MOCK ? [mock()] : [])],

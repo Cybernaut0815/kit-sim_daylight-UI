@@ -21,8 +21,9 @@ server\build\RelWithDebInfo\daylight_server.exe --web web\dist            # http
 ```
 
 `npm run core` fetches the USD viewer's wasm core (`usdcore.js`, `usdcore.wasm`, gitignored) from the viewer's GitHub
-Pages into `USD_WebViewer/web/public/core/`, after checking that it matches the pinned viewer commit; run it again after
-every bump of that submodule (a core built yourself can be copied there instead). The core needs a cross-origin isolated
+Pages into `USD_WebViewer/web/public/core/`, after checking that it was built from the same sources as the pinned viewer
+commit, and records that commit in `web/usdcore.pin`; the build refuses a core fetched for another commit, so run it
+again after every bump of that submodule (a core built yourself can be copied there instead, see `web/scripts/core.mjs`). The core needs a cross-origin isolated
 page: the server and the dev server send the headers, and browsers honour them on `localhost` or over HTTPS.
 
 Development: `cd web && npm run dev` (Vite proxies the API paths to `localhost:8080`; `npm run dev:mock` fakes the

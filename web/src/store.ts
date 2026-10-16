@@ -5,8 +5,11 @@ import { nearestStations } from './lib/geo';
 import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
 
 export type Role = 'receiver' | 'shade' | 'none';
-/** A mesh of the stage: its prim path, its drawn triangles and vertices; `instances`: one mesh drawn that many times. */
-export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; instances?: number }
+/**
+ * A mesh of the stage: its prim path, its drawn triangles and vertices; `instances`: one mesh drawn that many times;
+ * `paths`: every copy's prim path where each copy is its own prim (native instancing), so a click on any finds the row.
+ */
+export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; instances?: number; paths?: string[] }
 
 export type Quantity = 'radiation' | 'direct' | 'diffuse' | 'irradiance' | 'illuminance' | 'sunhours';
 export const QUANTITIES: Quantity[] = ['radiation', 'direct', 'diffuse', 'irradiance', 'illuminance', 'sunhours'];
@@ -101,8 +104,11 @@ export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case 'LOAD':
       return { ...s, objects: a.objects, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain' };
-    case 'ROLE': // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
-      return { ...s, objects: s.objects.map((o) => (a.ids.includes(o.id) && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o)), run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0 };
+    case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
+      const objects = s.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o));
+      if (objects.every((o, i) => o === s.objects[i])) return s; // nothing changed: keep the result
+      return { ...s, objects, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0 };
+    }
     case 'SELECT': {
       if (!a.additive) return { ...s, selected: new Set(a.ids) };
       const next = new Set(s.selected);

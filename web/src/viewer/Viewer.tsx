@@ -25,8 +25,12 @@ const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m 
 const PAINT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
 // The hover tint, over the paint (-1) and the viewer's selection fill (-2); it borrows the hovered object's geometry
 const TINT = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
-const tint = new THREE.Mesh(new THREE.BufferGeometry(), TINT); // never dispose its geometry: it is the viewer's
+const EMPTY = new THREE.BufferGeometry();
+const tint = new THREE.Mesh(EMPTY, TINT); // never dispose its geometry: it is the viewer's
 tint.raycast = () => {}; // the viewer's pick walks its objects' children
+/** Lets the renderer forget a mesh: it keeps a render object (holding the geometry) per mesh until the mesh fires 'dispose'. */
+const release = (m: THREE.Mesh) => (m as unknown as THREE.EventDispatcher<{ dispose: object }>).dispatchEvent({ type: 'dispose' });
+const drop = (m: THREE.Mesh) => { m.removeFromParent(); m.geometry.dispose(); release(m); }; // a result overlay, for good
 
 interface Props {
   meshes: ReadonlyMap<string, THREE.Object3D>; // row id -> the viewer's object for it
@@ -255,8 +259,7 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
     usd.three.invalidate();
   }, [meshes, sun?.site, sun?.time, theme, shown]); // eslint-disable-line react-hooks/exhaustive-deps -- not north or size
 
-  // The model and the dome in view: after the sun path is placed, before the new grid goes in (React runs every cleanup
-  // first, so the old grid is out): the grid is a floor, not part of what to frame.
+  // The model and the dome in view, once the sun path is placed (the grid opts out of framing: it is a floor).
   useEffect(() => { if (meshes.size) usd.frame(); }, [meshes]);
 
   // The ground grid under the model, in the theme's hairline colours.
@@ -266,6 +269,7 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
     const col = (name: string) => { const k = new THREE.Color(solid(name)); return byValue ? k : untone(k); };
     const { size, x, y, z } = c.gridSpec, grid = new THREE.GridHelper(size, 20, col('--border-default'), col('--border-subtle'));
     grid.position.set(x, y, z);
+    grid.userData.frame = false; // F and frame() fit the model and the dome, not the floor (the clip planes still see it)
     usd.three.overlay.add(grid);
     usd.three.invalidate();
     return () => { usd.three.overlay.remove(grid); grid.dispose(); };
@@ -300,7 +304,7 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
           attr.needsUpdate = true;
           continue;
         }
-        if (m) { m.removeFromParent(); m.geometry.dispose(); paint.current.delete(id); }
+        if (m) { drop(m); paint.current.delete(id); }
         const next = new THREE.Mesh((obj as THREE.Mesh).geometry.clone(), PAINT); // a copy: the viewer's geometry gets no colour stream
         next.raycast = () => {}; // the viewer's pick walks its objects' children
         await applyToThree(next, vals, { material: false, rgb }); // per face: non-indexed, one colour per triangle
@@ -308,7 +312,7 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
         obj.add(next); // follows the object and leaves with it when the stage closes
         paint.current.set(id, next);
       }
-      for (const [id, m] of paint.current) if (!keep.has(id)) { m.removeFromParent(); m.geometry.dispose(); paint.current.delete(id); }
+      for (const [id, m] of paint.current) if (!keep.has(id)) { drop(m); paint.current.delete(id); }
       usd.three.invalidate();
     })();
     return () => { stale = true; };
@@ -320,18 +324,20 @@ export function Viewer({ meshes, loading, objects, selected, hovered, colourBy, 
     if (!o || (o as THREE.InstancedMesh).isInstancedMesh) return; // ponytail: no tint on instanced shades (a child draws once, not per instance)
     tint.geometry = (o as THREE.Mesh).geometry;
     TINT.color.set(solid('--accent'));
-    TINT.opacity = paint.current.has(hovered!) ? 0.1 : 0.22;
+    TINT.opacity = byValue?.receivers.includes(hovered!) ? 0.1 : 0.22; // from the props: the paint lands asynchronously
     o.add(tint);
     usd.three.invalidate();
     return () => { tint.removeFromParent(); usd.three.invalidate(); };
   }, [hovered, meshes, byValue, theme]);
+  // A new model: the tint lets go of the last one's geometry (the renderer would hold it until the next hover).
+  useEffect(() => () => { tint.geometry = EMPTY; release(tint); }, [meshes]);
 
   // The store's selection (tree, results table, All / None) shown by the viewer, unless it already covers exactly these rows.
   useEffect(() => {
     const have = idsUnder(usd.selection, objects);
     if (have.length === selected.size && have.every((id) => selected.has(id))) return;
-    // ponytail: the viewer fills at most 2000 prims; instanced rows carry prototype paths, so they do not highlight
-    usd.select(objects.filter((o) => selected.has(o.id)).map((o) => o.path));
+    // ponytail: the viewer fills at most 2000 prims
+    usd.select(objects.filter((o) => selected.has(o.id)).flatMap((o) => o.paths ?? [o.path])); // every copy of a natively instanced row
   }, [selected, objects]);
 
   return (

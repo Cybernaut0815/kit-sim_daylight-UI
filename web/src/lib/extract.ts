@@ -1,49 +1,52 @@
 // The USD viewer's drawn meshes -> daylight meshes (metres, Z-up). fromThree reads the viewer's own geometry, so result
 // rows map 1:1 to the drawn triangles and vertices; stand-ins carry the world matrix, which also keeps the viewer's
 // highlight overlays (children of its objects) out.
-import { Matrix4, Mesh, type InstancedMesh, type Object3D } from 'three';
+import { Matrix4, Mesh, type BufferGeometry, type InstancedMesh, type Object3D } from 'three';
 import { fromThree, type ObjMesh } from 'daylight-mesh';
 
 /** What the viewer's three.items() lists (only what is used here). */
 export interface RenderItem { rid: number; path: string; kind: string; object: Object3D | null }
-export interface Extracted { item: RenderItem; obj: ObjMesh; instances: number }
+/** A drawn mesh: converted now (`obj`), or for an instanced one built on first use (`make`), since a scatter of many
+ *  detailed copies would cost gigabytes at load even when it is never given a role. */
+export interface Extracted { item: RenderItem; instances: number; tris: number; verts: number; obj?: ObjMesh; make?: () => ObjMesh }
 
-/** Concatenates meshes into one (indices offset per part). */
-function merge(parts: ObjMesh[]): ObjMesh {
-  let np = 0, ni = 0;
-  for (const p of parts) { np += p.positions.length; ni += p.indices.length; }
-  const positions = new Float64Array(np), indices = new Uint32Array(ni);
-  let op = 0, oi = 0;
-  for (const p of parts) {
-    positions.set(p.positions, op);
-    for (let i = 0; i < p.indices.length; i++) indices[oi + i] = p.indices[i] + op / 3;
-    op += p.positions.length;
-    oi += p.indices.length;
-  }
-  return { name: parts[0].name, positions, indices };
-}
+const stand = (geometry: BufferGeometry, world: Matrix4) => {
+  const s = new Mesh(geometry);
+  s.matrixAutoUpdate = false; // fromThree's updateMatrixWorld then copies matrix into matrixWorld
+  s.matrix.copy(world);
+  return s;
+};
 
 /**
- * Every shown mesh item of the stage as one ObjMesh, scaled to metres. An instanced item becomes one mesh of all its
- * instances (a shade); its instance matrices are in stage space, under the root's up-axis rotation.
+ * Every shown mesh item of the stage, scaled to metres. An instanced item becomes one mesh of all its instances (a
+ * shade), whose instance matrices are in stage space under the root's up-axis rotation.
+ * ponytail: instance matrices come from the core as float32 (0.5 m steps at 5e6 m survey coordinates), unlike the
+ * float64 matrices of plain meshes; send them as doubles in the viewer's protocol if georeferenced scatters matter.
  */
 export function extract(items: readonly RenderItem[], root: Object3D, scale: number): Extracted[] {
   root.updateMatrixWorld(true);
-  const out: Extracted[] = [];
+  const rootWorld = root.matrixWorld.clone(), out: Extracted[] = [];
   for (const item of items) {
     const o = item.object;
     if (item.kind !== 'mesh' || !o?.visible) continue;
-    const im = o as InstancedMesh, n = im.isInstancedMesh ? im.count : 0;
-    const worlds = n ? Array.from({ length: n }, (_, i) => new Matrix4().fromArray(im.instanceMatrix.array, 16 * i).premultiply(root.matrixWorld)) : [o.matrixWorld];
-    // ponytail: one stand-in per instance; batch the matrices if stages with 100k instances show up
-    const stands = worlds.map((m) => {
-      const s = new Mesh((o as Mesh).geometry);
-      s.matrixAutoUpdate = false; // fromThree's updateMatrixWorld then copies matrix into matrixWorld
-      s.matrix.copy(m);
-      return s;
-    });
-    const parts = fromThree(stands, { scale });
-    out.push({ item, obj: n ? merge(parts) : parts[0], instances: n });
+    const g = (o as Mesh).geometry, im = o as InstancedMesh;
+    if (!im.isInstancedMesh) {
+      const obj = fromThree([stand(g, o.matrixWorld)], { scale })[0];
+      out.push({ item, instances: 0, tris: obj.indices.length / 3, verts: obj.positions.length / 3, obj });
+      continue;
+    }
+    const n = im.count, V = g.attributes.position.count, I = g.index ? g.index.count : V, all = im.instanceMatrix.array;
+    if (!n) continue; // a prototype with no (visible) instances draws nothing
+    const make = (): ObjMesh => { // one instance at a time: the peak is the result plus one copy
+      const positions = new Float64Array(3 * V * n), indices = new Uint32Array(I * n), m = new Matrix4();
+      for (let i = 0; i < n; i++) {
+        const [p] = fromThree([stand(g, m.fromArray(all, 16 * i).premultiply(rootWorld))], { scale });
+        positions.set(p.positions, 3 * V * i);
+        for (let k = 0; k < I; k++) indices[I * i + k] = p.indices[k] + V * i;
+      }
+      return { name: item.path, positions, indices };
+    };
+    out.push({ item, instances: n, tris: (I / 3) * n, verts: V * n, make });
   }
   return out;
 }
