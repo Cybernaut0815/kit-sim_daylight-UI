@@ -7,14 +7,16 @@ import { Alert, Section } from '../ui';
 import { PrimTree } from './PrimTree';
 
 const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none: 'Ignore' };
+const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. Not saved to the model.';
 
 interface Props {
   objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
-  loading: boolean; error: string | null; errors: Record<string, string>; stage: number;
-  onFiles: (files: File[]) => void; onVariant: (path: string, set: string, variant: string) => void; dispatch: Dispatch<Action>;
+  loading: boolean; error: string | null; errors: Record<string, string>; stage: number; subdiv: number;
+  onFiles: (files: File[]) => void; onVariant: (path: string, set: string, variant: string) => void;
+  onSubdiv: (level: number) => void; onRefine: (paths: string[], level: number | null) => void; dispatch: Dispatch<Action>;
 }
 
-export const ModelPanel = memo(function ModelPanel({ objects, selection, selected, names, loading, error, errors, stage, onFiles, onVariant, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ objects, selection, selected, names, loading, error, errors, stage, subdiv, onFiles, onVariant, onSubdiv, onRefine, dispatch }: Props) {
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
   return (
     <Section id="model" title="Model">
@@ -37,6 +39,15 @@ export const ModelPanel = memo(function ModelPanel({ objects, selection, selecte
         />
         <span className="field__help line">A USD scene with its assets: opens its top-level USD file (the first by name)</span>
       </div>
+      <div className="field">
+        <label className="field__label" htmlFor="subdiv">Subdivision</label>
+        <select className="select" id="subdiv" value={subdiv} disabled={loading} onChange={(e) => onSubdiv(Number(e.target.value))}>
+          <option value={0}>Off: the control cage</option>
+          <option value={-1}>Auto: authored schemes, up to level 2</option>
+          {[1, 2, 3].map((l) => <option key={l} value={l}>Level {l}</option>)}
+        </select>
+        <span className="field__help line" title={SUBDIV_HELP}>catmullClark / loop meshes as smooth surfaces with their creases; the run uses these triangles</span>
+      </div>
       {error && <Alert title="Problems loading the model">{error}</Alert>}
       <details className="accordion" open>
         <summary>
@@ -50,6 +61,16 @@ export const ModelPanel = memo(function ModelPanel({ objects, selection, selecte
                 {LABEL[role]}
               </button>
             ))}
+            <select
+              className="select" value="" aria-label="Subdivision of the selected meshes" title={`Subdivision of the selected meshes, over the model's level. ${SUBDIV_HELP}`}
+              disabled={!selected.size || loading}
+              onChange={(e) => onRefine(objects.filter((o) => selected.has(o.id) && !o.instances).map((o) => o.path), e.target.value === 'model' ? null : Number(e.target.value))}
+            >
+              <option value="" disabled>Subdivision…</option>
+              <option value="model">As the model</option>
+              <option value={0}>Off</option>
+              {[1, 2, 3].map((l) => <option key={l} value={l}>Level {l}</option>)}
+            </select>
           </div>
           <PrimTree objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={onVariant} dispatch={dispatch} />
         </div>

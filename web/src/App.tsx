@@ -31,8 +31,9 @@ const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'dayligh
 const CLIENT_ID = (() => { try { return sessionStorage.getItem('daylight.client') ?? (sessionStorage.setItem('daylight.client', crypto.randomUUID()), sessionStorage.getItem('daylight.client')!); } catch { return crypto.randomUUID(); } })();
 // validate() field -> the control that gets focus
 const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date' };
-// View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run.
-const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false }, MIN_W = 240, MAX_W = 640;
+// View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
+// the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3).
+const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0 }, MIN_W = 240, MAX_W = 640;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -172,12 +173,14 @@ export default function App() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- readStage reads refs only
 
-  // A variant switch (session layer, not saved) changes what is drawn: re-read the meshes, keeping each path's role.
-  const onVariant = useCallback(async (path: string, set: string, variant: string) => {
+  // A variant switch or a subdivision level (session layer, not saved) changes what is drawn: re-read the meshes, keeping
+  // each path's role. Every such edit resolves once the view has the new meshes.
+  const reread = useCallback(async (edit: () => Promise<unknown>) => {
     setLoading(true);
     setLoadError(null);
     try {
-      await usd.usd.setVariant(path, set, variant); // resolves once the view has the new meshes
+      await edit();
+      if (!rows.current.length) return; // no model yet: the level applies to the next one
       const { objects, map } = await readStage(new Map(rows.current.map((o) => [o.path, o.role])));
       setMeshes(map);
       dispatch({ type: 'RELOAD', objects });
@@ -187,6 +190,18 @@ export default function App() {
       setLoading(false);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- readStage reads refs only
+  const onVariant = useCallback((path: string, set: string, variant: string) => void reread(() => usd.usd.setVariant(path, set, variant)), [reread]);
+  // The viewer's refinement: catmullClark / loop meshes drawn (and so simulated) as their smooth surface, creases included.
+  const onSubdiv = useCallback((level: number) => {
+    setUi((u) => ({ ...u, subdiv: level }));
+    void reread(() => usd.usd.setComplexity(level));
+  }, [reread]);
+  /** Per mesh, over the model's level: a level, or null = back to the model's. Prims that cannot refine are skipped. */
+  const onRefine = useCallback((paths: string[], level: number | null) => void reread(async () => {
+    for (const p of paths) await (level === null ? usd.usd.clearRefinement(p) : usd.usd.setRefinement(p, true, level)).catch(() => {});
+  }), [reread]);
+  // The stored level, once the core is up (it then holds across models).
+  useEffect(() => { usd.ready.then(() => usd.usd.setComplexity(ui.subdiv), () => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps -- at start only
 
   const weightsFor = useCallback((id: string, on: 'faces' | 'vertices') => {
     const c = conv.current.get(id);
@@ -294,7 +309,7 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} onFiles={onFiles} onVariant={onVariant} dispatch={dispatch} />
+                <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
