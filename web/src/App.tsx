@@ -292,13 +292,13 @@ export default function App() {
     setExporting(true);
     setExportError(null);
     try {
-      await downloadUsd(mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked });
+      await downloadUsd(mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
     } catch (e) {
       setExportError((e as Error).message);
     } finally {
       setExporting(false);
     }
-  }, [result, state.objects, meshes, s.viz, column]);
+  }, [result, state.objects, meshes, s.viz, column, weightsFor]);
   const probeLabel = state.probe && result
     ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
     : null;

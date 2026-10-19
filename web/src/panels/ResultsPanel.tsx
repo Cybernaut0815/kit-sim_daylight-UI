@@ -21,8 +21,8 @@ interface Props {
 }
 
 const EXPORT_HELP: Record<ExportMode, string> = {
-  replace: 'The receivers become the triangles this run used, coloured as shown here (diffuse = displayColor), with every result as a value primvar (primvars:daylight_<result>); their materials, vertex colours and subsets are replaced. One layer over the model files, packed with them.',
-  variants: 'The stage flattened as shown, each receiver with a variant set "daylight": "original" and one variant per result (the triangles this run used, coloured, with the values as primvars). The model own variant sets and references are baked as shown.',
+  replace: 'The receivers as simulated, as polygons (their own faces; the subdivided faces when the run used subdivision), coloured as shown here (diffuse = displayColor), with every result as a value primvar (primvars:daylight_<result>) per face or per face corner. One layer over the model files, packed with them.',
+  variants: 'The stage flattened as shown, each receiver with a variant set "daylight": "original" and one variant per result, on the polygons the run simulated (its own faces, or the subdivided ones), with the values as primvars. The model own variant sets and references are baked as shown.',
 };
 
 const cacheLine = (c: Record<string, string> | undefined) =>
@@ -228,7 +228,7 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
             </div>
             <p className="text-muted lines-3">
               {exporting
-                ? <><span className="spinner" aria-hidden="true" /> Packing the USD file{usdMode === 'variants' ? ': flattening a large stage takes a while (Kitchen_set, 1,800 meshes: about 20 s)' : ''}.</>
+                ? <><span className="spinner" aria-hidden="true" /> Packing the USD file{usdMode === 'variants' ? ': the stage is flattened first' : ''}.</>
                 : EXPORT_HELP[usdMode]}
             </p>
             {exportError && <Alert title="Download failed">{exportError}</Alert>}
