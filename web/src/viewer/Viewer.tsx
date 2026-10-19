@@ -42,6 +42,7 @@ interface Props {
 
 interface Ctx {
   canvas: HTMLCanvasElement; sun: SunPath; gridSpec: { size: number; x: number; y: number; z: number };
+  grid: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>; // one object and material for good, a new geometry per size or theme
   dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
 }
 
@@ -80,7 +81,11 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
     const labels = new CSS2DRenderer({ element: labelsEl.current! });
     const sunPath = createSunPath();
     usd.three.overlay.add(sunPath.group);
-    const c: Ctx = { canvas, sun: sunPath, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 } };
+    const grid = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false }));
+    grid.userData.frame = false; // F and frame() fit the model and the dome, not the floor (the clip planes still see it)
+    grid.visible = false;
+    usd.three.overlay.add(grid);
+    const c: Ctx = { canvas, sun: sunPath, grid, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 } };
     ctx.current = c;
 
     // Every frame, with that frame's camera: the sun-path labels (the sun path only, never the stage), and the scene
@@ -219,8 +224,10 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
       el.removeEventListener('pointerup', onDrop, true);
       el.removeEventListener('pointercancel', onDrop, true);
       canvas.removeEventListener('pointerleave', onOut);
-      usd.three.overlay.remove(sunPath.group);
+      usd.three.overlay.remove(sunPath.group, grid);
       sunPath.dispose();
+      grid.geometry.dispose();
+      grid.material.dispose();
       labelsEl.current?.replaceChildren();
       usd.three.invalidate();
       ctx.current = null;
@@ -263,17 +270,19 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
   // The model and the dome in view, once the sun path is placed (the grid opts out of framing: it is a floor).
   useEffect(() => { if (meshes.size) usd.frame(); }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps -- per model, not per variant
 
-  // The ground grid under the model, in the theme's hairline colours.
+  // The ground grid under the model, in the theme's hairline colours: a new geometry on the one grid object (a new
+  // material would compile its shaders again).
   useEffect(() => {
     const c = ctx.current;
     if (!c) return;
     const col = (name: string) => { const k = new THREE.Color(solid(name)); return byValue ? k : untone(k); };
-    const { size, x, y, z } = c.gridSpec, grid = new THREE.GridHelper(size, 20, col('--border-default'), col('--border-subtle'));
-    grid.position.set(x, y, z);
-    grid.userData.frame = false; // F and frame() fit the model and the dome, not the floor (the clip planes still see it)
-    usd.three.overlay.add(grid);
+    const { size, x, y, z } = c.gridSpec, helper = new THREE.GridHelper(size, 20, col('--border-default'), col('--border-subtle'));
+    helper.material.dispose(); // never drawn: only its geometry is used
+    c.grid.geometry.dispose();
+    c.grid.geometry = helper.geometry;
+    c.grid.position.set(x, y, z);
+    c.grid.visible = true;
     usd.three.invalidate();
-    return () => { usd.three.overlay.remove(grid); grid.dispose(); };
   }, [meshes, theme, !!byValue]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
   // The look: the stage's materials in the Plain view; plain grey with tone mapping off (exact legend colours) in the
@@ -289,9 +298,9 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
   useEffect(() => {
     let stale = false;
     (async () => {
-      const keep = new Set<string>();
+      const keep = new Set<string>(), role = new Map(objects.map((o) => [o.id, o.role]));
       for (const [id, obj] of meshes) {
-        const k = byValue && objects.find((o) => o.id === id)?.role === 'receiver' ? byValue.receivers.indexOf(id) : -1;
+        const k = byValue && role.get(id) === 'receiver' ? byValue.receivers.indexOf(id) : -1;
         if (!byValue || !scale || k < 0) continue;
         keep.add(id);
         const g = byValue.manifest.meshes[k], vals = new Float64Array(g.count), perFace = byValue.on === 'faces';

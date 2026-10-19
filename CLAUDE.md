@@ -11,9 +11,5 @@
   the viewer's GitHub Pages, which serves only the latest `main` core. When a `native/` or protocol change lands on the
   viewer's `main` (as `feature/in-memory-edits` will), re-pin to that `main` the same day, or `npm run core` refuses on
   fresh clones. The viewer's own chrome (its status line, the Shift-drag marquee) is the one exception to zha-ui-only.
-- Branch `feature/result-export` pins the viewer's local branch `feature/result-export` (meshMap, exportVariants:
-  native changes Pages has not built). Until that viewer branch is merged to `main` and Pages redeploys, `npm run core`
-  refuses: build the core (`F:/Github/USD_web_viewer/native/build.bat F:/emsdk F:/uw Release`), copy `usdcore.js` and
-  `usdcore.wasm` into `USD_WebViewer/web/public/core/` and write the submodule HEAD into `web/usdcore.pin`.
 - Server: `server/` (C++17, cpp-httplib, links `daylightcore`); API and caching in `server/README.md`.
 - Web: `web/` (Vite + React + TS + three + maplibre); `npm test` (vitest), `VITE_MOCK=1 npm run dev` for GPU-free work.

@@ -6,7 +6,8 @@
 // north. Built at unit radius in the
 // diagram frame (+Y up, true north -Z, east +X); the group carries the position, the radius and north. Everything
 // below the horizon is clipped, except the handles (drawn faint there). Drawn by the USD viewer's WebGPURenderer: fat
-// lines and sized dots are its node-material kinds, the horizon cut is a ClippingGroup.
+// lines and sized dots are its node-material kinds, the horizon cut is a ClippingGroup. Every GPU object is made once
+// and kept (pool): a drag step or a theme switch only moves and recolours, so no shader is ever compiled again.
 import * as THREE from 'three';
 import { instancedBufferAttribute } from 'three/tsl';
 import { ClippingGroup, Line2NodeMaterial, PointsNodeMaterial } from 'three/webgpu';
@@ -30,6 +31,7 @@ export type Grab =
 export interface DragResult { time?: Partial<Time>; north?: number }
 
 const HANDLE_PX = 14, ARC_PX = 8, RING_PX = 12, Y = 0.003; // pick radii; the compass floats just above the ground (no z-fighting)
+const STEP_DOTS = 4000; // the evaluated steps drawn as dots up to this many
 const rad = (d: number) => (d * Math.PI) / 180;
 const NESW = [0, 90, 180, 270].map((a) => [1.15 * Math.sin(rad(a)), Y, -1.15 * Math.cos(rad(a))]); // where N E S W stand
 const RING: Path = { min: [], xyz: [], alt: [] }; // the compass ring as a path, for the pointer's distance to it
@@ -71,15 +73,38 @@ function label(text: string, cls: string, [x, y, z]: number[], cx = 0.5, cy = 0.
   return o;
 }
 
-/** Disposes every geometry and material under a layer and empties it (CSS2D labels remove their element on 'removed'). */
-function empty(layer: THREE.Object3D) {
-  layer.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!(o as THREE.Sprite).isSprite) m.geometry?.dispose(); // every Sprite shares one module-wide quad (the viewer's too)
-    for (const x of Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) x.dispose();
-  });
-  layer.clear();
+/**
+ * The GPU objects of one layer, made once per role key and reused: the WebGPU renderer compiles a material's shaders
+ * again whenever a new material replaces a disposed one, so a drag step or a theme switch only moves and recolours
+ * (new geometry, same object and material). Labels (CSS2D, DOM only) live in their own group and are rebuilt.
+ */
+function pool(layer: THREE.Object3D) {
+  const objects = new Map<string, THREE.Object3D>(), labels = new THREE.Group();
+  layer.add(labels);
+  return {
+    labels,
+    /** A rebuild starts: every object hidden until taken again, every label gone (CSS2D removes its element on 'removed'). */
+    reset() { for (const o of objects.values()) o.visible = false; labels.clear(); },
+    take<T extends THREE.Object3D>(key: string, make: () => T): T {
+      let o = objects.get(key) as T | undefined;
+      if (!o) { o = make(); objects.set(key, o); layer.add(o); }
+      o.visible = true;
+      return o;
+    },
+    dispose() {
+      for (const o of objects.values()) {
+        const m = o as THREE.Mesh;
+        if (!(o as THREE.Sprite).isSprite) m.geometry.dispose(); // every Sprite shares one module-wide quad (the viewer's too)
+        (m.material as THREE.Material).dispose();
+      }
+      objects.clear();
+      labels.clear();
+    },
+  };
 }
+type Pool = ReturnType<typeof pool>;
+/** A new geometry for a kept object: same attributes, so the renderer keeps its compiled pipeline. */
+const regeometry = <G extends THREE.BufferGeometry>(o: { geometry: G }, g: G) => { const old = o.geometry; o.geometry = g; old.dispose(); };
 
 export function createSunPath() {
   // cut at the horizon: the scaffold and the active layer (the compass at Y and the sun's ray lie above it); the handles
@@ -89,6 +114,7 @@ export function createSunPath() {
   group.visible = false;
   const horizon = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // world space: set by frame()
   scaffold.clippingPlanes = active.clippingPlanes = [horizon];
+  const fixed = pool(scaffold), moving = pool(active), suns = pool(balls);
   // pickable state of the active layer, rebuilt by show()
   let arcs: { which: Which; path: Path; line: LineSegments2; width: number }[] = [];
   let handles: { which: Which; obj: THREE.Object3D; up: boolean; tip: HTMLElement; short: string; long: string }[] = [];
@@ -96,43 +122,66 @@ export function createSunPath() {
   let ring: LineSegments2 | null = null; // the compass ring, thickened while hovered
   const ray = new THREE.Raycaster(), v = new THREE.Vector3(), w = new THREE.Vector3();
 
-  const lines = (seg: number[], color: Tok, width: number, dashed = false) => {
-    const l = new LineSegments2(new LineSegmentsGeometry().setPositions(seg), new Line2NodeMaterial({ color, linewidth: width, dashed, dashSize: 0.02, gapSize: 0.015 }));
+  /** Line segments under `key` (dashed: a material of its own, a shader define); hidden when there is nothing to draw. */
+  const lines = (p: Pool, key: string, seg: number[], color: Tok, width: number, dashed = false) => {
+    const l = p.take(key, () => new LineSegments2(new LineSegmentsGeometry(), new Line2NodeMaterial({ dashed, dashSize: 0.02, gapSize: 0.015 })));
+    regeometry(l, new LineSegmentsGeometry().setPositions(seg.length ? seg : [0, 0, 0, 0, 0, 0]));
     if (dashed) l.computeLineDistances();
+    l.material.color.copy(color);
+    l.material.linewidth = width;
+    l.visible = seg.length > 0;
     return l;
   };
-  /** Dots `size` CSS px across (WebGPU points are 1 px): one instanced sprite. */
-  const dots = (xyz: number[], color: Tok, size: number) => {
-    const m = new PointsNodeMaterial({ color, size, sizeAttenuation: false });
-    m.positionNode = instancedBufferAttribute(new THREE.InstancedBufferAttribute(new Float32Array(xyz), 3));
-    const s = new THREE.Sprite(m);
-    s.count = xyz.length / 3;
-    s.frustumCulled = false; // its bounds are the unit quad, not the dots
+  /** Dots `size` CSS px across (WebGPU points are 1 px): one instanced sprite with room for `capacity` dots. */
+  const dots = (p: Pool, key: string, xyz: number[], color: Tok, size: number, capacity: number) => {
+    const s = p.take(key, () => {
+      const m = new PointsNodeMaterial({ size, sizeAttenuation: false }), at = new THREE.InstancedBufferAttribute(new Float32Array(3 * capacity), 3);
+      m.positionNode = instancedBufferAttribute(at);
+      const o = new THREE.Sprite(m);
+      o.userData.at = at;
+      o.frustumCulled = false; // its bounds are the unit quad, not the dots
+      return o;
+    });
+    const at = s.userData.at as THREE.InstancedBufferAttribute, n = Math.min(xyz.length / 3, capacity);
+    (at.array as Float32Array).set(xyz.slice(0, 3 * n));
+    at.needsUpdate = true;
+    s.count = Math.max(n, 2); // above 1 for good: the instanced key holds (count 1 would be another shader)
+    if (n < 2) (at.array as Float32Array).copyWithin(3, 0, 3); // a lone dot drawn twice
+    (s.material as PointsNodeMaterial).color.copy(color);
+    s.visible = n > 0;
     return s;
   };
-  const surface = (pos: number[], index: number[], color: Tok, opacity: number) => {
-    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setIndex(index);
-    return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }));
-  };
   /** Quads between consecutive rows of n samples each (flat xyz rows of equal length). */
-  const strip = (rows: number[][], tok: Tok, opacity: number) => {
-    const n = rows[0].length / 3, pos = rows.flat(), index: number[] = [];
+  const strip = (p: Pool, key: string, rows: number[][], color: Tok, opacity: number) => {
+    const mesh = p.take(key, () => new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false })));
+    const n = rows[0].length / 3, index: number[] = [];
     for (let r = 0; r + 1 < rows.length; r++) for (let i = 0; i + 1 < n; i++) {
       const a = r * n + i, b = a + 1, c = a + n, d = c + 1;
       index.push(a, c, b, b, c, d);
     }
-    return surface(pos, index, tok, opacity);
+    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(rows.flat(), 3));
+    g.setIndex(index);
+    regeometry(mesh, g);
+    mesh.material.color.copy(color);
+    mesh.material.opacity = opacity;
+    return mesh;
   };
-  const ball = (r: number, color: Tok, opacity = 1) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false }));
-    m.renderOrder = 10; // handles stay visible through the model
+  const ball = (key: string, r: number, color: Tok, opacity = 1) => {
+    const m = suns.take(key, () => {
+      const o = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 12), new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false }));
+      o.renderOrder = 10; // handles stay visible through the model
+      return o;
+    });
+    m.userData.r = r;
+    m.scale.setScalar(r);
+    m.material.color.copy(color);
+    m.material.opacity = opacity;
     return m;
   };
 
   /** Rebuild the scaffold for a site (and the current theme's tokens). ~12k sun positions, ~15 ms. */
   function build(site: Site) {
-    empty(scaffold);
+    fixed.reset();
     const axis = token('--text-muted'), faint = token('--border-strong');
     // compass: ring, ticks every 5 / 15 / 90 degrees, N E S W
     const major = circle(1, Y, []), minor = circle(1.06, Y, []);
@@ -140,22 +189,25 @@ export function createSunPath() {
       const s = Math.sin(rad(a)), c = -Math.cos(rad(a)), r = a % 90 === 0 ? 1.07 : a % 15 === 0 ? 1.035 : 1.02;
       (a % 15 === 0 ? major : minor).push(s, Y, c, r * s, Y, r * c);
     }
-    scaffold.add(ring = lines(major, axis, hot === 'c:sun' ? 3 : 1.5), lines(minor, faint, 1));
-    ['N', 'E', 'S', 'W'].forEach((t, i) => scaffold.add(label(t, 'sunpath-label--strong', NESW[i])));
+    ring = lines(fixed, 'ring', major, axis, hot === 'c:sun' ? 3 : 1.5);
+    lines(fixed, 'ticks', minor, faint, 1);
+    ['N', 'E', 'S', 'W'].forEach((t, i) => fixed.labels.add(label(t, 'sunpath-label--strong', NESW[i])));
     // altitude rings, labelled on the side away from the sun
     const alts: number[] = [], away = site.lat >= 0 ? 0 : 180;
     for (const a of [30, 60]) {
       circle(Math.cos(rad(a)), Math.sin(rad(a)), alts, 96);
-      scaffold.add(label(`${a}°`, '', sunDir(a, away), 0.5, 1));
+      fixed.labels.add(label(`${a}°`, '', sunDir(a, away), 0.5, 1));
     }
-    scaffold.add(lines(alts, faint, 1, true));
+    lines(fixed, 'altitudes', alts, faint, 1, true);
     // the 21st of every month (Jan-Jun solid, Jul-Dec dashed: they pair up), the solstices heavier
     const first: number[] = [], second: number[] = [], solstices: number[] = [];
     for (let m = 1; m <= 12; m++) {
       const p = dayPath(site, `${pad(m)}-21`, 10);
       upSegs(p.xyz, p.alt, m === 6 || m === 12 ? solstices : m < 6 ? first : second);
     }
-    scaffold.add(lines(first, faint, 1), lines(second, faint, 1, true), lines(solstices, axis, 1.5));
+    lines(fixed, 'months-1', first, faint, 1);
+    lines(fixed, 'months-2', second, faint, 1, true);
+    lines(fixed, 'solstices', solstices, axis, 1.5);
     // one analemma per whole hour (first half of the year solid)
     const hs: number[] = [], hd: number[] = [];
     for (let h = 0; h < 24; h++) {
@@ -163,13 +215,14 @@ export function createSunPath() {
       upSegs(p.xyz, p.alt, hs, 0, half);
       upSegs(p.xyz, p.alt, hd, half, n);
     }
-    scaffold.add(lines(hs, faint, 1), lines(hd, faint, 1, true));
+    lines(fixed, 'hours-1', hs, faint, 1);
+    lines(fixed, 'hours-2', hd, faint, 1, true);
   }
 
   /** Rebuild the active layer: the instant or the analysis period, and its handles. */
   function show(site: Site, t: Time) {
-    empty(active);
-    empty(balls);
+    moving.reset();
+    suns.reset();
     arcs = [];
     handles = [];
     if (t.mode === 'annual') return;
@@ -179,24 +232,22 @@ export function createSunPath() {
     const arc = (which: Which, date: string, from = 0, to = 1440) => {
       const p = dayPath(site, mmdd(date, site.leap), 5);
       if (!p.alt.length) return;
-      const width = range ? 1 : 3, full = lines(upSegs(p.xyz, p.alt, []), tok, width + (hot === `a:${which}` ? 1.5 : 0));
-      active.add(full);
-      if (range) active.add(lines(upSegs(p.xyz, p.alt, [], Math.round(from / 5), Math.round(to / 5)), tok, 3));
+      const width = range ? 1 : 3, full = lines(moving, `arc:${which}`, upSegs(p.xyz, p.alt, []), tok, width + (hot === `a:${which}` ? 1.5 : 0));
+      if (range) lines(moving, `window:${which}`, upSegs(p.xyz, p.alt, [], Math.round(from / 5), Math.round(to / 5)), tok, 3);
       arcs.push({ which, path: p, line: full, width });
       let top = 0;
       p.alt.forEach((a, i) => { if (a > p.alt[top]) top = i; });
-      if (p.alt[top] >= 0) active.add(label(fmtDay(date), 'sunpath-label--strong', p.xyz.slice(3 * top, 3 * top + 3), 0.5, 1.4, ['arc', which]));
+      if (p.alt[top] >= 0) moving.labels.add(label(fmtDay(date), 'sunpath-label--strong', p.xyz.slice(3 * top, 3 * top + 3), 0.5, 1.4, ['arc', which]));
     };
     const handle = (which: Which, date: string, minute: number, r: number, color: Tok) => {
       const s = at(date, minute);
       if (!Number.isFinite(s.alt)) return null;
-      const d = sunDir(s.alt, s.azi), obj = ball(r, color, s.up ? 1 : 0.35);
+      const d = sunDir(s.alt, s.azi), obj = ball(which, r, color, s.up ? 1 : 0.35);
       obj.position.set(d[0], d[1], d[2]);
-      if (hot === `h:${which}`) obj.scale.setScalar(1.35);
+      if (hot === `h:${which}`) obj.scale.setScalar(1.35 * r);
       const short = fmtClock(minute), long = `${short}, altitude ${Math.round(s.alt)}°, azimuth ${Math.round(s.azi)}°`;
       const tip = label(hot === `h:${which}` ? long : short, 'sunpath-label--strong sunpath-label--at', d, 0, 1, ['handle', which]);
-      balls.add(obj);
-      active.add(tip);
+      moving.labels.add(tip);
       handles.push({ which, obj, up: s.up, tip: tip.element, short, long });
       return { s, d };
     };
@@ -209,21 +260,19 @@ export function createSunPath() {
         if (!(p.alt[i] >= 0)) continue;
         const d = p.xyz.slice(3 * i, 3 * i + 3);
         xyz.push(...d);
-        if (i % 36 === 0) active.add(label(String(i / 12), '', d.map((x) => 0.92 * x)));
+        if (i % 36 === 0) moving.labels.add(label(String(i / 12), '', d.map((x) => 0.92 * x)));
       }
-      if (xyz.length) active.add(dots(xyz, tok, 5));
+      dots(moving, 'hours', xyz, tok, 5, 25);
     };
     if (!range) {
       arc('sun', t.date);
       hours();
       const h = handle('sun', t.date, t.hour, 1 / 30, tok);
       if (!h) return;
-      const halo = ball(1 / 15, glow, h.s.up ? 0.35 : 0.1);
-      halo.position.copy(handles[0].obj.position);
-      balls.add(halo);
+      ball('halo', 1 / 15, glow, h.s.up ? 0.35 : 0.1).position.copy(handles[0].obj.position);
       if (h.s.up) { // the sun's ray to the centre, its drop to the ground, its azimuth on the compass
         const [x, y, z] = h.d, g = Math.hypot(x, z) || 1;
-        active.add(lines([0, Y, 0, x, y, z, x, y, z, x, Y, z, 0, Y, 0, x / g, Y, z / g], tok, 1, true));
+        lines(moving, 'ray', [0, Y, 0, x, y, z, x, y, z, x, Y, z, 0, Y, 0, x / g, Y, z / g], tok, 1, true);
       }
       return;
     }
@@ -240,20 +289,20 @@ export function createSunPath() {
         if (xyz.every(Number.isFinite)) rows.push({ dec: at(date, 720).dec, xyz });
       }
       rows.sort((a, b) => a.dec - b.dec); // a period across a solstice would fold back over itself
-      if (rows.length > 1) active.add(strip(rows.map((r) => r.xyz), tok, 0.15));
+      if (rows.length > 1) strip(moving, 'band', rows.map((r) => r.xyz), tok, 0.15);
       const edges: number[] = [];
       for (const minute of [t.from.hour, t.to.hour]) {
         const xyz: number[] = [], alt: number[] = [];
         for (let d = d0; d <= d1; d++) { const s = at(dateFromDoy(d, year), minute); if (Number.isFinite(s.alt)) { xyz.push(...sunDir(s.alt, s.azi)); alt.push(s.alt); } }
         upSegs(xyz, alt, edges);
       }
-      active.add(lines(edges, tok, 2));
+      lines(moving, 'edges', edges, tok, 2);
     }
     const steps = stepHoys(t, site.leap);
-    if (steps.length <= 4000) {
+    if (steps.length <= STEP_DOTS) {
       const xyz: number[] = [];
       for (const hoy of steps) { const s = sunAt(site, hoy + t.stepMin / 120); if (s.up) xyz.push(...sunDir(s.alt, s.azi)); } // the core takes each step's sun at its middle
-      if (xyz.length) active.add(dots(xyz, tok, 4));
+      dots(moving, 'steps', xyz, tok, 4, STEP_DOTS);
     }
     handle('from', t.from.date, t.from.hour, 1 / 40, tok);
     handle('to', t.to.date, t.to.hour, 1 / 40, tok);
@@ -395,7 +444,7 @@ export function createSunPath() {
     hot = key;
     for (const h of handles) {
       const on = key === `h:${h.which}`;
-      h.obj.scale.setScalar(on ? 1.35 : 1);
+      h.obj.scale.setScalar((h.obj.userData.r as number) * (on ? 1.35 : 1));
       h.tip.textContent = on ? h.long : h.short;
     }
     for (const a of arcs) a.line.material.linewidth = a.width + (key === `a:${a.which}` ? 1.5 : 0);
@@ -412,7 +461,7 @@ export function createSunPath() {
       group.rotation.y = rad(north);
       horizon.constant = -(y - 1e-4 * r);
     },
-    dispose() { empty(scaffold); empty(active); empty(balls); },
+    dispose() { fixed.dispose(); moving.dispose(); suns.dispose(); },
   };
 }
 export type SunPath = ReturnType<typeof createSunPath>;

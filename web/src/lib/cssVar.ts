@@ -3,14 +3,27 @@
 // MapLibre) need literal colours, not var(); the tokens resolve to oklch() in modern browsers, which those
 // renderers cannot parse. A 1px canvas getImageData round-trip forces sRGB. Browser-only (needs a <canvas>).
 let ctx: CanvasRenderingContext2D | null | undefined;
+// Resolved colours per theme: the tokens on :root change only with data-theme, which the app sets before it renders.
+const cache = new Map<string, string>();
 
 // `over`: another token to composite onto first, so a translucent token (the hairlines) comes back opaque; three.js
 // ignores alpha, so the viewer resolves every colour over its own background.
 export function cssVar(name: string, fallback = '#000', over?: string): string {
+  const key = `${document.documentElement.dataset.theme}|${name}|${fallback}|${over ?? ''}`;
+  let hit = cache.get(key);
+  if (hit === undefined) {
+    const got = resolve(name, fallback, over);
+    if (got === null) return fallback; // not defined (yet): no stylesheet, no cache entry
+    cache.set(key, (hit = got));
+  }
+  return hit;
+}
+
+function resolve(name: string, fallback: string, over?: string): string | null {
   ctx ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
   const style = getComputedStyle(document.documentElement);
   const raw = style.getPropertyValue(name).trim();
-  if (!raw || !ctx) return fallback;
+  if (!raw || !ctx) return null;
   ctx.clearRect(0, 0, 1, 1);
   if (over) { ctx.fillStyle = style.getPropertyValue(over).trim() || fallback; ctx.fillRect(0, 0, 1, 1); }
   ctx.fillStyle = '#000'; // seed: canvas ignores an unparseable assignment, so a bad token renders black
