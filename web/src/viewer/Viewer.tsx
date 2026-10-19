@@ -8,7 +8,7 @@ import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { applyToThree } from 'daylight-mesh';
 import type { UsdSessionEventMap } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
-import { rgbFor, type Scale } from '../lib/gradients';
+import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult } from '../store';
 import { Illustration } from '../ui';
@@ -16,7 +16,6 @@ import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from '
 import { usd } from './usd';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
-const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4); // rgbFor speaks the legend's sRGB; colour attributes are linear
 // Neutral tone mapping (the Plain view) lowers every colour by up to 0.04 (linear) before output; add it back so the grid
 // keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows

@@ -7,8 +7,15 @@ import { Matrix4, Quaternion, Vector3, type BufferAttribute, type InstancedMesh,
 import { dmeshStems } from 'daylight-mesh';
 import { listMeshes } from './loaders';
 
-const num = (x: number) => (Number.isFinite(x) ? +x.toPrecision(9) : 0); // float32 round trip; USDA has no NaN
+export const num = (x: number) => (Number.isFinite(x) ? +x.toPrecision(9) : 0); // float32 round trip; USDA has no NaN
 const vec = (a: BufferAttribute | InterleavedBufferAttribute) => (i: number) => `(${num(a.getX(i))}, ${num(a.getY(i))}, ${num(a.getZ(i))})`;
+/** `head = [item(0), …]tail` as text parts of at most 65536 items: a layer is never built as one huge string. */
+export function arrayParts(head: string, n: number, item: (i: number) => string, tail = '\n'): string[] {
+  const out = [`${head} = [`];
+  for (let i = 0; i < n; i += 65536) out.push((i ? ', ' : '') + Array.from({ length: Math.min(65536, n - i) }, (_, j) => item(i + j)).join(', '));
+  out.push(`]${tail}`);
+  return out;
+}
 
 /**
  * The layer as text parts for `new File(parts, 'model.usda')` (never one huge string), and USD path -> the model's own
@@ -18,11 +25,7 @@ export function toUsda(root: Object3D): { parts: string[]; names: Map<string, st
   root.updateMatrixWorld(true); // every o.matrix from its position / quaternion / scale
   const tri = new Set<Object3D>(listMeshes(root)), names = new Map<string, string>();
   const out = ['#usda 1.0\n(\n    defaultPrim = "Model"\n    metersPerUnit = 1\n    upAxis = "Y"\n)\n\n'];
-  const arr = (decl: string, n: number, item: (i: number) => string, tail = '') => {
-    out.push(`    ${decl} = [`);
-    for (let i = 0; i < n; i += 65536) out.push((i ? ', ' : '') + Array.from({ length: Math.min(65536, n - i) }, (_, j) => item(i + j)).join(', '));
-    out.push(`]${tail}\n`);
-  };
+  const arr = (decl: string, n: number, item: (i: number) => string, tail = '') => out.push(...arrayParts(`    ${decl}`, n, item, `${tail}\n`));
   const mesh = (o: Mesh) => {
     const { index, attributes: { position, normal } } = o.geometry, n = index ? index.count : position.count;
     arr('int[] faceVertexCounts', n / 3, () => '3');

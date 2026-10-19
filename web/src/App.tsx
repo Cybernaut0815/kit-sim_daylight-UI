@@ -9,11 +9,11 @@ import { Splitter } from './Splitter';
 import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args';
 import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
-import { gradientFor, type Scale } from './lib/gradients';
+import { scaleFor, type Scale } from './lib/gradients';
 import { loadFiles } from './lib/loaders';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
-import { faceAreas, fmtNum, globalRange, unitFor, vertexAreas } from './lib/result';
+import { faceAreas, fmtNum, unitFor, vertexAreas } from './lib/result';
 import { LocationPanel } from './panels/LocationPanel';
 import { ModelPanel } from './panels/ModelPanel';
 import { ResultsPanel } from './panels/ResultsPanel';
@@ -23,6 +23,7 @@ import { WeatherPanel } from './panels/WeatherPanel';
 import { initialState, parseSettings, reducer, serializeSettings, type ObjectRow, type Role } from './store';
 import { Icon, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
+import { downloadUsd, type ExportMode, type PickedModel } from './viewer/download';
 import type { SunView } from './viewer/sunpath';
 import { usd } from './viewer/usd';
 
@@ -89,7 +90,8 @@ export default function App() {
     setMode(nextMode);
   };
 
-  const model = useRef({ mpu: 1, own: new Map<string, string>() as ReadonlyMap<string, string> }); // of the open stage: what a re-read needs
+  // Of the open stage: what a re-read needs, and the files as picked (a USD download packs them).
+  const model = useRef({ mpu: 1, own: new Map<string, string>() as ReadonlyMap<string, string>, picked: null as PickedModel | null });
   const rows = useRef(state.objects); // the rows now, for the stable onVariant
   rows.current = state.objects;
   const [stage, setStage] = useState(0); // bumped per opened model: the tree resets and the camera frames; a variant switch keeps both
@@ -136,12 +138,15 @@ export default function App() {
       // USD opens as picked (a folder keeps its layout, so references into subfolders resolve); glb / gltf / obj become a
       // USDA layer first, so every model takes the same path.
       // ponytail: a folder with several top-level USD files opens the first by name; add a root chooser when that is a real case
-      let own = new Map<string, string>(), source: LocalFile[] | File;
-      if (files.some((f) => /\.usd[acz]?$/i.test(f.name))) source = files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
-      else {
+      let own = new Map<string, string>(), source: LocalFile[] | File, kept: [string, File][];
+      if (files.some((f) => /\.usd[acz]?$/i.test(f.name))) {
+        source = files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
+        kept = source.map((f) => [f.path, f.file]);
+      } else {
         const usda = toUsda(await loadFiles(files));
         own = usda.names;
         source = new File(usda.parts, 'model.usda');
+        kept = [['model.usda', source]];
       }
       // open() closes the current stage first: drop its rows and conversions now, so nothing hovers, probes or runs a
       // model that is no longer drawn. A failure before this point keeps the current model.
@@ -151,7 +156,7 @@ export default function App() {
       dispatch({ type: 'LOAD', objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
       opened = true;
-      model.current = { mpu: info.metersPerUnit, own };
+      model.current = { mpu: info.metersPerUnit, own, picked: { files: kept, root: info.url.replace(/^\/drop\/\d+\//, ''), info } };
       // Eye toggles, H / Shift+H and variant choices go to the session layer: never saved, nothing to save.
       const session = (await usd.usd.layers()).find((l) => l.session);
       if (session) await usd.usd.setEditTarget(session.identifier);
@@ -280,11 +285,20 @@ export default function App() {
   const column = result ? Math.min(state.column, result.columns.length - 1) : 0;
   // One colour scale for the viewer and the charts: the quantity's gradient, its legend domain (data range unless
   // overridden), its problem range and the two range colours, all from the persisted viz settings.
-  const scale = useMemo<Scale | null>(() => {
-    if (!result) return null;
-    const q = result.columns[column].split('_')[0], { gradients, scales, ranges, colors } = s.viz, [dmin, dmax] = globalRange(result.values, column);
-    return { gradient: gradientFor(q, gradients[q]), vmin: scales[q]?.min ?? dmin, vmax: scales[q]?.max ?? dmax, lo: ranges[q]?.lo ?? null, hi: ranges[q]?.hi ?? null, below: colors.below, above: colors.above };
-  }, [result, column, s.viz]);
+  const scale = useMemo<Scale | null>(() => (result ? scaleFor(result.values, result.columns, column, s.viz) : null), [result, column, s.viz]);
+  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<string | null>(null);
+  const onDownload = useCallback(async (mode: ExportMode) => {
+    if (!result || !model.current.picked) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await downloadUsd(mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked });
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }, [result, state.objects, meshes, s.viz, column]);
   const probeLabel = state.probe && result
     ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
     : null;
@@ -331,7 +345,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel result={result} run={state.run} error={state.error} stale={stale} auto={autoOn && !slow} objects={state.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} dispatch={dispatch} />
+              <ResultsPanel result={result} run={state.run} error={state.error} stale={stale} auto={autoOn && !slow} objects={state.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} exporting={exporting} exportError={exportError} onDownload={onDownload} dispatch={dispatch} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

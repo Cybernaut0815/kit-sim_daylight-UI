@@ -1,7 +1,7 @@
 // Results: what the column means, run summary, colour scale and problem range (with resets), legend / histogram /
 // cumulative area curve in the result colours, the cursor readout, the range split, and the per-mesh table. Every
 // region keeps its size whatever the data or the hover state, so the panel does not jump.
-import { memo, useMemo, type Dispatch } from 'react';
+import { memo, useMemo, useState, type Dispatch } from 'react';
 import { AreaCurve } from '../charts/AreaCurve';
 import { Donut } from '../charts/Donut';
 import { Histogram } from '../charts/Histogram';
@@ -9,14 +9,21 @@ import { Legend } from '../charts/Legend';
 import { GRADIENTS, hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, columnStats, cumulative, fmtNum, globalRange, histogram, percentile, rangeShares, shareBelow, unitFor } from '../lib/result';
 import type { Action, ObjectRow, Probe, Run, RunResult, Settings } from '../store';
+import type { ExportMode } from '../viewer/download';
 import { Alert, ColorQuad, Illustration, NumberField, ResetButton, Segmented, Swatch, pct, rowKeys } from '../ui';
 
 interface Props {
   result: RunResult | null; run: Run; error: string | null; stale: boolean; auto: boolean; // result: the last finished run, kept while the next one runs
   objects: ObjectRow[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; selected: Set<string>;
   probe: Probe | null; bin: [number, number] | null; scale: Scale | null; viz: Settings['viz'];
-  weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined; dispatch: Dispatch<Action>;
+  weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
+  exporting: boolean; exportError: string | null; onDownload: (mode: ExportMode) => void; dispatch: Dispatch<Action>;
 }
+
+const EXPORT_HELP: Record<ExportMode, string> = {
+  replace: 'The receivers become the triangles this run used, coloured as shown here (diffuse = displayColor), with every result as a value primvar (primvars:daylight_<result>); their materials, vertex colours and subsets are replaced. One layer over the model files, packed with them.',
+  variants: 'The stage flattened as shown, each receiver with a variant set "daylight": "original" and one variant per result (the triangles this run used, coloured, with the values as primvars). The model own variant sets and references are baked as shown.',
+};
 
 const cacheLine = (c: Record<string, string> | undefined) =>
   !c ? '' : c.response === 'hit' ? 'Identical run, replayed from the server cache.'
@@ -24,7 +31,8 @@ const cacheLine = (c: Record<string, string> | undefined) =>
 
 const orNull = (v: number) => (Number.isFinite(v) ? v : null);
 
-export const ResultsPanel = memo(function ResultsPanel({ result, run, error, stale, auto, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ result, run, error, stale, auto, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, exporting, exportError, onDownload, dispatch }: Props) {
+  const [usdMode, setUsdMode] = useState<ExportMode>('replace');
   const data = useMemo(() => {
     if (!result) return null;
     const r = result, col = Math.min(column, r.columns.length - 1), [quantity, side] = r.columns[col].split('_');
@@ -207,6 +215,23 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
                 </tbody>
               </table>
             </div>
+            <h3>Download</h3>
+            <div className="row-fill">
+              <div className="field">
+                <label className="sr-only" htmlFor="usd-mode">What the USD file holds</label>
+                <select className="select" id="usd-mode" value={usdMode} onChange={(e) => setUsdMode(e.target.value as ExportMode)}>
+                  <option value="replace">Colours replace the materials</option>
+                  <option value="variants">Variants per result (flattened)</option>
+                </select>
+              </div>
+              <button className="btn btn--secondary" type="button" disabled={exporting} aria-busy={exporting} title={EXPORT_HELP[usdMode]} onClick={() => onDownload(usdMode)}>Download USD</button>
+            </div>
+            <p className="text-muted lines-3">
+              {exporting
+                ? <><span className="spinner" aria-hidden="true" /> Packing the USD file{usdMode === 'variants' ? ': flattening a large stage takes a while (Kitchen_set, 1,800 meshes: about 20 s)' : ''}.</>
+                : EXPORT_HELP[usdMode]}
+            </p>
+            {exportError && <Alert title="Download failed">{exportError}</Alert>}
           </div>
         );
       })()}

@@ -1,5 +1,8 @@
 // Result colour scales: evenly spaced hex stops (matplotlib / Ladybug data colormaps, data not UI chrome), the
 // per-quantity defaults, and the "problem range" that paints values outside [lo, hi] in two user-chosen colours.
+import { globalRange } from './result';
+import type { Settings } from '../store';
+
 export interface Gradient { key: string; label: string; stops: string[] }
 
 const G = (key: string, label: string, stops: string[]): Gradient => ({ key, label, stops });
@@ -23,6 +26,9 @@ export function gradientFor(quantity: string, key?: string): Gradient {
   return GRADIENTS.find((g) => g.key === key) ?? GRADIENTS.find((g) => g.key === DEFAULT_GRADIENT[quantity]) ?? GRADIENTS[3];
 }
 
+/** sRGB -> linear per channel: the scales speak the legend sRGB; three.js colour attributes and USD displayColor are linear. */
+export const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+
 /** '#rrggbb' -> RGB floats 0..1 (anything else -> grey). */
 export function hexToRgb(hex: string): [number, number, number] {
   const m = /^#([0-9a-f]{6})$/i.exec(hex);
@@ -45,6 +51,12 @@ export function colorAt(g: Gradient, t: number): [number, number, number] {
 export const hexAt = (g: Gradient, t: number): string => '#' + colorAt(g, t).map((c) => Math.round(c * 255).toString(16).padStart(2, '0')).join('');
 
 export interface Scale { gradient: Gradient; vmin: number; vmax: number; lo: number | null; hi: number | null; below: string; above: string }
+
+/** A result column's scale: its quantity's gradient, legend domain (the data range unless set), problem range, colours. */
+export function scaleFor(values: Float64Array[], columns: string[], column: number, viz: Settings['viz']): Scale {
+  const q = columns[column].split('_')[0], { gradients, scales, ranges, colors } = viz, [dmin, dmax] = globalRange(values, column);
+  return { gradient: gradientFor(q, gradients[q]), vmin: scales[q]?.min ?? dmin, vmax: scales[q]?.max ?? dmax, lo: ranges[q]?.lo ?? null, hi: ranges[q]?.hi ?? null, below: colors.below, above: colors.above };
+}
 
 /** 'below' / 'above' the problem range, else the 0..1 position on the gradient. */
 export function place(s: Scale, v: number): 'below' | 'above' | number {
