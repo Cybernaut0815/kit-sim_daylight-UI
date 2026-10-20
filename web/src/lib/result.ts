@@ -46,24 +46,29 @@ export function globalRange(values: Float64Array[], col: number): [number, numbe
 
 /**
  * Fixed bins over `range` (default the column's global range); `shares[bin]` = share of the total weight (area),
- * `counts[bin]` = elements; every finite row lands in exactly one bin. `weights[k]` belongs to `groups[k]`.
+ * `counts[bin]` = elements; every finite row inside the range lands in exactly one bin, `below` / `above` = the shares
+ * outside it. `weights[k]` belongs to `groups[k]`.
  */
-export function histogram(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[], bins = 24, range = globalRange(values, col)): { edges: number[]; shares: number[]; counts: number[] } {
+export function histogram(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[], bins = 24, range = globalRange(values, col)): { edges: number[]; shares: number[]; counts: number[]; below: number; above: number } {
   const [lo, hi] = range, span = hi - lo || 1;
   const edges = Array.from({ length: bins + 1 }, (_, i) => lo + (span * i) / bins);
   const shares = new Array<number>(bins).fill(0), counts = new Array<number>(bins).fill(0);
-  let total = 0;
+  let total = 0, below = 0, above = 0;
   groups.forEach((g, k) => {
     for (let i = 0; i < g.count; i++) {
-      const v = values[g.first + i][col];
+      const v = values[g.first + i][col], w = weights[k][i];
       if (!Number.isFinite(v)) continue;
-      const b = Math.min(Math.max(Math.floor(((v - lo) / span) * bins), 0), bins - 1), w = weights[k][i];
-      shares[b] += w;
-      counts[b]++;
       total += w;
+      if (v < lo) below += w;
+      else if (v > hi) above += w;
+      else {
+        const b = Math.min(Math.floor(((v - lo) / span) * bins), bins - 1);
+        shares[b] += w;
+        counts[b]++;
+      }
     }
   });
-  return { edges, shares: total ? shares.map((s) => s / total) : shares, counts };
+  return { edges, shares: total ? shares.map((s) => s / total) : shares, counts, below: total ? below / total : 0, above: total ? above / total : 0 };
 }
 
 /** Values ascending with the cumulative share of weight (area) at or below each: percentiles, range shares, the area curve. */

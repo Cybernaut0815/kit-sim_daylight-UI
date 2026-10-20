@@ -34,6 +34,13 @@ describe('stats, histogram and cumulative area', () => {
     expect(h.edges).toEqual([10, 20, 30, 40]);
     expect(h.counts).toEqual([1, 1, 2]); // 30 and 40 (max) land in the last bin, NaN dropped
     expect(h.shares.map((s) => Math.round(s * 100))).toEqual([17, 17, 67]); // weights 1, 1, 1 + 3 of 6
+    expect([h.below, h.above]).toEqual([0, 0]);
+  });
+  it('bins only inside a set range; the shares outside it are counted apart', () => {
+    const h = histogram(rows, 0, groups, weights, 2, [15, 35]);
+    expect(h.edges).toEqual([15, 25, 35]);
+    expect(h.counts).toEqual([1, 1]); // 20 and 30; 10 below, 40 above
+    expect([...h.shares, h.below, h.above].map((s) => Math.round(s * 100))).toEqual([17, 17, 17, 50]);
   });
   it('cumulative share, percentiles and range shares are area-weighted', () => {
     const c = cumulative(rows, 0, groups, weights);

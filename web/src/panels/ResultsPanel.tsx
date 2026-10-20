@@ -38,8 +38,15 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
     const cum = cumulative(r.values, col, groups, weights), domain = globalRange(r.values, col);
     const bins = Math.min(64, Math.max(12, Math.round(1.5 * Math.sqrt(cum.v.length)))); // more detail with more elements
     const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
-    return { r, col, quantity, side, rows, total, cum, domain, markers, hist: histogram(r.values, col, groups, weights, bins, domain), unit: unitFor(r.columns[col]) };
+    return { r, col, quantity, side, rows, total, cum, domain, markers, bins, unit: unitFor(r.columns[col]) };
   }, [result, column, objects, weightsFor]);
+  // the Distribution and Cumulative area charts span the colour scale: Min / Max when set, else the data range
+  const [vmin, vmax] = scale && scale.vmax > scale.vmin ? [scale.vmin, scale.vmax] : [NaN, NaN];
+  const hist = useMemo(() => {
+    if (!data) return null;
+    const range: [number, number] = vmax > vmin ? [vmin, vmax] : data.domain;
+    return { range, ...histogram(data.r.values, data.col, data.rows.map((x) => x.g), data.rows.map((x) => x.w), data.bins, range) };
+  }, [data, vmin, vmax]);
   const running = run.status === 'running' || run.status === 'queued';
   // While a run is on its way the last result stays; the run line says so for a click (Auto runs refresh silently,
   // many times a second while dragging), and always when other users' jobs are ahead.
@@ -64,8 +71,8 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
         </div>
       )}
       {error && <Alert title="Run failed">{error}</Alert>}
-      {data && scale && (() => {
-        const { r, col, quantity, side, rows, total, cum, domain, markers, hist, unit } = data;
+      {data && hist && scale && (() => {
+        const { r, col, quantity, side, rows, total, cum, domain, markers, unit } = data;
         const hov = rows.find((x) => x.id === hovered), probeRow = probe ? rows.find((x) => x.id === probe.id) : undefined;
         const hasRange = scale.lo !== null || scale.hi !== null, split = rangeShares(cum, scale.lo, scale.hi);
         const withinShare = (x: (typeof rows)[number]) => {
@@ -153,9 +160,9 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
               </fieldset>
             </div>
             <h3>Distribution</h3>
-            <Histogram edges={hist.edges} shares={hist.shares} counts={hist.counts} scale={scale} unit={unit.value} probe={probe?.value ?? null} bin={bin} markers={markers} dispatch={dispatch} />
+            <Histogram edges={hist.edges} shares={hist.shares} counts={hist.counts} below={hist.below} above={hist.above} scale={scale} unit={unit.value} probe={probe?.value ?? null} bin={bin} markers={markers} dispatch={dispatch} />
             <h3>Cumulative area</h3>
-            <AreaCurve cum={cum} domain={domain} scale={scale} unit={unit.value} probe={probe?.value ?? null} />
+            <AreaCurve cum={cum} domain={hist.range} scale={scale} unit={unit.value} probe={probe?.value ?? null} />
             <h3>Problem range split</h3>
             <div className="cluster">
               <Donut
