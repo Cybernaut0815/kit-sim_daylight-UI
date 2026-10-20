@@ -10,11 +10,14 @@ catmullClark / loop meshes (creases included) so the run uses the smooth surface
 every day of the summer, or the whole year) on timelines or by dragging the sun path drawn around the model, and every
 CLI option; run on the GPU box (or tick "Run on every change"), read the results on the meshes (per-quantity
 gradients, a problem range painted blue / red) and in charts (legend, area-weighted histogram, cumulative area curve,
-range split, per-mesh table); the cursor's element is read out on every chart. Download the result as a `.usdz`:
-either the result colours replace the receivers' materials (a layer over the model files, packed with them), or the
-flattened stage with a variant set `daylight` on each receiver (`original` plus one variant per result); both keep
-every result column as a value primvar (`primvars:daylight_<result>`), on the polygons the run simulated: a mesh's own
-faces, or the subdivided faces when the run used subdivision, never the triangulation. Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
+range split, per-mesh table); the cursor's element is read out on every chart. Set the 3D view to one of the model's
+cameras or to a view saved in the app (kept for the session, removed again from the same menu). Download the result
+as a `.usdz` from the bar under the 3D view: either the result colours replace the receivers' materials (a layer over
+the model files, packed with them), or the flattened stage with a variant set `daylight` on each receiver (`original`
+plus one variant per result); both keep every result column as a value primvar (`primvars:daylight_<result>`), on the
+polygons the run simulated: a mesh's own faces, or the subdivided faces when the run used subdivision, never the
+triangulation; the views saved in the app go along as cameras when ticked.
+Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
 
 ![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
 

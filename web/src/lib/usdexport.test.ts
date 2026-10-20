@@ -83,6 +83,17 @@ describe('variantsSpec', () => {
   });
 });
 
+describe('saved views as cameras', () => {
+  const cameras = '        def Camera "View_1"\n        {\n        }\n';
+  it('the overlay and the variants spec put them in the result scope, under Cameras', () => {
+    const text = overlay({ meta: [], subLayers: ['./m.usda'], root: 'Daylight', meshes: [], shown: 0, cameras }).join('');
+    expect(text).toMatch(/def Scope "Daylight" \([\s\S]*and the views saved in the app[\s\S]*def Material "Result"[\s\S]*def Scope "Cameras"\n    \{\n        def Camera "View_1"/);
+    const { spec } = variantsSpec([], { columns: ['radiation_front'], shown: 0, root: 'Daylight', geometryRoot: 'Daylight_Geometry', assets: [], cameras });
+    expect(spec.usda).toContain('def Scope "Cameras"');
+    expect(overlay({ meta: [], subLayers: [], root: 'Daylight', meshes: [], shown: 0 }).join('')).not.toContain('Cameras');
+  });
+});
+
 describe('helpers', () => {
   it('freeName', () => expect(freeName('Daylight', ['Daylight', 'Daylight_2'])).toBe('Daylight_3'));
   it('usdz: stored files, data 64-byte aligned, the root layer first', () => {

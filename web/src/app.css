@@ -82,3 +82,14 @@
   .splitter { display: none; }
   .viewport { block-size: 24rem; }
 }
+
+/* the run bar: compact controls (it covers less of the model), the two menus kept together when it wraps */
+.viewport__bar { --control-h: 36px; }
+.viewport__bar > .cluster > .cluster:first-child { flex-wrap: nowrap; }
+/* the run bar's menus (Views, Download USD): saved rows with their remove button, the save form, short notes */
+.views__row { display: flex; align-items: center; }
+.views__row > .menu__item { flex: 1; min-inline-size: 0; }
+.views__note { padding: var(--space-1) var(--space-3) var(--space-2); font-size: var(--fs-small); }
+.views__save { gap: var(--space-2); }
+.views__save .input { inline-size: auto; flex: 1; min-inline-size: 0; }
+.views__download { justify-content: space-between; align-items: center; gap: var(--space-2); }

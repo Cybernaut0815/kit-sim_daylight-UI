@@ -24,6 +24,8 @@ import { initialState, parseSettings, reducer, serializeSettings, type ObjectRow
 import { Icon, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { downloadUsd, type ExportMode, type PickedModel } from './viewer/download';
+import { DownloadMenu, ViewsMenu } from './viewer/Views';
+import type { SavedView } from './lib/views';
 import type { SunView } from './viewer/sunpath';
 import { usd } from './viewer/usd';
 
@@ -95,6 +97,8 @@ export default function App() {
   const rows = useRef(state.objects); // the rows now, for the stable onVariant
   rows.current = state.objects;
   const [stage, setStage] = useState(0); // bumped per opened model: the tree resets and the camera frames; a variant switch keeps both
+  const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, this model
+  useEffect(() => setViews([]), [stage]);
 
   // The drawn meshes -> rows, their conversions and the viewer's objects: after open(), and after a variant switch.
   // roles: the old rows' roles by path (a new mesh is 'none'; a row hidden with the eye or H stays); without them a lone
@@ -287,18 +291,18 @@ export default function App() {
   // overridden), its problem range and the two range colours, all from the persisted viz settings.
   const scale = useMemo<Scale | null>(() => (result ? scaleFor(result.values, result.columns, column, s.viz) : null), [result, column, s.viz]);
   const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<string | null>(null);
-  const onDownload = useCallback(async (mode: ExportMode) => {
+  const onDownload = useCallback(async (mode: ExportMode, cameras: boolean) => {
     if (!result || !model.current.picked) return;
     setExporting(true);
     setExportError(null);
     try {
-      await downloadUsd(mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
+      await downloadUsd(mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor, cameras: cameras ? views : undefined });
     } catch (e) {
       setExportError((e as Error).message);
     } finally {
       setExporting(false);
     }
-  }, [result, state.objects, meshes, s.viz, column, weightsFor]);
+  }, [result, state.objects, meshes, s.viz, column, weightsFor, views]);
   const probeLabel = state.probe && result
     ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
     : null;
@@ -332,20 +336,26 @@ export default function App() {
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
             <Viewer meshes={meshes} stage={stage} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
-              {/* right-aligned, the button's label never changes and Cancel appears on the left: the tickbox stays put;
-                  progress shows in the Results run line */}
-              <div className="cluster cluster--end">
-                {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
-                <label title="Runs the simulation whenever the location, the date, the time or a setting changes">
-                  <input type="checkbox" id="auto-run" checked={ui.auto} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
-                </label>
-                <button className="btn btn--primary" type="button" disabled={!receivers.length || busyBar} aria-busy={busyBar} onClick={() => void onRun()}>Run simulation</button>
+              {/* left: the Views and Download USD menus; right-aligned, the button's label never changes and Cancel appears on
+                  its left: the tickbox stays put; progress shows in the Results run line */}
+              <div className="cluster cluster--between">
+                <div className="cluster">
+                  <ViewsMenu disabled={!meshes.size} views={views} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} />
+                  <DownloadMenu ready={!!result} exporting={exporting} error={exportError} views={views.length} onDownload={onDownload} />
+                </div>
+                <div className="cluster cluster--end">
+                  {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
+                  <label title="Runs the simulation whenever the location, the date, the time or a setting changes">
+                    <input type="checkbox" id="auto-run" checked={ui.auto} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
+                  </label>
+                  <button className="btn btn--primary" type="button" disabled={!receivers.length || busyBar} aria-busy={busyBar} onClick={() => void onRun()}>Run simulation</button>
+                </div>
               </div>
             </Viewer>
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel result={result} run={state.run} error={state.error} stale={stale} auto={autoOn && !slow} objects={state.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} exporting={exporting} exportError={exportError} onDownload={onDownload} dispatch={dispatch} />
+              <ResultsPanel result={result} run={state.run} error={state.error} stale={stale} auto={autoOn && !slow} objects={state.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} dispatch={dispatch} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

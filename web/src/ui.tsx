@@ -1,6 +1,6 @@
 // Shared bits: knob helper, stroke icons, empty-state illustrations, alert, swatch, number field, segmented control,
 // collapsible panel section.
-import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 
 /** The only inline style the design system allows: one of its nine knobs. */
 export const knob = (name: string, value: string): CSSProperties => ({ [name]: value }) as CSSProperties;
@@ -12,6 +12,7 @@ const ICONS = {
   undo: <><path d="M4 10h9a5 5 0 0 1 0 10h-3" /><path d="M8 6l-4 4 4 4" /></>,
   chevronRight: <path d="m9 6 6 6-6 6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
+  close: <path d="M6 6l12 12M18 6 6 18" />,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {
@@ -19,6 +20,35 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {ICONS[name]}
     </svg>
+  );
+}
+
+/**
+ * A button opening a zha-ui menu above it (the run bar sits at the bottom of the view): a native popover, so Esc and a
+ * click elsewhere close it; JS owns its place, as the menu primitive asks. `children` get `close`.
+ */
+export function MenuButton({ id, label, title, disabled, busy, children }: { id: string; label: string; title?: string; disabled?: boolean; busy?: boolean; children: (close: () => void) => ReactNode }) {
+  const menu = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const m = menu.current, b = button.current;
+    if (!m || !b) return;
+    const place = () => {
+      const r = b.getBoundingClientRect();
+      m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+      m.style.bottom = `${innerHeight - r.top + 4}px`;
+    };
+    const onToggle = (e: Event) => { if ((e as ToggleEvent).newState === 'open') place(); };
+    m.addEventListener('beforetoggle', onToggle); // before it shows: no frame at the old place
+    m.addEventListener('toggle', onToggle); // shown: its width is known, keep it inside the window
+    window.addEventListener('resize', place);
+    return () => { m.removeEventListener('beforetoggle', onToggle); m.removeEventListener('toggle', onToggle); window.removeEventListener('resize', place); };
+  }, []);
+  const close = () => { if (menu.current?.matches(':popover-open')) menu.current.hidePopover(); };
+  return (
+    <>
+      <button ref={button} className="btn btn--secondary" type="button" popoverTarget={id} disabled={disabled} aria-busy={busy} title={title}>{label}<Icon name="chevronDown" /></button>
+      <div ref={menu} id={id} className="menu" popover="auto" data-density="compact">{children(close)}</div>
+    </>
   );
 }
 

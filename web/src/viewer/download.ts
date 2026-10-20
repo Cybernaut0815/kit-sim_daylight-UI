@@ -9,6 +9,7 @@ import type { StageInfo } from 'usd-viewer';
 import { lin, rgbFor, scaleFor } from '../lib/gradients';
 import { freeName, overlay, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
 import { usdz } from '../lib/usdz';
+import { cameraPrims, type SavedView } from '../lib/views';
 import type { ObjectRow, RunResult, Settings } from '../store';
 import { usd } from './usd';
 
@@ -29,6 +30,7 @@ const bytes = async (parts: BlobPart[]) => new Uint8Array(await new Blob(parts).
 export async function downloadUsd(mode: ExportMode, o: {
   result: RunResult; objects: ObjectRow[]; meshes: ReadonlyMap<string, Object3D>; viz: Settings['viz']; column: number; model: PickedModel;
   weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
+  cameras?: SavedView[]; // views saved in the app, written as cameras under <root>/Cameras
 }): Promise<void> {
   const r = o.result, perFace = r.on === 'faces', items = usd.three.items();
   const scales = r.columns.map((_, c) => scaleFor(r.values, r.columns, c, o.viz));
@@ -56,6 +58,8 @@ export async function downloadUsd(mode: ExportMode, o: {
   const stem = o.model.root.replace(/^.*\//, '').replace(/\.\w+$/, '');
   const read = async ([path, file]: [string, File]): Promise<[string, Uint8Array]> => [path, new Uint8Array(await file.arrayBuffer())];
   const taken = (await usd.usd.children('/')).map((s) => s.name), root = freeName('Daylight', taken);
+  usd.three.root.updateMatrixWorld();
+  const cameras = o.cameras?.length ? cameraPrims(o.cameras, usd.three.root.matrixWorld, '        ') : '';
   let files: [string, Uint8Array][];
   if (mode === 'replace') {
     const session = (await usd.usd.layers()).find((l) => l.session);
@@ -74,11 +78,11 @@ export async function downloadUsd(mode: ExportMode, o: {
       ...(i.defaultPrim ? [`defaultPrim = "${i.defaultPrim.replace(/^\//, '')}"`] : []), `metersPerUnit = ${i.metersPerUnit}`, `upAxis = "${i.upAxis}"`,
       ...(i.hasTimeRange ? [`startTimeCode = ${i.startTimeCode}`, `endTimeCode = ${i.endTimeCode}`, `timeCodesPerSecond = ${i.timeCodesPerSecond}`] : []),
     ];
-    const layer = overlay({ meta, subLayers: [...(sessionText ? ['./_session.usda'] : []), `./${o.model.root}`], root, meshes: over, shown: o.column });
+    const layer = overlay({ meta, subLayers: [...(sessionText ? ['./_session.usda'] : []), `./${o.model.root}`], root, meshes: over, shown: o.column, cameras });
     files = [['_daylight.usda', await bytes(layer)], ...(sessionText ? [['_session.usda', sessionText] as [string, Uint8Array]] : []), ...(await Promise.all(o.model.files.map(read)))];
   } else {
     const mount = /^\/drop\/\d+\//.exec(o.model.info.url)?.[0];
-    const { spec, floats, ints } = variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets: mount ? [[mount, './']] : [] });
+    const { spec, floats, ints } = variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets: mount ? [[mount, './']] : [], cameras });
     const out = await usd.usd.exportVariants(spec, floats, ints);
     if (out.error !== undefined) throw new Error(out.error);
     const used = new Set(out.assets);
