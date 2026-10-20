@@ -1,7 +1,7 @@
 // Results: what the column means, run summary, colour scale and problem range (with resets), legend / histogram /
 // cumulative area curve in the result colours, the cursor readout, the range split, and the per-mesh table. Every
 // region keeps its size whatever the data or the hover state, so the panel does not jump.
-import { memo, useMemo, type Dispatch } from 'react';
+import { memo, useMemo, useState, type Dispatch } from 'react';
 import { AreaCurve } from '../charts/AreaCurve';
 import { Donut } from '../charts/Donut';
 import { Histogram } from '../charts/Histogram';
@@ -25,6 +25,10 @@ const cacheLine = (c: Record<string, string> | undefined) =>
 
 const orNull = (v: number) => (Number.isFinite(v) ? v : null);
 
+type ChartRange = 'absolute' | 'relative';
+const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
+const RANGE_HELP = 'Absolute: the whole range of the data. Relative: the colour scale, Min to Max (the data range where they are blank).';
+
 export const ResultsPanel = memo(function ResultsPanel({ result, run, error, stale, auto, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
   const data = useMemo(() => {
     if (!result) return null;
@@ -40,13 +44,13 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
     const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
     return { r, col, quantity, side, rows, total, cum, domain, markers, bins, unit: unitFor(r.columns[col]) };
   }, [result, column, objects, weightsFor]);
-  // the Distribution and Cumulative area charts span the colour scale: Min / Max when set, else the data range
+  // the Distribution and Cumulative area charts, each: relative = the colour scale (Min / Max when set), absolute = the
+  // data range
+  const [ranges, setRanges] = useState<Record<'hist' | 'curve', ChartRange>>({ hist: 'relative', curve: 'relative' });
   const [vmin, vmax] = scale && scale.vmax > scale.vmin ? [scale.vmin, scale.vmax] : [NaN, NaN];
-  const hist = useMemo(() => {
-    if (!data) return null;
-    const range: [number, number] = vmax > vmin ? [vmin, vmax] : data.domain;
-    return { range, ...histogram(data.r.values, data.col, data.rows.map((x) => x.g), data.rows.map((x) => x.w), data.bins, range) };
-  }, [data, vmin, vmax]);
+  const rangeOf = (chart: 'hist' | 'curve', domain: [number, number]): [number, number] => (ranges[chart] === 'relative' && vmax > vmin ? [vmin, vmax] : domain);
+  const [hlo, hhi] = data ? rangeOf('hist', data.domain) : [NaN, NaN];
+  const hist = useMemo(() => (data ? histogram(data.r.values, data.col, data.rows.map((x) => x.g), data.rows.map((x) => x.w), data.bins, [hlo, hhi]) : null), [data, hlo, hhi]);
   const running = run.status === 'running' || run.status === 'queued';
   // While a run is on its way the last result stays; the run line says so for a click (Auto runs refresh silently,
   // many times a second while dragging), and always when other users' jobs are ahead.
@@ -159,10 +163,16 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
                 </div>
               </fieldset>
             </div>
-            <h3>Distribution</h3>
+            <div className="cluster cluster--between">
+              <h3>Distribution</h3>
+              <Segmented name="hist-range" label="Distribution range" title={RANGE_HELP} value={ranges.hist} options={RANGE_OPTIONS} onChange={(hist) => setRanges((x) => ({ ...x, hist }))} />
+            </div>
             <Histogram edges={hist.edges} shares={hist.shares} counts={hist.counts} below={hist.below} above={hist.above} scale={scale} unit={unit.value} probe={probe?.value ?? null} bin={bin} markers={markers} dispatch={dispatch} />
-            <h3>Cumulative area</h3>
-            <AreaCurve cum={cum} domain={hist.range} scale={scale} unit={unit.value} probe={probe?.value ?? null} />
+            <div className="cluster cluster--between">
+              <h3>Cumulative area</h3>
+              <Segmented name="curve-range" label="Cumulative area range" title={RANGE_HELP} value={ranges.curve} options={RANGE_OPTIONS} onChange={(curve) => setRanges((x) => ({ ...x, curve }))} />
+            </div>
+            <AreaCurve cum={cum} domain={rangeOf('curve', domain)} scale={scale} unit={unit.value} probe={probe?.value ?? null} />
             <h3>Problem range split</h3>
             <div className="cluster">
               <Donut

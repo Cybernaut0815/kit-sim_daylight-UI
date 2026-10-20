@@ -114,11 +114,11 @@ export function NumberField({ id, label, value, onCommit, step = 'any', min, max
 }
 
 /** The .segmented radio track; option ids are `${name}-${value}` so validation can focus one. */
-export function Segmented<T extends string>({ name, label, value, options, onChange }: {
-  name: string; label: string; value: T; options: readonly (readonly [T, string])[]; onChange: (v: T) => void;
+export function Segmented<T extends string>({ name, label, title, value, options, onChange }: {
+  name: string; label: string; title?: string; value: T; options: readonly (readonly [T, string])[]; onChange: (v: T) => void;
 }) {
   return (
-    <div className="segmented" role="radiogroup" aria-label={label}>
+    <div className="segmented" role="radiogroup" aria-label={label} title={title}>
       {options.map(([v, text]) => (
         <label key={v}><input type="radio" name={name} id={`${name}-${v}`} value={v} checked={value === v} onChange={() => onChange(v)} /> {text}</label>
       ))}
