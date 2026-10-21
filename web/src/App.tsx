@@ -23,7 +23,7 @@ import { WeatherPanel } from './panels/WeatherPanel';
 import { initialState, parseSettings, reducer, serializeSettings, type ObjectRow, type Role } from './store';
 import { Icon, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
-import { downloadUsd, type ExportMode, type PickedModel } from './viewer/download';
+import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
 import { DownloadMenu, ViewsMenu } from './viewer/Views';
 import type { SavedView } from './lib/views';
 import type { SunView } from './viewer/sunpath';
@@ -295,12 +295,12 @@ export default function App() {
   // overridden), its problem range and the two range colours, all from the persisted viz settings.
   const scale = useMemo<Scale | null>(() => (result ? scaleFor(result.values, result.columns, column, s.viz) : null), [result, column, s.viz]);
   const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<string | null>(null);
-  const onDownload = useCallback(async (mode: ExportMode, cameras: boolean) => {
+  const onDownload = useCallback(async (format: Format, mode: ExportMode, cameras: boolean) => {
     if (!result || !model.current.picked) return;
     setExporting(true);
     setExportError(null);
     try {
-      await downloadUsd(mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor, cameras: cameras ? views : undefined });
+      await download(format, mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor, cameras: cameras ? views : undefined });
     } catch (e) {
       setExportError((e as Error).message);
     } finally {

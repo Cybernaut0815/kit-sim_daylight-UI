@@ -94,6 +94,14 @@ describe('saved views as cameras', () => {
   });
 });
 
+describe('overlay for one flattened file', () => {
+  it('without metadata and sublayers it is a bare layer: the core composes it over the stage', () => {
+    const text = overlay({ meta: [], subLayers: [], root: 'Daylight', meshes: [], shown: 0 }).join('');
+    expect(text.startsWith('#usda 1.0\n\ndef Scope "Daylight"')).toBe(true);
+    expect(overlay({ meta: ['upAxis = "Z"'], subLayers: [], root: 'Daylight', meshes: [], shown: 0 }).join('')).toMatch(/^#usda 1\.0\n\(\n {4}upAxis = "Z"\n\)\n/);
+  });
+});
+
 describe('helpers', () => {
   it('freeName', () => expect(freeName('Daylight', ['Daylight', 'Daylight_2'])).toBe('Daylight_3'));
   it('usdz: stored files, data 64-byte aligned, the root layer first', () => {

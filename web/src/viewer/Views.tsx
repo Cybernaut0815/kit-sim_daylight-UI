@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { Box3, Sphere } from 'three';
 import { cameraView, type SavedView, type StageCamera } from '../lib/views';
 import { Alert, Icon, MenuButton } from '../ui';
-import type { ExportMode } from './download';
+import { FORMATS, isUsd, type ExportMode, type Format } from './download';
 import { usd } from './usd';
 
 /** The next free "View N" name. */
@@ -63,35 +63,52 @@ export function ViewsMenu({ disabled, views, onSave, onRemove }: { disabled: boo
   );
 }
 
-const HELP: Record<ExportMode, string> = {
-  replace: 'One layer over the model files, packed with them. The receivers keep their geometry (or become the subdivided faces they were simulated on), coloured as shown, with every result as a value primvar.',
-  variants: 'The stage flattened as shown. Each receiver gets a variant set "daylight": "original" and one variant per result. The model’s own variant sets are baked as shown.',
+const FORMAT_LABEL: Record<Format, string> = {
+  usdz: '.usdz: USD package', usda: '.usda: USD text', usdc: '.usdc: USD binary', usd: '.usd: USD binary',
+  glb: '.glb: glTF binary', gltf: '.gltf: glTF text', obj: '.obj: Wavefront OBJ',
 };
+const MODE_HELP: Record<ExportMode, string> = {
+  replace: 'The result colours replace the receivers’ materials, on the faces they were simulated on (subdivided where the run was), with every result as a value primvar.',
+  variants: 'Each receiver gets a variant set "daylight": "original" and one variant per result. The stage is flattened as shown (the model’s own variant sets baked).',
+};
+/** What a download holds: the mode's help (USD), plus how the format packs it; the drawn model for glTF / OBJ. */
+const help = (format: Format, mode: ExportMode) => ({
+  usdz: `${MODE_HELP[mode]} ${mode === 'replace' ? 'A layer over the model files, packed with them.' : 'Packed with the files it uses.'}`,
+  usda: `${MODE_HELP[mode]} One file; a .zip with the textures it uses, if any.`,
+  glb: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*), the saved views as cameras.',
+  gltf: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*), the saved views as cameras. One text file.',
+  obj: 'The model as drawn, in metres, receivers coloured as shown (vertex colours). OBJ holds no values and no cameras.',
+})[format === 'usdc' || format === 'usd' ? 'usda' : format];
 
-export function DownloadMenu({ ready, exporting, error, views, onDownload }: { ready: boolean; exporting: boolean; error: string | null; views: number; onDownload: (mode: ExportMode, cameras: boolean) => void }) {
-  const [mode, setMode] = useState<ExportMode>('replace'), [cameras, setCameras] = useState(true);
-  const withCameras = cameras && views > 0;
+export function DownloadMenu({ ready, exporting, error, views, onDownload }: { ready: boolean; exporting: boolean; error: string | null; views: number; onDownload: (format: Format, mode: ExportMode, cameras: boolean) => void }) {
+  const [format, setFormat] = useState<Format>('usdz'), [mode, setMode] = useState<ExportMode>('replace'), [cameras, setCameras] = useState(true);
+  const usdFormat = isUsd(format), withCameras = cameras && views > 0 && format !== 'obj';
   return (
-    <MenuButton id="download-menu" label="Download USD" disabled={!ready} busy={exporting} title={ready ? 'The result as USD' : 'Run the simulation first'}>
+    <MenuButton id="download-menu" label="Download" disabled={!ready} busy={exporting} title={ready ? 'The result as USD, glTF or OBJ' : 'Run the simulation first'}>
       {() => (
         <>
+          <div className="views__format">
+            <select className="select" aria-label="Format" value={format} onChange={(e) => setFormat(e.target.value as Format)}>
+              {FORMATS.map((f) => <option key={f} value={f}>{FORMAT_LABEL[f]}</option>)}
+            </select>
+          </div>
           <div className="menu__section">What the file holds</div>
           {(['replace', 'variants'] as const).map((m) => (
-            <label key={m} className="menu__item" title={HELP[m]}>
-              <input className="menu__check" type="radio" name="usd-mode" value={m} checked={mode === m} onChange={() => setMode(m)} />
+            <label key={m} className="menu__item" title={usdFormat ? MODE_HELP[m] : 'USD formats only'}>
+              <input className="menu__check" type="radio" name="usd-mode" value={m} checked={mode === m} disabled={!usdFormat} onChange={() => setMode(m)} />
               <span>{m === 'replace' ? 'Colours replace the materials' : 'Variants per result (flattened)'}</span>
             </label>
           ))}
-          <p className="views__note text-muted">{HELP[mode]}</p>
+          <p className="views__note text-muted lines-5">{help(format, mode)}</p>
           <div className="menu__separator" />
           <label className="menu__item">
-            <input className="menu__check" type="checkbox" checked={withCameras} disabled={!views} onChange={(e) => setCameras(e.target.checked)} />
+            <input className="menu__check" type="checkbox" checked={withCameras} disabled={!views || format === 'obj'} onChange={(e) => setCameras(e.target.checked)} />
             <span>Include saved views ({views})</span>
           </label>
           {error && <Alert title="Download failed">{error}</Alert>}
           <div className="menu__footer views__download">
-            <span className="text-muted">{exporting ? <><span className="spinner" aria-hidden="true" /> Packing{mode === 'variants' ? ', flattening first' : ''}</> : null}</span>
-            <button className="btn btn--primary" type="button" disabled={exporting} aria-busy={exporting} onClick={() => onDownload(mode, withCameras)}>Download</button>
+            <span className="text-muted">{exporting ? <><span className="spinner" aria-hidden="true" /> {usdFormat ? `Packing${mode === 'variants' || format !== 'usdz' ? ', flattening first' : ''}` : 'Writing'}</> : null}</span>
+            <button className="btn btn--primary" type="button" disabled={exporting} aria-busy={exporting} onClick={() => onDownload(format, mode, withCameras)}>Download</button>
           </div>
         </>
       )}

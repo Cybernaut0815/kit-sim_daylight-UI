@@ -109,6 +109,13 @@ describe('toUsda: the look', () => {
     expect(text).toContain('def GeomSubset "Subset" (\n    prepend apiSchemas = ["MaterialBindingAPI"]\n)\n{\n    uniform token elementType = "face"\n    uniform token familyName = "materialBind"\n    int[] indices = [0, 1]\n    rel material:binding = </Model/Materials/A>');
     expect(text).toContain('int[] indices = [10, 11]\n    rel material:binding = </Model/Materials/B>');
   });
+  it('lets a vertex-coloured material read displayColor (a GLB this app wrote: its receivers keep their colours)', () => {
+    const m = new MeshBasicMaterial({ name: 'Daylight result', vertexColors: true });
+    const { text } = layer(new Mesh(triangle().setAttribute('color', new Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1], 3)), m));
+    expect(text).toContain('color3f inputs:diffuseColor.connect = </Model/Materials/Daylight_result/Color.outputs:result>');
+    expect(text).toContain('uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = (1, 1, 1)');
+    expect(text).not.toContain('def Shader "St"');
+  });
   it('writes no material for a loader default, vertex colours as displayColor, and no texture for an image that never loaded', () => {
     const fallback = new MeshStandardMaterial();
     fallback.userData.fallback = true;

@@ -143,9 +143,12 @@ ${cameras}    }
 /**
  * Root layer over the model: `meta` = the stage metadata lines (it is the root layer now), `subLayers` = the model's
  * layers strongest first, `root` = a free top-level name for the material, `shown` = the column whose colours are drawn.
+ * Without meta and subLayers a bare layer: the overlay the core composes over the stage for one flattened file.
  */
 export function overlay(o: { meta: string[]; subLayers: string[]; root: string; meshes: OverlayMesh[]; shown: number; cameras?: string }): string[] {
-  const out = ['#usda 1.0\n(\n', ...o.meta.map((l) => `    ${l}\n`), '    subLayers = [\n', o.subLayers.map((l) => `        @${l}@`).join(',\n'), '\n    ]\n)\n'];
+  const out = o.meta.length || o.subLayers.length
+    ? ['#usda 1.0\n(\n', ...o.meta.map((l) => `    ${l}\n`), ...(o.subLayers.length ? ['    subLayers = [\n', o.subLayers.map((l) => `        @${l}@`).join(',\n'), '\n    ]\n'] : []), ')\n']
+    : ['#usda 1.0\n'];
   interface Node { kids: Map<string, Node>; mesh?: OverlayMesh }
   const tree: Node = { kids: new Map() };
   for (const m of o.meshes) {

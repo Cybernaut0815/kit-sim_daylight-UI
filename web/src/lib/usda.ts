@@ -145,7 +145,10 @@ export function toUsda(root: Object3D): Usda {
       inputs.push(`color3f inputs:diffuseColor.connect = ${o}rgb>`);
       if (m.transparent || cutout) inputs.push(`float inputs:opacity.connect = ${o}a>`);
     } else {
-      inputs.push(`color3f inputs:diffuseColor = ${tuple(c.r, c.g, c.b)}`);
+      if (m.vertexColors) { // glTF COLOR_0, OBJ v r g b: the diffuse reads displayColor (the factor only as its fallback)
+        shaders.push(`def Shader "Color"\n{\n    uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = ${tuple(c.r, c.g, c.b)}\n    float3 outputs:result\n}\n`);
+        inputs.push(`color3f inputs:diffuseColor.connect = <${path}/Color.outputs:result>`);
+      } else inputs.push(`color3f inputs:diffuseColor = ${tuple(c.r, c.g, c.b)}`);
       if (opacity < 1) inputs.push(`float inputs:opacity = ${num(opacity)}`);
     }
     if (cutout) inputs.push(`float inputs:opacityThreshold = ${num(m.alphaTest)}`);
@@ -164,7 +167,7 @@ export function toUsda(root: Object3D): Usda {
       const sx = Math.abs(m.normalScale?.x ?? 1), sy = Math.abs(m.normalScale?.y ?? 1);
       inputs.push(`normal3f inputs:normal.connect = ${texture('Normal', m.normalMap, false, [2 * sx, 2 * sy, 2, 1], [-sx, -sy, -1, 0])}rgb>`);
     }
-    const st = shaders.length ? 'def Shader "St"\n{\n    uniform token info:id = "UsdPrimvarReader_float2"\n    string inputs:varname = "st"\n    float2 outputs:result\n}\n' : '';
+    const st = shaders.some((x) => x.includes('UsdUVTexture')) ? 'def Shader "St"\n{\n    uniform token info:id = "UsdPrimvarReader_float2"\n    string inputs:varname = "st"\n    float2 outputs:result\n}\n' : '';
     return `def Material "${id}"\n{\n    token outputs:surface.connect = <${path}/Surface.outputs:surface>\n`
       + `def Shader "Surface"\n{\n    uniform token info:id = "UsdPreviewSurface"\n${inputs.map((x) => `    ${x}\n`).join('')}    token outputs:surface\n}\n${st}${shaders.join('')}}\n`;
   };

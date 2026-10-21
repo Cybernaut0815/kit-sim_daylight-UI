@@ -2,21 +2,24 @@
 
 Browser front end and HTTP server for [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) (GPU
 annual daylight / solar simulation): open a USD stage (`.usd` / `.usda` / `.usdc` / `.usdz`, as files or a folder with
-its assets) or a `.glb` / `.gltf` / `.obj` (turned into USD in the browser) in the
-[USD web viewer](https://github.com/Cybernaut0815/USD_WebViewer), pick shade-casting and receiving meshes (or whole
-groups) in the stage's prim tree, switch its variants, hide or lock prims as in the viewer, subdivide
-catmullClark / loop meshes (creases included) so the run uses the smooth surface, set the site on a map, the weather
-(upload, nearest station, PVGIS or clear sky), the time (a single date and time, a date range such as 09:00 to 17:00
-every day of the summer, or the whole year) on timelines or by dragging the sun path drawn around the model, and every
-CLI option; run on the GPU box (or tick "Run on every change"), read the results on the meshes (per-quantity
-gradients, a problem range painted blue / red) and in charts (legend, area-weighted histogram, cumulative area curve,
-range split, per-mesh table); the cursor's element is read out on every chart. Set the 3D view to one of the model's
-cameras or to a view saved in the app (kept for the session, removed again from the same menu). Download the result
-as a `.usdz` from the bar under the 3D view: either the result colours replace the receivers' materials (a layer over
-the model files, packed with them), or the flattened stage with a variant set `daylight` on each receiver (`original`
-plus one variant per result); both keep every result column as a value primvar (`primvars:daylight_<result>`), on the
-polygons the run simulated: a mesh's own faces, or the subdivided faces when the run used subdivision, never the
-triangulation; the views saved in the app go along as cameras when ticked.
+its assets) or a `.glb` / `.gltf` (Draco and meshopt compression too) / `.obj` (with its `.mtl`), turned into USD in the
+browser with its materials, UVs and textures, in the [USD web viewer](https://github.com/Cybernaut0815/USD_WebViewer),
+pick shade-casting and receiving meshes (or whole groups) in the stage's prim tree, switch its variants, hide or lock
+prims as in the viewer, subdivide catmullClark / loop meshes (creases included) so the run uses the smooth surface, set
+the site on a map, the weather (upload, nearest station, PVGIS or clear sky), the time (a single date and time, a date
+range such as 09:00 to 17:00 every day of the summer, or the whole year) on timelines or by dragging the sun path drawn
+around the model, and every CLI option; run on the GPU box (or tick "Run on every change"), read the results on the
+meshes (per-quantity gradients, a problem range painted blue / red) and in charts (legend, area-weighted histogram,
+cumulative area curve, each over the colour scale or the whole data range, range split, per-mesh table); the cursor's
+element is read out on every chart. Set the 3D view to one of the model's cameras or to a view saved in the app (kept
+for the session, removed again from the same menu). Download the result from the bar under the 3D view as `.usdz`,
+`.usda`, `.usdc`, `.usd`, `.glb`, `.gltf` or `.obj`. In USD either the result colours replace the receivers' materials,
+or the flattened stage gets a variant set `daylight` on each receiver (`original` plus one variant per result); both
+keep every result column as a value primvar (`primvars:daylight_<result>`) on the polygons the run simulated: a mesh's
+own faces, or the subdivided faces when the run used subdivision, never the triangulation. A `.usdz` packs the model
+files with it; a `.usda` / `.usdc` / `.usd` is the flattened stage, zipped with the textures it uses. glTF and OBJ hold
+the model as drawn, in metres, the receivers coloured with the shown result; glTF also every result as a value
+attribute (`_DAYLIGHT_<RESULT>`). The views saved in the app go along as cameras (USD, glTF) when ticked.
 Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
 
 ![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
