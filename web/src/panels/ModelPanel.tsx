@@ -23,13 +23,13 @@ export const ModelPanel = memo(function ModelPanel({ objects, selection, selecte
       <div className="field">
         <label className="field__label" htmlFor="model-files">Model files</label>
         <input
-          className="input" id="model-files" type="file" multiple accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp,.exr,.hdr" disabled={loading}
+          className="input" id="model-files" type="file" multiple accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.png,.jpg,.jpeg,.webp,.exr,.hdr" disabled={loading}
           aria-invalid={errors.model ? true : undefined}
           onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) onFiles(files); }}
         />
         {errors.model
           ? <span className="field__error">{errors.model}</span>
-          : <span className="field__help line">{loading ? <><span className="spinner" aria-hidden="true" /> Loading the model</> : '.usd, .usda, .usdc, .usdz, .glb, .gltf with its .bin and textures, or .obj'}</span>}
+          : <span className="field__help line">{loading ? <><span className="spinner" aria-hidden="true" /> Loading the model</> : '.usd, .usda, .usdc, .usdz, .glb, .gltf (Draco, meshopt) with its .bin and textures, or .obj with its .mtl and textures'}</span>}
       </div>
       <div className="field">
         <label className="field__label" htmlFor="model-folder">Folder…</label>

@@ -10,7 +10,7 @@ import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args'
 import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
-import { loadFiles } from './lib/loaders';
+import { loadFiles, png } from './lib/loaders';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, unitFor, vertexAreas } from './lib/result';
@@ -140,18 +140,22 @@ export default function App() {
     let opened = false;
     try {
       // USD opens as picked (a folder keeps its layout, so references into subfolders resolve); glb / gltf / obj become a
-      // USDA layer first, so every model takes the same path.
+      // USDA layer first, with its textures as PNG files beside it, so every model takes the same path.
       // ponytail: a folder with several top-level USD files opens the first by name; add a root chooser when that is a real case
-      let own = new Map<string, string>(), source: LocalFile[] | File, kept: [string, File][];
+      let own = new Map<string, string>(), source: LocalFile[];
+      const warnings: string[] = [];
       if (files.some((f) => /\.usd[acz]?$/i.test(f.name))) {
         source = files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
-        kept = source.map((f) => [f.path, f.file]);
       } else {
-        const usda = toUsda(await loadFiles(files));
+        const usda = toUsda(await loadFiles(files, (m) => warnings.push(m)));
         own = usda.names;
-        source = new File(usda.parts, 'model.usda');
-        kept = [['model.usda', source]];
+        const stem = files.find((f) => /\.(glb|gltf|obj)$/i.test(f.name))?.name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') || 'model';
+        source = [{ path: `${stem}.usda`, file: new File(usda.parts, `${stem}.usda`) }];
+        for (const [path, t] of usda.textures) {
+          try { source.push({ path, file: await png(t.image, path.slice(path.lastIndexOf('/') + 1)) }); } catch { warnings.push(`Texture ${path} could not be read.`); }
+        }
       }
+      const kept: [string, File][] = source.map((f) => [f.path, f.file]);
       // open() closes the current stage first: drop its rows and conversions now, so nothing hovers, probes or runs a
       // model that is no longer drawn. A failure before this point keeps the current model.
       conv.current.clear();
@@ -166,7 +170,7 @@ export default function App() {
       if (session) await usd.usd.setEditTarget(session.identifier);
       // The bare viewer shows its messages nowhere: a referenced file that was not picked, or a failed page, still
       // resolves open() with part of the model. Say so, and keep what loaded.
-      const problems = usd.session.log.slice(logged).filter((m) => m.level === 'error').map((m) => m.message);
+      const problems = [...usd.session.log.slice(logged).filter((m) => m.level === 'error').map((m) => m.message), ...warnings];
       const { objects, map } = await readStage();
       if (!objects.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
       setMeshes(map);
