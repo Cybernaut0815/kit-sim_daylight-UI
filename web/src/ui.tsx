@@ -77,15 +77,16 @@ export function Alert({ title, children }: { title: string; children?: ReactNode
 export function Swatch({ color, outline }: { color?: string; outline?: boolean }) {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-      {outline ? <rect x="0.5" y="0.5" width="11" height="11" fill={color ?? 'none'} stroke="currentColor" strokeOpacity="0.5" /> : <rect width="12" height="12" fill={color} />}
+      {outline ? <rect className="swatch__outline" x="0.5" y="0.5" width="11" height="11" fill={color ?? 'none'} /> : <rect width="12" height="12" fill={color} />}
     </svg>
   );
 }
 
-/** Small reset-to-default icon button, placed beside the setting it resets. */
-export function ResetButton({ what, onClick }: { what: string; onClick: () => void }) {
+/** Small reset-to-default icon button, placed beside the setting it resets; `label` when "Reset <what> to default" is not
+ *  what it does. */
+export function ResetButton({ what, label = `Reset ${what} to default`, onClick }: { what: string; label?: string; onClick: () => void }) {
   return (
-    <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Reset ${what} to default`} title={`Reset ${what} to default`} onClick={onClick}>
+    <button className="icon-btn icon-btn--ghost" type="button" aria-label={label} title={label} onClick={onClick}>
       <Icon name="undo" />
     </button>
   );

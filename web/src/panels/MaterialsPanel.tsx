@@ -1,10 +1,11 @@
 // Materials: what the run's surfaces let through, the two default rows first, then each material bound to a receiver or
 // a shade: its kind and transmittance from its own settings (lib/optics.ts derive()), the default, or the user's edit (by
 // material path, for this model); a preset sets the numbers at once. A fixed-height box (drag the corner to enlarge) and
-// a two-line status, so a model's rows and its texture reads never move the panels below.
+// a two-line status, so a model's rows and its texture reads never move the panels below. The status is what a run held
+// for the reads focuses, and says when they end.
 import { Fragment, memo, type Dispatch } from 'react';
 import type { MaterialNetwork } from 'usd-viewer';
-import { DEFAULT_KEY, GLASS_KEY, PRESETS, editOptics, type MaterialRow, type Optics, type OpticsEdit } from '../lib/optics';
+import { DEFAULT_KEY, GLASS_KEY, PRESETS, clamp, editOptics, type MaterialRow, type Optics, type OpticsEdit } from '../lib/optics';
 import type { Action, SimMode } from '../store';
 import { ResetButton, Section, Swatch } from '../ui';
 
@@ -32,16 +33,16 @@ export const MaterialsPanel = memo(function MaterialsPanel({ rows, fallback, gla
     { key: GLASS_KEY, name: 'Default glass', optics: glass, title: 'Every material that reads as glass: its opacity tells glass apart, not how much it passes. Built in: double low-e, 0.64 (visible light; 0.37 of the solar energy).' },
     ...rows.map((m) => ({ key: m.path, name: m.path.slice(m.path.lastIndexOf('/') + 1), title: m.path, optics: m.optics, colour: colourOf(m.network) })),
   ];
-  const status = mode === 'ladybug' ? 'Ladybug mode: every surface opaque and black, as in RadiationStudy'
+  const status = mode === 'ladybug' ? 'Ladybug mode: every surface opaque and black'
     : !transmission ? 'Transmission is off: glass and screens block like solid surfaces'
       : 'τ: the share of the light passed straight through, at normal incidence';
   const edit = (key: string, e: OpticsEdit) => dispatch({ type: 'OPTICS_EDIT', key, edit: e });
   return (
     <Section id="materials" title="Materials" busy={reading}>
-      <p className="text-muted lines-2" title={reading ? 'Cut-out and screen masks are read once per model; a run with Transmission on waits for them' : undefined}>
+      <p className="text-muted lines-2" id="materials-status" role="status" tabIndex={-1} title={mode === 'physical' ? 'Cut-out and screen masks are read once per model, when Transmission is on; a run waits for them' : undefined}>
         {reading ? <><span className="spinner" aria-hidden="true" /> Reading the materials</> : status}
       </p>
-      <div className="materials" id="materials" tabIndex={-1}>
+      <div className="materials">
         <table className="data-table data-table--wrap">
           <caption className="sr-only">The default material, the default glass, then the materials of the receivers and shades</caption>
           <colgroup><col /><col className="materials__col-kind" /><col className="materials__col-tau" /></colgroup>
@@ -62,7 +63,7 @@ export const MaterialsPanel = memo(function MaterialsPanel({ rows, fallback, gla
                       <div className="line"><Swatch color={r.colour} outline /> {r.name}</div>
                       <div className="cluster">
                         <span className={`badge ${intent}`} title={about}><span className="dot" />{label}</span>
-                        {o.source === 'edited' && <ResetButton what={r.name} onClick={() => dispatch({ type: 'OPTICS_RESET', key: r.key })} />}
+                        {o.source === 'edited' && <ResetButton what={r.name} label={`Undo your edit of ${r.name}`} onClick={() => dispatch({ type: 'OPTICS_RESET', key: r.key })} />}
                       </div>
                     </td>
                     <td>
@@ -71,19 +72,25 @@ export const MaterialsPanel = memo(function MaterialsPanel({ rows, fallback, gla
                         onChange={(e) => { const p = PRESETS.find((x) => x.name === e.target.value); edit(r.key, p ? { rho: p.rho, tau: p.tau, kind: p.kind } : editOptics(o, { kind: e.target.value as Optics['kind'] }, fallback, glass)); }}
                       >
                         <optgroup label="Kind">{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</optgroup>
-                        {KINDS.map(([k, l]) => (
-                          <optgroup key={k} label={`${l} presets: ${k === 'opaque' ? 'reflectance' : 'transmittance'}`}>
-                            {PRESETS.filter((p) => p.kind === k).map((p) => <option key={p.name} value={p.name} title={p.source}>{p.name} {(k === 'opaque' ? p.rho : p.tau).toFixed(2)}</option>)}
+                        {/* phase 2: the opaque presets (a reflectance) with the reflectance column; until then they would change nothing */}
+                        {KINDS.filter(([k]) => k !== 'opaque').map(([k, l]) => (
+                          <optgroup key={k} label={`${l} presets: transmittance`}>
+                            {PRESETS.filter((p) => p.kind === k).map((p) => <option key={p.name} value={p.name} title={p.source}>{p.name} {p.tau.toFixed(2)}</option>)}
                           </optgroup>
                         ))}
                       </select>
                     </td>
                     <td className="num">
-                      {/* committed on blur or Enter, and only when changed: a blur alone never turns a row into an edit */}
+                      {/* committed on blur or Enter, and only when changed: a blur alone never turns a row into an edit. The box
+                          then shows what the row holds, clamped, also when that is the value it showed before (no remount) */}
                       <input
-                        key={tau} className="input" type="number" inputMode="decimal" min={0} max={1} step={0.01} defaultValue={tau} disabled={o.kind === 'opaque'}
+                        key={tau} className="input" type="number" inputMode="decimal" min={0} max={o.kind === 'glass' ? 0.918 : 1} step={0.01} defaultValue={tau} disabled={o.kind === 'opaque'}
                         aria-label={`${r.name}: transmittance`} aria-describedby={warn}
-                        onBlur={(e) => { const v = e.currentTarget.valueAsNumber; if (!Number.isFinite(v)) e.currentTarget.value = String(tau); else if (v !== tau) edit(r.key, editOptics(o, { tau: v }, fallback, glass)); }}
+                        onBlur={(e) => {
+                          const v = e.currentTarget.valueAsNumber, next = Number.isFinite(v) && v !== tau ? editOptics(o, { tau: v }, fallback, glass) : null;
+                          if (next) edit(r.key, next);
+                          e.currentTarget.value = String(next ? Number(clamp({ ...next, source: 'edited' }).tau.toFixed(3)) : tau);
+                        }}
                         onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                       />
                     </td>

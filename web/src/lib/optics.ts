@@ -179,7 +179,8 @@ export interface MaterialRow { path: string; network?: MaterialNetwork; optics: 
 
 /**
  * The run's meshes for opticsArgs() (receivers and shades: an Ignore row is left out, its materials never read), the
- * default material and glass, the materials of the run's slots (first use first), and the texture reads still to decode.
+ * default material and glass, the materials of the run's slots (first use first), and the texture reads still to decode
+ * (an edited material's are never read).
  * A face slot's material (`materials` by the viewer's rid; 0 or a rid without an entry = none) takes its edit, else
  * derive() over the textures decoded so far (`stats` by readKey, null = unreadable), else the default material; the
  * default rows take their edits too.
@@ -196,9 +197,9 @@ export function resolveOptics(
     if (!m) return fallback;
     let row = seen.get(m.path);
     if (!row) {
-      const reads = textureReads(m.network);
-      for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r);
-      const optics = edited(m.path) ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
+      const reads = textureReads(m.network), edit = edited(m.path);
+      if (!edit) for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r); // an edit needs none of them
+      const optics = edit ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
       seen.set(m.path, (row = { path: m.path, network: m.network, optics }));
     }
     return row.optics;

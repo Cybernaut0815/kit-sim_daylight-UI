@@ -128,14 +128,17 @@ describe('toUsda: the look', () => {
     expect(c).toContain('color3f inputs:diffuseColor.connect = </Model/Materials/Leaves/BaseColor.outputs:rgb>');
     expect(c).toContain('float inputs:opacity.connect = </Model/Materials/Leaves/Opacity.outputs:a>');
   });
-  it('writes glTF transmission as a constant opacity, max(1 - T, 0.2) x alpha, with or without a texture; a cut-out stays one', () => {
+  it('writes glTF transmission as opacity max(1 - T, 0.2) x alpha: a constant, or a BLEND texture alpha times it; a cut-out stays one', () => {
     const map = new Texture(image(2));
     expect(look(new MeshPhysicalMaterial({ name: 'Clear', transmission: 1 }))).toContain('float inputs:opacity = 0.2\n');
     expect(look(new MeshPhysicalMaterial({ name: 'Metal', transmission: 1, metalness: 1 }))).not.toContain('inputs:opacity'); // glTF: metals pass no light
     const tinted = look(new MeshPhysicalMaterial({ name: 'Tinted', transmission: 0.7, opacity: 0.5, map })); // OPAQUE: its alpha factor stays out
     expect(tinted).toContain('float inputs:opacity = 0.3\n');
     expect(tinted).not.toContain('inputs:opacity.connect');
-    expect(look(new MeshPhysicalMaterial({ name: 'Blend', transmission: 0.25, opacity: 0.5, transparent: true, map }))).toContain('float inputs:opacity = 0.375\n');
+    expect(look(new MeshPhysicalMaterial({ name: 'Glass', transmission: 0.25, opacity: 0.5, transparent: true }))).toContain('float inputs:opacity = 0.375\n');
+    const blend = look(new MeshPhysicalMaterial({ name: 'Blend', transmission: 0.25, opacity: 0.5, transparent: true, map })); // the texture's alpha keeps its cut-outs
+    expect(blend).toContain('float4 inputs:scale = (1, 1, 1, 0.375)');
+    expect(blend).toContain('float inputs:opacity.connect = </Model/Materials/Blend/BaseColor.outputs:a>\n');
     // glTF MASK: the constant under the threshold would draw nothing, so the texture's alpha cuts it out as before
     expect(look(new MeshPhysicalMaterial({ name: 'Mask', transmission: 1, alphaTest: 0.5, map }))).toContain('float inputs:opacity.connect = </Model/Materials/Mask/BaseColor.outputs:a>\n    float inputs:opacityThreshold = 0.5\n');
   });

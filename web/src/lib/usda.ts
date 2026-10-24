@@ -140,20 +140,21 @@ export function toUsda(root: Object3D): Usda {
       return `<${path}/${name}.outputs:`;
     };
     // The alpha counts only when transparent or cut out: glTF OPAQUE leaves its factor's alpha in opacity, drawn opaque.
-    const c = m.color ?? { r: 0.18, g: 0.18, b: 0.18 }, cutout = m.alphaTest > 0, alpha = m.transparent || cutout ? m.opacity ?? 1 : 1;
+    // glTF transmission (three draws it in a pass of its own, transparent stays false) scales it by 1 - T, never below 0.2
+    // so the glass stays in view: a constant, or with BLEND the texture's alpha times it (its cut-outs kept); metals pass
+    // none. ponytail: the factors only (no transmission / metalness texture); a cut-out with transmission (glTF MASK)
+    // stays a cut-out with opaque glass: UsdPreviewSurface has no translucent cut-out, the factor would sink the alpha
+    // under the threshold and draw nothing
+    const c = m.color ?? { r: 0.18, g: 0.18, b: 0.18 }, cutout = m.alphaTest > 0, transmit = (m.transmission ?? 0) * (1 - (m.metalness ?? 0));
+    const alpha = (m.transparent || cutout ? m.opacity ?? 1 : 1) * (transmit && !cutout ? Math.max(1 - transmit, 0.2) : 1);
     const base = loaded(m.map) ? texture('BaseColor', m.map, true, [c.r, c.g, c.b, alpha]) : null;
     if (base) inputs.push(`color3f inputs:diffuseColor.connect = ${base}rgb>`);
     else if (m.vertexColors) { // glTF COLOR_0, OBJ v r g b: the diffuse reads displayColor (the factor only as its fallback)
       shaders.push(`def Shader "Color"\n{\n    uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = ${tuple(c.r, c.g, c.b)}\n    float3 outputs:result\n}\n`);
       inputs.push(`color3f inputs:diffuseColor.connect = <${path}/Color.outputs:result>`);
     } else inputs.push(`color3f inputs:diffuseColor = ${tuple(c.r, c.g, c.b)}`);
-    // glTF transmission (three draws it in a pass of its own, transparent stays false) as a constant, never below 0.2 so the
-    // glass stays in view; metals pass none. An MTL map_d: its alpha where that varies (a cut-out PNG), else its grey levels.
-    // ponytail: the factors only (no transmission / metalness texture); a cut-out with transmission (glTF MASK) stays a
-    // cut-out with opaque glass: UsdPreviewSurface has no translucent cut-out, the constant under its threshold draws nothing
-    const transmit = (m.transmission ?? 0) * (1 - (m.metalness ?? 0));
-    const opacity = transmit && !cutout ? `float inputs:opacity = ${num(Math.max(1 - transmit, 0.2) * alpha)}`
-      : loaded(m.alphaMap) ? `float inputs:opacity.connect = ${texture('Opacity', m.alphaMap, false, [alpha, alpha, alpha, alpha])}${alphaVaries(m.alphaMap.image) ? 'a' : 'r'}>`
+    // An MTL map_d: its alpha where that varies (a cut-out PNG), else its grey levels.
+    const opacity = loaded(m.alphaMap) ? `float inputs:opacity.connect = ${texture('Opacity', m.alphaMap, false, [alpha, alpha, alpha, alpha])}${alphaVaries(m.alphaMap.image) ? 'a' : 'r'}>`
       : base && (m.transparent || cutout) ? `float inputs:opacity.connect = ${base}a>`
       : alpha < 1 ? `float inputs:opacity = ${num(alpha)}` : null;
     if (opacity) inputs.push(opacity);

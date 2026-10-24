@@ -5,9 +5,9 @@ import { NumberField, Segmented, knob, Section } from '../ui';
 interface Props { sim: Settings['sim']; errors: Record<string, string>; dispatch: Dispatch<Action> }
 
 // The light-through-materials switches (the numbers are the Materials table's); Ladybug mode keeps RadiationStudy's
-// opaque black scene. The phase-2 Reflections switches add ", 2 reflections, 4096 samples (slower); interiors need 5-8
-// reflections" to the hint.
-const PRECISE = 'More precise: Transmission on (slower). The Materials table says what each surface lets through.';
+// opaque black scene. Each hint fits two lines at the narrowest panel, so a mode switch moves nothing; the phase-2
+// Reflections switches make it "Transmission on, 2 reflections, 4096 samples (slower); interiors need 5-8 reflections".
+const PRECISE = 'More precise: Transmission on (slower).';
 const LADYBUG = 'Ladybug mode: every surface opaque and black, as in RadiationStudy';
 
 export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch }: Props) {

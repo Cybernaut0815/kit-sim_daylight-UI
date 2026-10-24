@@ -138,6 +138,8 @@ describe('validate', () => {
     expect(validate(s, true, false)).toEqual({ materials: expect.stringMatching(/^Reading the materials/) });
     expect(validate(s, true, true)).toEqual({});
     expect(validate(s, true)).toEqual({}); // the default: read
+    s.sim.quantities = [];
+    expect(Object.keys(validate(s, true, false))).toEqual(['quantities', 'materials']); // a field error first: it gets the focus, the click is not held
     s.sim.mode = 'ladybug';
     expect(validate(s, true, false).materials).toBeUndefined(); // Ladybug: opaque and black whatever the switch
   });

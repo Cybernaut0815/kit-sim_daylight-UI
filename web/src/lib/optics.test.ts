@@ -235,5 +235,7 @@ describe('resolveOptics', () => {
     expect(e.meshes[0].optics).toEqual([{ rho: 0, tau: 0.918, kind: 'glass', source: 'edited', warning: expect.stringMatching(/0\.918/) }, e.fallback, { rho: 0, tau: 0.5, kind: 'glass', source: 'derived' }]);
     expect(e.materials[0].optics).toBe(e.meshes[0].optics[0]); // the row shows what the run sends
     expect(e.meshes[2].optics).toEqual([e.fallback]);
+    expect(e.unread).toEqual([leaf]);
+    expect(resolveOptics(rows, mats, new Map(), { '/M/Leaves': { rho: 0, tau: 1, kind: 'porous' } }).unread).toEqual([]); // edited: its mask is never read
   });
 });

@@ -35,7 +35,7 @@ const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'dayligh
 // One id per browser tab for the server's per-client job limit (sessionStorage: a new tab is a new client).
 const CLIENT_ID = (() => { try { return sessionStorage.getItem('daylight.client') ?? (sessionStorage.setItem('daylight.client', crypto.randomUUID()), sessionStorage.getItem('daylight.client')!); } catch { return crypto.randomUUID(); } })();
 // validate() field -> the control that gets focus
-const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date', materials: 'materials' };
+const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date', materials: 'materials-status' };
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3).
 const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0 }, MIN_W = 240, MAX_W = 640;
@@ -237,13 +237,15 @@ export default function App() {
   // Each run mesh's optics per face slot, and the textures its materials still wait for. `materials` changes only in a
   // flush, and every flush that can change a binding is followed by a re-read of the stage, so the rows key it.
   const optics = useMemo(() => resolveOptics(state.objects, materials, texStats, state.optics), [state.objects, texStats, state.optics]);
-  const materialsReady = !optics.unread.length;
+  // The textures are read (on the main thread) only while their numbers count: physical mode with Transmission on
+  // (phase 2: or reflections); a default or Ladybug run never waits for them.
+  const live = s.sim.mode === 'physical' && s.sim.transmission, materialsReady = !live || !optics.unread.length;
   useEffect(() => {
     const r = optics.unread[0];
-    if (!r || reading.current) return; // the read in flight lands first, then the next starts
+    if (!live || !r || reading.current) return; // the read in flight lands first, then the next starts
     reading.current = true;
     void readTexture(r).then((t) => { reading.current = false; setTexStats((m) => new Map(m).set(readKey(r), t)); });
-  }, [optics.unread]);
+  }, [optics.unread, live]);
   const args = [...buildArgs(s), ...opticsArgs(optics.meshes, optics.fallback, s.sim)], epw = epwRef(s);
   // Everything the server's response cache keys on: an equal key gives an equal result.
   const runKey = JSON.stringify([args, epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null, receivers.map((o) => o.id), shades.map((o) => o.id)]);
@@ -258,7 +260,7 @@ export default function App() {
     dispatch({ type: 'ERRORS', errors });
     const first = Object.keys(errors)[0];
     if (first) {
-      if (errors.materials) { lastKey.current = null; if (!auto) held.current = true; } // held, not refused: it runs once the materials are read
+      if (first === 'materials') { lastKey.current = null; if (!auto) held.current = true; } // nothing else wrong: held, not refused, it runs once the materials are read
       if (!auto) { // Auto shows the errors, never steals focus
         const el = document.getElementById(first === 'weather' ? `weather-${s.weather.source}` : FOCUS[first] ?? first);
         for (let d = el?.closest('details'); d; d = d.parentElement?.closest('details')) d.open = true; // a collapsed section opens on its error
@@ -285,7 +287,9 @@ export default function App() {
       dispatch({ type: 'RUN', run: { status: 'done', result: { ...res, receivers: receivers.map((o) => o.id), on: s.sim.on, key: runKey, elapsed: (performance.now() - t0) / 1000 } } });
     } catch (e) {
       if (ctrl.signal.aborted) lastKey.current = null; // cancelled: the same inputs may run again (Auto included)
-      dispatch({ type: 'RUN', run: ctrl.signal.aborted || meshKey.current !== mine ? { status: 'idle' } : { status: 'error', message: (e as Error).message } });
+      // The server and the core name a mesh by its id: say the row's name (a job id matches no row and stays)
+      const message = (e as Error).message.replace(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g, (id) => state.objects.find((o) => o.id === id)?.name ?? id);
+      dispatch({ type: 'RUN', run: ctrl.signal.aborted || meshKey.current !== mine ? { status: 'idle' } : { status: 'error', message } });
     } finally {
       busy.current = false;
       clearTimeout(slowT);
@@ -301,7 +305,7 @@ export default function App() {
     if (!state.result && state.run.status === 'idle') lastKey.current = null;
     if (autoOn && !busy.current && runKey !== lastKey.current) void onRun(true);
   }, [autoOn, runKey, ended, state.result, state.run.status]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings runKey came from
-  // The materials are read: Auto re-checks (ended), a click held for them runs.
+  // Nothing waits for the materials any more (read, or Transmission off): Auto re-checks (ended), a click held for them runs.
   useEffect(() => {
     if (!materialsReady) return;
     setEnded((n) => n + 1);
