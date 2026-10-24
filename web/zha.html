@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" data-brand="code" data-theme="light" data-surface="work" data-density="compact">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Daylight</title>
+    <link rel="stylesheet" href="/src/zha.css" />
+    <script>
+      // Theme before the first paint: the saved choice, else the browser / OS setting (zha-ui has no prefers-color-scheme rule).
+      try {
+        var t = localStorage.getItem('daylight.theme');
+        document.documentElement.dataset.theme = t === 'light' || t === 'dark' ? t : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      } catch (e) { /* storage blocked: the attribute above stays */ }
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

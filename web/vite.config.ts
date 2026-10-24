@@ -31,6 +31,12 @@ export default defineConfig(({ command, mode }) => {
     plugins: [react(), ...(MOCK ? [mock()] : [])],
     // The viewer's public/ (core/, skies/, samples/, mock-core/): served in dev, copied into dist. web/public is empty.
     publicDir: '../USD_WebViewer/web/public',
+    // Two pages, one app: index.html in kit-ui (the default), zha.html in zha-ui; each loads only its design system.
+    build: {
+      rolldownOptions: {
+        input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), zha: fileURLToPath(new URL('./zha.html', import.meta.url)) },
+      },
+    },
     resolve: {
       // The core's TS binding and the USD viewer straight from the submodule sources; their three / gltf-transform
       // imports resolve here.

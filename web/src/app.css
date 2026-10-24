@@ -1,11 +1,13 @@
 /* The one project stylesheet: layout for the canvas, map, timeline and splitter regions the design system lacks.
    Tokens only; no colours invented (zha-ui SKILL.md §3, flagged judgement). */
 :root { --radius-s: 0; --radius-m: 0; --radius-l: 0; --radius-pill: 0; } /* sharp corners everywhere: a product decision over the zha-ui radii */
+/* kit-ui (index.html) has no typology yellows; the sun path's time arc takes its amber, per theme like zha's */
+:root[data-kit] { --typology-yellow-text: var(--chip-amber-text); --color-typology-yellow: var(--color-amber); }
 .maplibregl-ctrl, .maplibregl-ctrl-attrib, .maplibregl-ctrl-group { border-radius: 0 !important; }
 .fill { block-size: 100%; min-block-size: 0; grid-auto-rows: minmax(0, 1fr); } /* the split rows are capped at the viewport, so the panels scroll inside */
 .fill > * { min-block-size: 0; min-inline-size: 0; } /* grid items default to min-content: a wide table or the map canvas would widen the column past the viewport */
 .panel-wrap { position: relative; display: grid; grid-template-rows: minmax(0, 1fr); } /* hosts a scrolling panel and its splitter, which hangs into the column gap */
-.panel { overflow: auto; }
+.panel { overflow: auto; padding: 0; background: none; } /* kit-ui pads and fills its .panel for an edge-to-edge layout; this one sits in the page gutters, as with zha-ui */
 .panel > .accordion { flex-shrink: 0; } /* zha's accordion clips (overflow: hidden), so in the panel's flex column it would shrink to share the height; it keeps its content's and the panel scrolls */
 .splitter { position: absolute; inset-block: 0; inline-size: var(--space-6); cursor: col-resize; z-index: 1; }
 .splitter--left { inset-inline-end: calc(-1 * var(--space-6)); }

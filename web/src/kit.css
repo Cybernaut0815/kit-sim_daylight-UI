@@ -1,0 +1,5 @@
+/* index.html: the app in kit-ui (KIT-SIM). One file per page, in cascade order, so the build never puts the shared
+   app.css in a chunk linked before the design system. */
+@import 'kit-ui';
+@import 'maplibre-gl/dist/maplibre-gl.css';
+@import './app.css';

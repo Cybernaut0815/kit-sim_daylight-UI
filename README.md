@@ -20,14 +20,17 @@ own faces, or the subdivided faces when the run used subdivision, never the tria
 files with it; a `.usda` / `.usdc` / `.usd` is the flattened stage, zipped with the textures it uses. glTF and OBJ hold
 the model as drawn, in metres, the receivers coloured with the shown result; glTF also every result as a value
 attribute (`_DAYLIGHT_<RESULT>`). The views saved in the app go along as cameras (USD, glTF) when ticked.
-Styled with the ZHA design system (`zha-ui`, `data-brand="code"`).
+Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM) at `/`; for now the
+same app in the ZHA design system (`zha-ui`, `data-brand="code"`) stays at `/zha.html`, and a link in the app bar
+switches between them (settings carry over). Each page loads only its own design system (`web/src/kit.css`,
+`web/src/zha.css`).
 
 ![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
 
 ```
 git clone --recurse-submodules <this repo>
 cd server && cmake --preset vs2022 && cmake --build --preset release     # needs VS 2022, CUDA 12.6, OptiX 9 headers, an RTX GPU
-cd ../web && npm install && npm run core && npm run build                # needs GitHub access to GitZHACODE/zha-ui
+cd ../web && npm install && npm run core && npm run build                # needs GitHub access to GitZHACODE/zha-ui and Cybernaut0815/kit-UI_template
 server\build\RelWithDebInfo\daylight_server.exe --web web\dist            # http://localhost:8080
 ```
 

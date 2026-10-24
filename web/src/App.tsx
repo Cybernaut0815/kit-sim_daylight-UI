@@ -37,6 +37,8 @@ const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: '
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3).
 const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0 }, MIN_W = 240, MAX_W = 640;
+// Which page this is: index.html declares data-kit (kit-ui), zha.html data-brand (zha-ui).
+const KIT = !!document.documentElement.dataset.kit;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -316,10 +318,14 @@ export default function App() {
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
       <header className="app-bar">
         <span className="app-bar__brand">
-          <a className="zha-lockup" href="/" aria-label="ZHA CODE, home"><span className="zha-lockup__zha">ZHA</span><span className="zha-lockup__team">CODE</span></a>
+          {KIT
+            ? <a href="/" aria-label="kit-sim, home"><span className="kit-mark">kit-<span className="kit-mark__name">sim</span></span></a>
+            : <a className="zha-lockup" href="/zha.html" aria-label="ZHA CODE, home"><span className="zha-lockup__zha">ZHA</span><span className="zha-lockup__team">CODE</span></a>}
           <span className="app-bar__app">Daylight</span>
         </span>
         <span className="app-bar__spacer" />
+        {/* While both design systems are compared: the same app in the other one (settings carry over). */}
+        <a className="btn btn--ghost" href={KIT ? '/zha.html' : '/'} title={`The same app in the ${KIT ? 'ZHA' : 'kit-ui'} design system`}>{KIT ? 'ZHA UI' : 'kit-ui'}</a>
         <a className="btn btn--ghost" href="/docs" target="_blank" rel="noreferrer" title="API documentation (Swagger UI); machine-readable at /openapi.json">API</a>
         <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={cycleTheme}>
           <Icon name="contrast" />

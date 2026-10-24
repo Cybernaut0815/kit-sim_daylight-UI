@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="en" data-brand="code" data-theme="light" data-surface="work" data-density="compact">
+<html lang="en" data-kit="sim" data-theme="dark" data-density="compact">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daylight</title>
+    <link rel="stylesheet" href="/src/kit.css" />
     <script>
-      // Theme before the first paint: the saved choice, else the browser / OS setting (zha-ui has no prefers-color-scheme rule).
+      // Theme before the first paint: the saved choice, else the browser / OS setting. The app's toggle keeps
+      // data-theme set (cssVar() caches per theme), so kit-ui's own system fallback is not relied on.
       try {
         var t = localStorage.getItem('daylight.theme');
         document.documentElement.dataset.theme = t === 'light' || t === 'dark' ? t : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
