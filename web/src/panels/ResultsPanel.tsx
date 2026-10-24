@@ -107,7 +107,7 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
               </div>
               <Segmented name="colour-by" label="Colour the meshes" value={colourBy} options={[['value', 'Values'], ['plain', 'Plain']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
             </div>
-            <p className="text-muted lines-5">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
+            <p className="text-muted lines-6">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
             {/* three fixed lines whatever the run, the cache or the panel width: nothing below them moves */}
             <div className="text-muted">
               <div className="line">

@@ -72,9 +72,14 @@ export function Alert({ title, children }: { title: string; children?: ReactNode
   );
 }
 
-/** Colour key square for chart legends. */
-export function Swatch({ color }: { color: string }) {
-  return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" fill={color} /></svg>;
+/** Colour key square for chart legends; `outline`: a hairline round it (a material's colour may be the page's), hollow
+ *  without a colour. */
+export function Swatch({ color, outline }: { color?: string; outline?: boolean }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+      {outline ? <rect x="0.5" y="0.5" width="11" height="11" fill={color ?? 'none'} stroke="currentColor" strokeOpacity="0.5" /> : <rect width="12" height="12" fill={color} />}
+    </svg>
+  );
 }
 
 /** Small reset-to-default icon button, placed beside the setting it resets. */

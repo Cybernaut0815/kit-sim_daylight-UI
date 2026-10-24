@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MaterialNetwork, MaterialNode } from 'usd-viewer';
 import type { ObjectRow } from '../store';
-import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, opticsArgs, readKey, resolveOptics, textureReads, textureStats, type Optics, type RunMesh } from './optics';
+import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, editOptics, opticsArgs, readKey, resolveOptics, textureReads, textureStats, type Optics, type RunMesh } from './optics';
 
 // Networks as the viewer hands them over for what usda.ts writes: a Surface, its textures read through st.
 const surface = (params: MaterialNode['params'], inputs: MaterialNode['inputs'] = {}, nodes: MaterialNetwork['nodes'] = {}): MaterialNetwork =>
@@ -133,6 +133,29 @@ describe('PRESETS', () => {
   });
 });
 
+describe('editOptics', () => {
+  const wall: Optics = { rho: 0.6, tau: 0, kind: 'opaque', source: 'derived' }, fabric: Optics = { rho: 0.51, tau: 0.14, kind: 'porous', source: 'edited' };
+  const edit = (cur: Optics, patch: Parameters<typeof editOptics>[1], glass = DEFAULT_GLASS) => editOptics(cur, patch, DEFAULT_OPTICS, glass);
+  it('a kind that passes light keeps the transmittance, else glass starts at the default glass and porous at 0', () => {
+    expect(edit(wall, { kind: 'glass' })).toEqual({ rho: 0, tau: 0.64, kind: 'glass' });
+    expect(edit(wall, { kind: 'glass' }, { ...DEFAULT_GLASS, tau: 0.5, source: 'edited' })).toEqual({ rho: 0, tau: 0.5, kind: 'glass' });
+    expect(edit(wall, { kind: 'glass' }, { rho: 0.2, tau: 0, kind: 'opaque', source: 'edited' }).tau).toBe(0.64); // the default glass row made opaque
+    expect(edit(wall, { kind: 'porous' })).toEqual({ rho: 0.6, tau: 0, kind: 'porous' });
+    expect(edit(fabric, { kind: 'glass' })).toEqual({ rho: 0, tau: 0.14, kind: 'glass' });
+    expect(edit({ ...DEFAULT_GLASS, source: 'derived' }, { kind: 'opaque', tau: 0.5 })).toEqual({ rho: 0.2, tau: 0, kind: 'opaque' }); // glass: the default albedo
+  });
+  it("keeps the solid part's albedo, porous rho = albedo x (1 - tau), so no change trips clamp()", () => {
+    expect(edit(fabric, { tau: 0.6 }).rho).toBeCloseTo((0.51 / 0.86) * 0.4, 12);
+    expect(edit(fabric, { kind: 'opaque' }).rho).toBeCloseTo(0.51 / 0.86, 12);
+    expect(edit({ rho: 0, tau: 1, kind: 'porous', source: 'edited' }, { tau: 0.5 })).toEqual({ rho: 0.1, tau: 0.5, kind: 'porous' }); // an opening: the default albedo
+    const patches: Parameters<typeof editOptics>[1][] = [{ kind: 'opaque' }, { kind: 'glass' }, { kind: 'porous' }, { tau: 0.3 }, { tau: 0.9 }];
+    for (const p of PRESETS) for (const patch of patches) {
+      if (p.tau === 1 && patch.kind === 'glass') continue; // an opening made glass: capped at 0.918, with the warning that says so
+      expect(clamp({ ...edit({ ...p, source: 'edited' }, patch), source: 'edited' }).warning, `${p.name} ${JSON.stringify(patch)}`).toBeUndefined();
+    }
+  });
+});
+
 describe('opticsArgs', () => {
   type Sim = Parameters<typeof opticsArgs>[2];
   const sim = (patch: Partial<Sim> = {}): Sim => ({ mode: 'physical', transmission: false, fresnel: true, ...patch });
@@ -190,7 +213,10 @@ describe('resolveOptics', () => {
     expect(r.meshes.map((m) => [m.id, m.role])).toEqual([['r', 'receiver'], ['s', 'shade'], ['n', 'shade']]);
     expect(r.meshes[0].optics).toEqual([glass, DEFAULT_OPTICS, glass]);
     expect(r.meshes[1].optics).toEqual([{ rho: 0.2, tau: 0, kind: 'opaque', source: 'derived' }, DEFAULT_OPTICS]); // the mask not read yet
-    expect([r.fallback, r.meshes[2].optics]).toEqual([DEFAULT_OPTICS, [DEFAULT_OPTICS]]);
+    expect([r.fallback, r.glass, r.meshes[2].optics]).toEqual([DEFAULT_OPTICS, DEFAULT_GLASS, [DEFAULT_OPTICS]]);
+    // the Materials table's rows: each run material once, first use first, never the Ignore row's bark
+    expect(r.materials.map((m) => [m.path, m.optics.kind, m.optics.source])).toEqual([['/M/Glass', 'glass', 'derived'], ['/M/Tint', 'glass', 'derived'], ['/M/Leaves', 'opaque', 'derived'], ['/M/Mtlx', 'opaque', 'default']]);
+    expect(r.materials[0].network).toBe(mats.get(2)!.network);
   });
   it('a decoded texture counts once it lands, a failed one as absent; then nothing waits', () => {
     const read = resolveOptics(rows, mats, new Map([[readKey(leaf), textureStats(half, 4, 1, leaf.opacity)]]), {});
@@ -205,7 +231,9 @@ describe('resolveOptics', () => {
       '/M/Glass': { rho: 0, tau: 0.95, kind: 'glass' }, [DEFAULT_KEY]: { rho: 0.3, tau: 0.2, kind: 'porous' }, [GLASS_KEY]: { rho: 0, tau: 0.5, kind: 'glass' },
     });
     expect(e.fallback).toEqual({ rho: 0.3, tau: 0.2, kind: 'porous', source: 'edited' });
+    expect(e.glass).toEqual({ rho: 0, tau: 0.5, kind: 'glass', source: 'edited' });
     expect(e.meshes[0].optics).toEqual([{ rho: 0, tau: 0.918, kind: 'glass', source: 'edited', warning: expect.stringMatching(/0\.918/) }, e.fallback, { rho: 0, tau: 0.5, kind: 'glass', source: 'derived' }]);
+    expect(e.materials[0].optics).toBe(e.meshes[0].optics[0]); // the row shows what the run sends
     expect(e.meshes[2].optics).toEqual([e.fallback]);
   });
 });

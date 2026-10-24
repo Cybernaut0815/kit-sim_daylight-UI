@@ -162,26 +162,49 @@ export type OpticsEdit = Pick<Optics, 'rho' | 'tau' | 'kind'>;
 export const DEFAULT_KEY = 'default', GLASS_KEY = 'glass';
 
 /**
+ * A Materials-table change of kind or transmittance as an edit of `cur`, the solid part's albedo kept (glass reflects
+ * nothing diffusely, porous albedo x (1 - tau)), so a change never trips clamp() over a value the table does not show. A
+ * kind that passes light keeps the row's transmittance, else glass starts at the default glass's and porous at 0; opaque
+ * passes nothing.
+ */
+export function editOptics(cur: Optics, patch: { kind?: Optics['kind']; tau?: number }, fallback: Optics, glass: Optics): OpticsEdit {
+  const albedo = cur.kind === 'opaque' ? cur.rho : cur.kind === 'porous' && cur.tau < 1 ? cur.rho / (1 - cur.tau) : fallback.rho;
+  const kind = patch.kind ?? cur.kind, start = kind === 'glass' ? (glass.kind === 'glass' ? glass.tau : DEFAULT_GLASS.tau) : 0;
+  const tau = kind === 'opaque' ? 0 : patch.tau ?? (cur.tau > 0 ? cur.tau : start);
+  return { rho: kind === 'glass' ? 0 : kind === 'porous' ? albedo * (1 - tau) : albedo, tau, kind };
+}
+
+/** A material bound to a run slot (a receiver's or a shade's): a Materials-table row. */
+export interface MaterialRow { path: string; network?: MaterialNetwork; optics: Optics }
+
+/**
  * The run's meshes for opticsArgs() (receivers and shades: an Ignore row is left out, its materials never read), the
- * default material, and the texture reads still to decode. A face slot's material (`materials` by the viewer's rid; 0 or
- * a rid without an entry = none) takes its edit, else derive() over the textures decoded so far (`stats` by readKey,
- * null = unreadable), else the default material; the default rows take their edits too.
+ * default material and glass, the materials of the run's slots (first use first), and the texture reads still to decode.
+ * A face slot's material (`materials` by the viewer's rid; 0 or a rid without an entry = none) takes its edit, else
+ * derive() over the textures decoded so far (`stats` by readKey, null = unreadable), else the default material; the
+ * default rows take their edits too.
  */
 export function resolveOptics(
   rows: readonly Pick<ObjectRow, 'id' | 'role' | 'materials'>[], materials: ReadonlyMap<number, { path: string; network?: MaterialNetwork }>,
   stats: ReadonlyMap<string, TextureStats | null>, edits: Readonly<Record<string, OpticsEdit>>,
-): { meshes: RunMesh[]; fallback: Optics; unread: TextureRead[] } {
+): { meshes: RunMesh[]; fallback: Optics; glass: Optics; materials: MaterialRow[]; unread: TextureRead[] } {
   const edited = (key: string): Optics | undefined => { const e: OpticsEdit | undefined = edits[key]; return e && clamp({ ...e, source: 'edited' }); };
   const fallback = edited(DEFAULT_KEY) ?? DEFAULT_OPTICS, glass = edited(GLASS_KEY) ?? DEFAULT_GLASS, unread = new Map<string, TextureRead>();
+  const seen = new Map<string, MaterialRow>(); // by path: a material resolves once, however many slots it is bound to
   const slot = (rid: number): Optics => {
     const m = materials.get(rid);
     if (!m) return fallback;
-    const reads = textureReads(m.network);
-    for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r);
-    return edited(m.path) ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
+    let row = seen.get(m.path);
+    if (!row) {
+      const reads = textureReads(m.network);
+      for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r);
+      const optics = edited(m.path) ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
+      seen.set(m.path, (row = { path: m.path, network: m.network, optics }));
+    }
+    return row.optics;
   };
   const meshes = rows.filter((o) => o.role !== 'none').map((o) => ({ id: o.id, role: o.role, optics: (o.materials ?? [0]).map(slot) }));
-  return { meshes, fallback, unread: [...unread.values()] };
+  return { meshes, fallback, glass, materials: [...seen.values()], unread: [...unread.values()] };
 }
 
 /**

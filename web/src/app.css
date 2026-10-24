@@ -38,6 +38,7 @@
 .lines-2 { min-block-size: 2lh; }
 .lines-3 { min-block-size: 3lh; }
 .lines-5 { min-block-size: 5lh; }
+.lines-6 { min-block-size: 6lh; }
 /* the colour scale and the problem range side by side (3 : 2, so their five controls come out equal) when the panel
    is wide enough for both, one under the other when not */
 .scale-row { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-3); }
@@ -57,16 +58,20 @@
 .color-quad::-webkit-color-swatch-wrapper { padding: 0; }
 .color-quad::-webkit-color-swatch { border: 0; }
 .color-quad::-moz-color-swatch { border: 0; }
-/* the mesh tree: fixed height (drag the corner to enlarge), compact rows, names truncate */
-.tree { block-size: 15rem; min-block-size: 8rem; overflow: auto; resize: vertical; border: 1px solid var(--border-subtle); --row-h: 28px; }
-.tree > .data-table { table-layout: fixed; }
+/* the mesh tree and the Materials table: fixed height (drag the corner to enlarge), compact rows, names truncate */
+:is(.tree, .materials) { block-size: 15rem; min-block-size: 8rem; overflow: auto; resize: vertical; border: 1px solid var(--border-subtle); --row-h: 28px; }
+:is(.tree, .materials) > .data-table { table-layout: fixed; }
 .tree > p { padding: var(--space-3); }
 .tree tbody { user-select: none; } /* shift-click extends the selection of prims, not of text */
 .tree tbody tr[aria-current="true"] { box-shadow: inset 2px 0 0 var(--accent); } /* the active prim, as in the viewer's hierarchy */
 .tree :is(th, td) { padding-inline: var(--space-2); } /* three columns in a 22rem panel */
+.materials :is(th, td) { padding-inline: var(--space-1); } /* a name, a kind and a transmittance in a 22rem panel */
 .tree__col-role { inline-size: 6.5rem; }
 .tree__col-variant { inline-size: 5rem; }
-.tree .select { --control-h: 24px; --control-pad-y: 2px; padding-inline: var(--space-1); font-size: var(--fs-small); } /* a variant set per line */
+/* a variant set per line; a material's kind and transmittance, its reset beside its source */
+:is(.tree .select, .materials :is(.select, .input, .icon-btn)) { --control-h: 24px; --control-pad-y: 2px; padding-inline: var(--space-1); font-size: var(--fs-small); }
+.materials__col-kind { inline-size: 6rem; }
+.materials__col-tau { inline-size: 4.5rem; }
 /* lock and eye at the end of the prim cell, as in the viewer's hierarchy; with a mouse only on the hovered row, unless set */
 .tree__flags { float: inline-end; display: inline-flex; gap: var(--space-1); font-size: var(--fs-small); }
 .tree__flag { padding: 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; opacity: .55; }

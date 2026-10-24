@@ -16,6 +16,7 @@ import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, unitFor, vertexAreas } from './lib/result';
 import { LocationPanel } from './panels/LocationPanel';
+import { MaterialsPanel } from './panels/MaterialsPanel';
 import { ModelPanel } from './panels/ModelPanel';
 import { ResultsPanel } from './panels/ResultsPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
@@ -360,6 +361,7 @@ export default function App() {
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
                 <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
+                <MaterialsPanel rows={optics.materials} fallback={optics.fallback} glass={optics.glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
