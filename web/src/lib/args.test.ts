@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { defaultSettings } from '../store';
+import { defaultSettings, type Settings } from '../store';
 import { buildArgs, derivedTz, validate } from './args';
+import { DEFAULT_GLASS, DEFAULT_OPTICS, opticsArgs, type RunMesh } from './optics';
 
 const pairs = (a: string[]) => Object.fromEntries(a.map((v, i) => [v, a[i + 1]]));
 
@@ -73,6 +74,19 @@ describe('buildArgs', () => {
     s.time.to.date = '2026-06-01';
     expect(buildArgs(s)).not.toContain('--hours');
   });
+  it('default runs send no new flags, Ladybug runs none either; the switches add theirs after the others', () => {
+    const glazed: RunMesh[] = [{ id: 'r', role: 'receiver', optics: [{ ...DEFAULT_OPTICS, source: 'derived' }, { ...DEFAULT_GLASS, source: 'derived' }] }];
+    const run = (s: Settings) => [...buildArgs(s), ...opticsArgs(glazed, DEFAULT_OPTICS, s.sim)]; // as the App sends them
+    const s = defaultSettings();
+    expect(run(s)).toEqual(buildArgs(s));
+    expect(buildArgs(s).filter((a) => /^--(optics|transmission|fresnel|bounces)/.test(a))).toEqual([]);
+    s.sim.transmission = true;
+    s.sim.fresnel = false;
+    expect(buildArgs(s)).toEqual(buildArgs(defaultSettings())); // the switches are opticsArgs' alone
+    expect(run(s).slice(buildArgs(s).length)).toEqual(['--transmission', 'on', '--fresnel', 'off', '--optics', 'r/1=0,0.64,glass']);
+    s.sim.mode = 'ladybug';
+    expect(run(s)).toEqual(buildArgs(s));
+  });
 });
 
 describe('validate', () => {
@@ -115,5 +129,16 @@ describe('validate', () => {
     expect(validate(s, true).timeTo).toMatch(/end time/);
     s.time.to = { date: '2026-05-31', hour: 1020 };
     expect(validate(s, true).timeTo).toMatch(/end date/);
+  });
+  it('holds a run on materials still being read only where they count: physical mode with transmission', () => {
+    const s = defaultSettings();
+    s.weather.source = 'clear-sky';
+    expect(validate(s, true, false)).toEqual({}); // transmission off: every surface opaque, the materials unused
+    s.sim.transmission = true;
+    expect(validate(s, true, false)).toEqual({ materials: expect.stringMatching(/^Reading the materials/) });
+    expect(validate(s, true, true)).toEqual({});
+    expect(validate(s, true)).toEqual({}); // the default: read
+    s.sim.mode = 'ladybug';
+    expect(validate(s, true, false).materials).toBeUndefined(); // Ladybug: opaque and black whatever the switch
   });
 });

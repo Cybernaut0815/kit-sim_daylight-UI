@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MaterialNetwork, MaterialNode } from 'usd-viewer';
-import { DEFAULT_GLASS, DEFAULT_OPTICS, PRESETS, clamp, derive, opticsArgs, textureReads, textureStats, type Optics, type RunMesh } from './optics';
+import type { ObjectRow } from '../store';
+import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, opticsArgs, readKey, resolveOptics, textureReads, textureStats, type Optics, type RunMesh } from './optics';
 
 // Networks as the viewer hands them over for what usda.ts writes: a Surface, its textures read through st.
 const surface = (params: MaterialNode['params'], inputs: MaterialNode['inputs'] = {}, nodes: MaterialNetwork['nodes'] = {}): MaterialNetwork =>
@@ -165,5 +166,46 @@ describe('opticsArgs', () => {
   it('clamps every value first: one value never fails a run', () => {
     const edited: RunMesh[] = [{ id: 'g', role: 'receiver', optics: [{ rho: 0.1, tau: 0.95, kind: 'glass', source: 'edited' }, { rho: 0.2, tau: 0, kind: 'glass', source: 'edited' }] }];
     expect(opticsArgs(edited, DEFAULT_OPTICS, sim({ transmission: true }))).toEqual(['--transmission', 'on', '--optics', 'g/0=0,0.918,glass']);
+  });
+});
+
+describe('resolveOptics', () => {
+  const cutout = (name: string) => surface({}, { opacity: { node: 'Opacity', output: 'r' } }, { Opacity: texture(name, [1, 1, 1, 1]) });
+  const mats = new Map<number, { path: string; network?: MaterialNetwork }>([
+    [1, { path: '/M/Leaves', network: cutout('leaf') }], [2, { path: '/M/Glass', network: surface({ opacity: 0.25 }) }],
+    [3, { path: '/M/Tint', network: surface({ opacity: 0.5 }) }], [4, { path: '/M/Mtlx' }], [5, { path: '/M/Bark', network: cutout('bark') }],
+  ]);
+  const rows: Pick<ObjectRow, 'id' | 'role' | 'materials'>[] = [
+    { id: 'r', role: 'receiver', materials: [2, 0, 3] }, // glass, no material, glass
+    { id: 's', role: 'shade', materials: [1, 4] }, // a cut-out, a material without a UsdPreviewSurface network
+    { id: 'x', role: 'none', materials: [5] }, // Ignore: never resolved, its texture never read
+    { id: 'n', role: 'shade' }, // no subsets known: one slot, no material
+  ];
+  const leaf = textureReads(mats.get(1)!.network)[0], half = texels([255, 255, 255, 255], [255, 255, 255, 255], [0, 0, 0, 255], [0, 0, 0, 255]);
+  const glass: Optics = { ...DEFAULT_GLASS, source: 'derived' };
+
+  it("resolves each run slot by its material's rid and lists the textures it still waits for", () => {
+    const r = resolveOptics(rows, mats, new Map(), {});
+    expect(r.unread).toEqual([leaf]); // not the Ignore row's bark
+    expect(r.meshes.map((m) => [m.id, m.role])).toEqual([['r', 'receiver'], ['s', 'shade'], ['n', 'shade']]);
+    expect(r.meshes[0].optics).toEqual([glass, DEFAULT_OPTICS, glass]);
+    expect(r.meshes[1].optics).toEqual([{ rho: 0.2, tau: 0, kind: 'opaque', source: 'derived' }, DEFAULT_OPTICS]); // the mask not read yet
+    expect([r.fallback, r.meshes[2].optics]).toEqual([DEFAULT_OPTICS, [DEFAULT_OPTICS]]);
+  });
+  it('a decoded texture counts once it lands, a failed one as absent; then nothing waits', () => {
+    const read = resolveOptics(rows, mats, new Map([[readKey(leaf), textureStats(half, 4, 1, leaf.opacity)]]), {});
+    expect([read.unread, read.meshes[1].optics[0]]).toEqual([[], { rho: 0.1, tau: 0.5, kind: 'porous', source: 'derived' }]);
+    expect(opticsArgs(read.meshes, read.fallback, { mode: 'physical', transmission: true, fresnel: true })).toEqual(['--transmission', 'on', '--optics', 'r/0=0,0.64,glass;r/2=0,0.64,glass;s/0=0,0.5,porous']);
+    const failed = resolveOptics(rows, mats, new Map([[readKey(leaf), null]]), {});
+    expect([failed.unread, failed.meshes[1].optics[0].kind]).toEqual([[], 'opaque']);
+    expect(readKey({ ...leaf, opacity: { ...leaf.opacity!, threshold: 0.5 } })).not.toBe(readKey(leaf)); // the same file read otherwise
+  });
+  it('an edit overrides by prim path, clamped; the default rows take theirs, and derived glass the default glass', () => {
+    const e = resolveOptics(rows, mats, new Map(), {
+      '/M/Glass': { rho: 0, tau: 0.95, kind: 'glass' }, [DEFAULT_KEY]: { rho: 0.3, tau: 0.2, kind: 'porous' }, [GLASS_KEY]: { rho: 0, tau: 0.5, kind: 'glass' },
+    });
+    expect(e.fallback).toEqual({ rho: 0.3, tau: 0.2, kind: 'porous', source: 'edited' });
+    expect(e.meshes[0].optics).toEqual([{ rho: 0, tau: 0.918, kind: 'glass', source: 'edited', warning: expect.stringMatching(/0\.918/) }, e.fallback, { rho: 0, tau: 0.5, kind: 'glass', source: 'derived' }]);
+    expect(e.meshes[2].optics).toEqual([e.fallback]);
   });
 });

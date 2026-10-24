@@ -11,6 +11,7 @@ import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
 import { loadFiles, png } from './lib/loaders';
+import { opticsArgs, readKey, resolveOptics, type TextureStats } from './lib/optics';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, unitFor, vertexAreas } from './lib/result';
@@ -27,13 +28,13 @@ import { download, type ExportMode, type Format, type PickedModel } from './view
 import { DownloadMenu, ViewsMenu } from './viewer/Views';
 import type { SavedView } from './lib/views';
 import type { SunView } from './viewer/sunpath';
-import { usd } from './viewer/usd';
+import { materials, readTexture, usd } from './viewer/usd';
 
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
 // One id per browser tab for the server's per-client job limit (sessionStorage: a new tab is a new client).
 const CLIENT_ID = (() => { try { return sessionStorage.getItem('daylight.client') ?? (sessionStorage.setItem('daylight.client', crypto.randomUUID()), sessionStorage.getItem('daylight.client')!); } catch { return crypto.randomUUID(); } })();
 // validate() field -> the control that gets focus
-const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date' };
+const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date', materials: 'materials' };
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3).
 const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0 }, MIN_W = 240, MAX_W = 640;
@@ -64,10 +65,12 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh (+ areas on demand): converted once, uploaded once, referenced by id
   const abort = useRef<AbortController | null>(null);
-  const busy = useRef(false), lastKey = useRef<string | null>(null); // one run per tab; the key of the last run started
+  const busy = useRef(false), lastKey = useRef<string | null>(null), held = useRef(false); // one run per tab; the key of the last run started; a click waiting for the materials
   const [ended, setEnded] = useState(0); // bumped when a run ends, so Auto re-checks with the settings of that moment
   const [slow, setSlow] = useState(false); // the run in flight has taken over 0.3 s
   const [sunScale, setSunScale] = useState(1); // the sun path's radius over the one fitted to the model; 1 on every model load
+  const [texStats, setTexStats] = useState<ReadonlyMap<string, TextureStats | null>>(new Map()); // decoded texture reads by readKey (null: unreadable)
+  const reading = useRef(false); // one texture at a time: one decoded image in memory
   const onSunPath = useCallback((on: boolean) => setUi((u) => ({ ...u, sunPath: on })), []);
 
   useEffect(() => {
@@ -126,9 +129,10 @@ export default function App() {
     conv.current.clear(); // after the awaits: a run started meanwhile still found its meshes
     found.forEach((e, i) => {
       const id = crypto.randomUUID(), name = labels[i], kept = roles ? roles.get(paths[i]) ?? 'none' : lone;
-      conv.current.set(id, e.obj ? { obj: Object.assign(e.obj, { id, name }) } : { make: () => Object.assign(e.make!(), { id, name }) });
+      // The core names a mesh by its id (--optics ID/SLOT); the label stays the row's.
+      conv.current.set(id, e.obj ? { obj: Object.assign(e.obj, { id, name: id }) } : { make: () => Object.assign(e.make!(), { id, name: id }) });
       map.set(id, e.item.object!);
-      objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role: kept === 'receiver' && e.instances ? 'none' : kept, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
+      objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role: kept === 'receiver' && e.instances ? 'none' : kept, materials: e.materials, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
     });
     return { objects, map };
   };
@@ -161,6 +165,7 @@ export default function App() {
       // open() closes the current stage first: drop its rows and conversions now, so nothing hovers, probes or runs a
       // model that is no longer drawn. A failure before this point keeps the current model.
       conv.current.clear();
+      held.current = false; // a click held for the old model's materials
       setMeshes(new Map());
       setNames(new Map());
       dispatch({ type: 'LOAD', objects: [] });
@@ -228,7 +233,17 @@ export default function App() {
   const s = state.settings;
   const receivers = state.objects.filter((o) => o.role === 'receiver'), shades = state.objects.filter((o) => o.role === 'shade');
   const running = state.run.status === 'running' || state.run.status === 'queued';
-  const args = buildArgs(s), epw = epwRef(s);
+  // Each run mesh's optics per face slot, and the textures its materials still wait for. `materials` changes only in a
+  // flush, and every flush that can change a binding is followed by a re-read of the stage, so the rows key it.
+  const optics = useMemo(() => resolveOptics(state.objects, materials, texStats, state.optics), [state.objects, texStats, state.optics]);
+  const materialsReady = !optics.unread.length;
+  useEffect(() => {
+    const r = optics.unread[0];
+    if (!r || reading.current) return; // the read in flight lands first, then the next starts
+    reading.current = true;
+    void readTexture(r).then((t) => { reading.current = false; setTexStats((m) => new Map(m).set(readKey(r), t)); });
+  }, [optics.unread]);
+  const args = [...buildArgs(s), ...opticsArgs(optics.meshes, optics.fallback, s.sim)], epw = epwRef(s);
   // Everything the server's response cache keys on: an equal key gives an equal result.
   const runKey = JSON.stringify([args, epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null, receivers.map((o) => o.id), shades.map((o) => o.id)]);
   const autoOn = ui.auto && receivers.length > 0; // every mode: an annual run is a fraction of a second too
@@ -238,10 +253,11 @@ export default function App() {
   const onRun = async (auto = false) => {
     if (busy.current) return; // one job per tab: Auto re-checks when it ends, the button is disabled meanwhile
     lastKey.current = runKey;
-    const errors = validate(s, receivers.length > 0);
+    const errors = validate(s, receivers.length > 0, materialsReady);
     dispatch({ type: 'ERRORS', errors });
     const first = Object.keys(errors)[0];
     if (first) {
+      if (errors.materials) { lastKey.current = null; if (!auto) held.current = true; } // held, not refused: it runs once the materials are read
       if (!auto) { // Auto shows the errors, never steals focus
         const el = document.getElementById(first === 'weather' ? `weather-${s.weather.source}` : FOCUS[first] ?? first);
         for (let d = el?.closest('details'); d; d = d.parentElement?.closest('details')) d.open = true; // a collapsed section opens on its error
@@ -284,6 +300,12 @@ export default function App() {
     if (!state.result && state.run.status === 'idle') lastKey.current = null;
     if (autoOn && !busy.current && runKey !== lastKey.current) void onRun(true);
   }, [autoOn, runKey, ended, state.result, state.run.status]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings runKey came from
+  // The materials are read: Auto re-checks (ended), a click held for them runs.
+  useEffect(() => {
+    if (!materialsReady) return;
+    setEnded((n) => n + 1);
+    if (held.current) { held.current = false; void onRun(); }
+  }, [materialsReady]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun as above
 
   const zone = useMemo(() => zoneAt(s.site.lat, s.site.lon), [s.site.lat, s.site.lon]); // the site's civil zone (offline lookup)
   const tz = derivedTz(s), leap = weatherLeap(s);

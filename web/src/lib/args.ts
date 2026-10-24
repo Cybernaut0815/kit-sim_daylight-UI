@@ -36,11 +36,16 @@ export function buildArgs(s: Settings): string[] {
   return a;
 }
 
-/** Field id -> message (cause and fix). Empty when the settings can run. */
-export function validate(s: Settings, hasReceiver: boolean): Record<string, string> {
+/**
+ * Field id -> message (cause and fix). Empty when the settings can run. `materialsReady`: every texture the run's
+ * materials read is decoded (or failed); until then a run whose optics count (physical, transmission on) is held, never
+ * started on half-read materials.
+ */
+export function validate(s: Settings, hasReceiver: boolean, materialsReady = true): Record<string, string> {
   const e: Record<string, string> = {};
   const { site, weather, time, sim } = s;
   if (!hasReceiver) e.model = 'No receiver mesh. Select a mesh and mark it as a receiver.';
+  if (!materialsReady && sim.mode === 'physical' && sim.transmission) e.materials = 'Reading the materials…';
   if (!(Math.abs(site.lat) <= 90)) e.lat = 'Latitude must be between -90 and 90.';
   if (!(Math.abs(site.lon) <= 180)) e.lon = 'Longitude must be between -180 and 180.';
   if (sim.quantities.length === 0) e.quantities = 'Pick at least one quantity.';

@@ -3,14 +3,16 @@ import type { RemoteManifest } from 'daylight-mesh';
 import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
 import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
+import type { OpticsEdit } from './lib/optics';
 import { idsUnder } from './lib/tree';
 
 export type Role = 'receiver' | 'shade' | 'none';
 /**
  * A mesh of the stage: its prim path, its drawn triangles and vertices; `instances`: one mesh drawn that many times;
- * `paths`: every copy's prim path where each copy is its own prim (native instancing), so a click on any finds the row.
+ * `paths`: every copy's prim path where each copy is its own prim (native instancing), so a click on any finds the row;
+ * `materials[k]`: the viewer's material rid of optics slot k (0 = none).
  */
-export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; instances?: number; paths?: string[] }
+export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; instances?: number; paths?: string[]; materials?: number[] }
 
 export type Quantity = 'radiation' | 'direct' | 'diffuse' | 'irradiance' | 'illuminance' | 'sunhours';
 export const QUANTITIES: Quantity[] = ['radiation', 'direct', 'diffuse', 'irradiance', 'illuminance', 'sunhours'];
@@ -30,6 +32,7 @@ export interface Settings {
   sim: {
     mode: SimMode; quantities: Quantity[]; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices';
     cullBackfaces: boolean; selfOcclude: boolean; skyDensity: 1 | 2 | 4; patchSamples: number; ground: number; north: number; offset: number;
+    transmission: boolean; fresnel: boolean; // light through glass / porous materials; glass by angle (Radiance glass)
   };
   // Result colouring per quantity: gradient key, legend domain (null = data range), the problem range (null = open),
   // and the two range colours (hex, shared by every quantity).
@@ -66,6 +69,7 @@ export interface State {
   result: RunResult | null; // the last finished run: stays on screen while the next one is queued, running or failed
   error: string | null; // why the last run failed: kept while the next one runs, so the alert does not blink between Auto runs
   errors: Record<string, string>; // validate() output keyed by field id
+  optics: Record<string, OpticsEdit>; // Materials-table edits (lib/optics.ts keys): kept across re-reads, cleared per model
 }
 
 export type Action =
@@ -88,7 +92,9 @@ export type Action =
   | { type: 'BIN'; bin: [number, number] | null }
   | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
   | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
-  | { type: 'ERRORS'; errors: Record<string, string> };
+  | { type: 'ERRORS'; errors: Record<string, string> }
+  | { type: 'OPTICS_EDIT'; key: string; edit: OpticsEdit } // a material by prim path, or a default row
+  | { type: 'OPTICS_RESET'; key: string }; // back to the derived (or default) values
 
 const year = new Date().getFullYear();
 const solstice = `${year}-06-21`;
@@ -97,12 +103,12 @@ export const defaultSettings = (): Settings => ({
   weather: { source: 'station', file: null, station: null, turbidity: 3, altitude: 0 },
   epwMeta: null,
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
-  sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0 },
+  sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true },
   viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
 });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  objects: [], selection: NO_SELECTION, selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', result: null, error: null, errors: {},
+  objects: [], selection: NO_SELECTION, selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', result: null, error: null, errors: {}, optics: {},
 });
 
 // A job still on its way when the model or the roles change keeps its status (the button stays busy until it ends);
@@ -113,7 +119,7 @@ const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.l
 export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case 'LOAD':
-      return { ...s, objects: a.objects, selection: NO_SELECTION, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain' };
+      return { ...s, objects: a.objects, selection: NO_SELECTION, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain', optics: {} };
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
       const objects = s.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o));
       if (objects.every((o, i) => o === s.objects[i])) return s; // nothing changed: keep the result
@@ -205,6 +211,13 @@ export function reducer(s: State, a: Action): State {
     }
     case 'ERRORS': // a run clicks through here every time: no errors before and after = no re-render
       return !Object.keys(a.errors).length && !Object.keys(s.errors).length ? s : { ...s, errors: a.errors };
+    case 'OPTICS_EDIT':
+      return { ...s, optics: { ...s.optics, [a.key]: a.edit } };
+    case 'OPTICS_RESET': {
+      if (!(a.key in s.optics)) return s;
+      const { [a.key]: _gone, ...optics } = s.optics;
+      return { ...s, optics };
+    }
   }
 }
 

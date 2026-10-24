@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_KEY } from './lib/optics';
 import { defaultSettings, initialState, parseSettings, reducer, serializeSettings, type ObjectRow, type RunResult, type Station } from './store';
 
 const obj = (id: string, role: ObjectRow['role'] = 'receiver'): ObjectRow => ({ id, name: id, path: `/${id}`, tris: 2, verts: 4, role });
@@ -158,5 +159,30 @@ describe('persistence', () => {
     u.weather.source = 'upload';
     u.epwMeta = { lat: 51, lon: 0, tz: 0, name: 'x', leap: false };
     expect(parseSettings(serializeSettings(u)).epwMeta).toBeNull(); // the file is not kept, nor its header
+  });
+  it('the optics switches default to today (transmission off, angle-dependent glass on); a record from before them loads', () => {
+    expect(defaultSettings().sim).toMatchObject({ transmission: false, fresnel: true });
+    const old = parseSettings('{"sim":{"mode":"physical","quantities":["radiation"],"sides":"both","ground":0.3}}');
+    expect(old.sim).toMatchObject({ transmission: false, fresnel: true, sides: 'both', ground: 0.3, skyDensity: 1 });
+    const d = defaultSettings();
+    d.sim.transmission = true;
+    d.sim.fresnel = false;
+    expect(parseSettings(serializeSettings(d)).sim).toMatchObject({ transmission: true, fresnel: false });
+  });
+});
+
+describe('optics edits', () => {
+  it('OPTICS_EDIT sets a row, OPTICS_RESET drops it; a re-read keeps the edits, a new model clears them', () => {
+    const glass = { rho: 0, tau: 0.5, kind: 'glass' } as const;
+    let s = reducer(initialState(), { type: 'LOAD', objects: [obj('a')] });
+    expect(s.optics).toEqual({});
+    s = reducer(s, { type: 'OPTICS_EDIT', key: '/M/Glass', edit: glass });
+    s = reducer(s, { type: 'OPTICS_EDIT', key: DEFAULT_KEY, edit: { rho: 0.3, tau: 0, kind: 'opaque' } });
+    s = reducer(s, { type: 'OPTICS_RESET', key: DEFAULT_KEY });
+    expect(s.optics).toEqual({ '/M/Glass': glass });
+    expect(reducer(s, { type: 'OPTICS_RESET', key: DEFAULT_KEY })).toBe(s); // nothing to reset
+    s = reducer(s, { type: 'RELOAD', objects: [obj('a2')] }); // a variant switch or a subdivision level
+    expect(s.optics).toEqual({ '/M/Glass': glass });
+    expect(reducer(s, { type: 'LOAD', objects: [obj('b')] }).optics).toEqual({});
   });
 });

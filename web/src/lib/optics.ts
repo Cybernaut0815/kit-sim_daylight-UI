@@ -6,7 +6,7 @@
 // rho + tau <= 1. Glass is Radiance glass (n 1.52; rho 0, it reflects by angle); porous passes tau at every angle, its
 // rho = the solid part's albedo x (1 - tau).
 import type { MaterialNetwork } from 'usd-viewer';
-import type { Role, SimMode } from '../store';
+import type { ObjectRow, Role, SimMode } from '../store';
 
 export interface Optics {
   rho: number; tau: number; kind: 'opaque' | 'glass' | 'porous';
@@ -117,10 +117,14 @@ function opacityRead(net: MaterialNetwork): { file: string; opacity: OpacityRead
   return { file, opacity: { channel, scale: at(t.params.scale, 1), bias: at(t.params.bias, 0), threshold: num(s.params.opacityThreshold, 0) } };
 }
 
+/** A texture derive() reads, and its key among the decoded ones: the file and how it is read. */
+export interface TextureRead { file: string; opacity?: OpacityRead }
+export const readKey = (r: TextureRead) => JSON.stringify([r.file, r.opacity ?? null]);
+
 /** The textures derive() reads from a material's network: decode each file and keep textureStats(rgba, w, h, opacity)
  *  under it, or null when it cannot be read or decoded (readBytes null, EXR / HDR, a decode error). Per material: another
  *  material may read the same file with another scale or threshold. */
-export function textureReads(net: MaterialNetwork | undefined): { file: string; opacity?: OpacityRead }[] {
+export function textureReads(net: MaterialNetwork | undefined): TextureRead[] {
   const r = net && opacityRead(net);
   return r ? [r] : []; // phase 2: + the diffuse texture (with this opacity read when it is the same file)
 }
@@ -152,6 +156,33 @@ export function derive(net: MaterialNetwork | undefined, stats: ReadonlyMap<stri
 /** A mesh of the run: `id` is its core name (the App names run meshes by their ids); `optics[k]` is face slot k's, for
  *  every slot up to its highest face slot (the core refuses a slot past it). */
 export interface RunMesh { id: string; role: Role; optics: readonly Optics[] }
+
+/** A Materials-table edit, by key: a material's prim path, or a default row's DEFAULT_KEY / GLASS_KEY (no '/'). */
+export type OpticsEdit = Pick<Optics, 'rho' | 'tau' | 'kind'>;
+export const DEFAULT_KEY = 'default', GLASS_KEY = 'glass';
+
+/**
+ * The run's meshes for opticsArgs() (receivers and shades: an Ignore row is left out, its materials never read), the
+ * default material, and the texture reads still to decode. A face slot's material (`materials` by the viewer's rid; 0 or
+ * a rid without an entry = none) takes its edit, else derive() over the textures decoded so far (`stats` by readKey,
+ * null = unreadable), else the default material; the default rows take their edits too.
+ */
+export function resolveOptics(
+  rows: readonly Pick<ObjectRow, 'id' | 'role' | 'materials'>[], materials: ReadonlyMap<number, { path: string; network?: MaterialNetwork }>,
+  stats: ReadonlyMap<string, TextureStats | null>, edits: Readonly<Record<string, OpticsEdit>>,
+): { meshes: RunMesh[]; fallback: Optics; unread: TextureRead[] } {
+  const edited = (key: string): Optics | undefined => { const e: OpticsEdit | undefined = edits[key]; return e && clamp({ ...e, source: 'edited' }); };
+  const fallback = edited(DEFAULT_KEY) ?? DEFAULT_OPTICS, glass = edited(GLASS_KEY) ?? DEFAULT_GLASS, unread = new Map<string, TextureRead>();
+  const slot = (rid: number): Optics => {
+    const m = materials.get(rid);
+    if (!m) return fallback;
+    const reads = textureReads(m.network);
+    for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r);
+    return edited(m.path) ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
+  };
+  const meshes = rows.filter((o) => o.role !== 'none').map((o) => ({ id: o.id, role: o.role, optics: (o.materials ?? [0]).map(slot) }));
+  return { meshes, fallback, unread: [...unread.values()] };
+}
 
 /**
  * The optics flags of a run, physical mode only (Ladybug: every surface opaque and black): --transmission on and
