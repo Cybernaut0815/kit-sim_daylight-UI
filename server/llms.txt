@@ -10,7 +10,8 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
 
 ## Workflow
 
-1. PUT /mesh/{id} with one .dmesh image per mesh (id: your UUID; layout in uploadMesh). Upload once; meshes stay cached.
+1. PUT /mesh/{id} with one .dmesh image per mesh (id: your UUID; layout in uploadMesh, optionally with one uint16
+   optics slot per face, header flags bit 0). Upload once; meshes stay cached. ?name= names it in results and --optics.
 2. POST /jobs (multipart/form-data): `sensors` = receiving mesh ids (repeat the field), `context` = shading-only mesh
    ids, `args` = CLI flags, one token per field (e.g. --lat 52.52 --lon 13.41 --tz 1 --quantity radiation,sunhours),
    weather = an `epw` file part, an `epw_url`, or the --clear-sky flag. 404 {"missing": [...]}: upload those, resubmit.
@@ -23,6 +24,14 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
 
 - Mesh coordinates: metres, Z up, right-handed winding; the face normal is the front side.
 - Units: radiation, direct, diffuse kWh/m2 over the period; irradiance W/m2 mean; illuminance lux mean; sunhours h.
+  direct = beam x transmittance; sunhours = equivalent full-sun hours (an hour behind tau 0.6 counts 0.6; an exact
+  count while every surface is opaque, the default).
+- Surfaces: opaque and black by default; numbers only, no materials. --optics NAME[/SLOT]=RHO[,TAU[,glass|porous]]
+  (repeatable, ';' packs several in one token, * = every mesh; NAME/SLOT > NAME > * > built-in rho 0.2 tau 0; 0..1,
+  rho + tau <= 1, glass: rho 0 and 0 < tau <= 0.918; porous when tau > 0 unless glass). --transmission on (physical
+  mode only; ladybug refuses it) lets tau through; --fresnel off makes glass pass tau at every angle (default on).
+- cache.scene: reused = the scene was still on the GPU (same mesh ids, --no-self-occlude and transmitting slots);
+  new --optics values reuse it, a slot that starts or stops transmitting is another scene (built).
 - Columns: <quantity>_<side>, e.g. radiation_front.
 - Time (standard time, no DST): annual by default; --time MM-DDTHH:MM one instant; --from TS --to TS --step MIN a
   range (the sun at the middle of each step); add --hours HH:MM-HH:MM for only those hours of every day (e.g.
@@ -33,7 +42,9 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
 
 ## Limits
 
-- Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime.
+- Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime. An
+  --optics row naming no mesh of the run (or several), a slot out of range or a row given twice fails the job (state
+  error, status 500), not the submission.
 - Send X-Client-Id to identify your client: at most 2 jobs queued or running per client (429), 32 in the queue (503),
   both with Retry-After. Finished jobs are kept 15 minutes. Identical requests are answered from a result cache.
 - No authentication; job ids are random UUIDs only their submitter knows.

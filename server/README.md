@@ -46,9 +46,19 @@ Change an endpoint: edit `server.cpp` and `openapi.json` together.
 - Meshes: uploaded once, kept in RAM by id (LRU, `--mesh-cache-mb`). A job naming an unknown id gets `404 {missing}`;
   the client uploads those and resubmits (`runRemote` in `bindings/ts` does this).
 - Identical request (same mesh ids, args, weather): answered from the result cache at once (`cache.response: hit`).
-- Scenes: the acceleration structures of the last `--gpu-scenes` (default 4) mesh sets stay on the GPU, so users who
-  alternate between models do not rebuild each other's (`cache.scene: reused`).
+- Scenes: the acceleration structures of the last `--gpu-scenes` (default 4) scenes stay on the GPU, so users who
+  alternate between models do not rebuild each other's (`cache.scene: reused`). A scene is the job's mesh ids, its
+  `--no-self-occlude` and its set of transmitting slots: new `--optics` values or `--fresnel` reuse it, a slot that
+  starts or stops transmitting is another scene (`built`). The report is the core's own (`Result::sceneReused`).
 - Weather: every `/proxy` download stays on disk under `--cache` (delete the file to refresh); parsed EPWs stay in RAM.
+
+## Simulation flags
+
+A job's `args` go to the core's CLI parser unchanged (the table in `/docs`, `submitJob`), so the server stays agnostic
+of materials: `.dmesh` uploads may carry a uint16 optics slot per face (header flags bit 0), `--optics` gives meshes and
+slots their numbers by mesh name (`PUT /mesh/{id}?name=`, else the id), `--transmission on` and `--fresnel off` switch
+the glass and porous paths (physical mode; ladybug mode refuses `--transmission on`). Rows out of range are a `400`;
+rows the run's meshes do not resolve (unknown or ambiguous name, slot out of range, a row given twice) fail the job (500).
 
 ## Flags
 

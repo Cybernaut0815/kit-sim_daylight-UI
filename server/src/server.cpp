@@ -368,7 +368,6 @@ void worker(Server& S) {
     opt.sceneKey = j->sceneKey;
     opt.residentScenes = S.gpuScenes;
     opt.cancel = &j->cancel;
-    const bool reused = scene_resident(opt.sceneKey);
     Result r;
     std::string err;
     const auto t1 = Clock::now();
@@ -379,7 +378,7 @@ void worker(Server& S) {
       const std::string b64 = httplib::detail::base64_encode(std::string(reinterpret_cast<const char*>(r.values.data()), r.values.size() * sizeof(double)));
       char tail[256];
       std::snprintf(tail, sizeof tail, "\",\n  \"run_s\": %.3f,\n  \"total_s\": %.3f,\n  \"cache\": {\"response\": \"miss\", \"scene\": \"%s\", \"weather\": \"%s\"}",
-                    runS, double(std::time(nullptr) - j->created), reused ? "reused" : "built", j->weatherCache.c_str());
+                    runS, double(std::time(nullptr) - j->created), r.sceneReused ? "reused" : "built", j->weatherCache.c_str());
       body = std::make_shared<const std::string>(cli::manifest_json(r, "\"values_b64\": \"" + b64 + tail));
       std::lock_guard<std::mutex> lock(S.cacheMu);
       S.responses.emplace_front(j->key, body);
