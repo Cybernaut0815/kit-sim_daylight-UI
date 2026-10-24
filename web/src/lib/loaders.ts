@@ -25,7 +25,7 @@ export function listMeshes(root: Object3D): Mesh[] {
 export const materialsOf = (m: Mesh): Material[] => (Array.isArray(m.material) ? m.material : m.material ? [m.material] : []);
 
 /** The texture slots toUsda writes. */
-const SLOTS = ['map', 'normalMap', 'emissiveMap', 'roughnessMap', 'metalnessMap'] as const;
+const SLOTS = ['map', 'normalMap', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'alphaMap'] as const;
 type Slots = Partial<Record<(typeof SLOTS)[number], Texture | null>>;
 /** "tex/Brick wall.PNG" -> "Brick wall": a texture file's name without folder and extension. */
 const stem = (file: string) => file.replace(/\\/g, '/').split('/').pop()!.replace(/\.[^.]*$/, '');
@@ -77,7 +77,7 @@ export async function loadFiles(files: File[], warn: (m: string) => void = () =>
     const own = new Set<Material>(creator ? Object.values(creator.materials) : []);
     for (const [name, m] of Object.entries(creator?.materials ?? {})) { // MTL textures are named after their files
       const info = creator!.materialsInfo[name] as Record<string, string>;
-      for (const [key, k] of [['map_kd', 'map'], ['norm', 'normalMap'], ['map_ke', 'emissiveMap']] as const) {
+      for (const [key, k] of [['map_kd', 'map'], ['norm', 'normalMap'], ['map_ke', 'emissiveMap'], ['map_d', 'alphaMap']] as const) {
         const t = (m as Slots)[k];
         if (t && !t.name && info[key]) t.name = stem(info[key].trim().split(/\s+/).pop()!); // options first, the file last
       }
@@ -128,4 +128,16 @@ export async function png(image: unknown, name: string): Promise<File> {
   const canvas = new OffscreenCanvas(img.width, img.height);
   canvas.getContext('2d')!.drawImage(img, 0, 0);
   return new File([await canvas.convertToBlob({ type: 'image/png' })], name, { type: 'image/png' });
+}
+
+/** Whether an image's alpha varies: an MTL map_d then holds its mask there (a cut-out PNG), else in its grey levels. */
+export function alphaVaries(image: unknown): boolean {
+  const img = image as CanvasImageSource & { width: number; height: number };
+  try {
+    const ctx = new OffscreenCanvas(img.width, img.height).getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, img.width, img.height).data;
+    for (let i = 7; i < d.length; i += 4) if (d[i] !== d[3]) return true;
+  } catch { /* not readable (an empty image): its grey levels */ }
+  return false;
 }

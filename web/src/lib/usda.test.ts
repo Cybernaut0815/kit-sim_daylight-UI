@@ -1,5 +1,5 @@
-import { BoxGeometry, BufferGeometry, DoubleSide, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhongMaterial, MeshStandardMaterial, Quaternion, RepeatWrapping, Texture, Vector3 } from 'three';
-import { describe, expect, it } from 'vitest';
+import { BoxGeometry, BufferGeometry, DoubleSide, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, Quaternion, RepeatWrapping, Texture, Vector3, type Material } from 'three';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { toUsda } from './usda';
 
 describe('toUsda', () => {
@@ -60,6 +60,15 @@ describe('toUsda: the look', () => {
     .setAttribute('uv', new Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2));
   const image = (n: number) => ({ width: n, height: n }); // stands in for an ImageBitmap
   const layer = (...meshes: Mesh[]) => { const r = new Group(); r.add(...meshes); const u = toUsda(r); return { ...u, text: u.parts.join('') }; };
+  const look = (m: Material) => layer(new Mesh(triangle(), m)).text;
+  /** OffscreenCanvas stand-in: getImageData returns the image drawn, which rgba() makes like ImageData. */
+  class Canvas {
+    getContext() {
+      let drawn: unknown;
+      return { drawImage: (img: unknown) => { drawn = img; }, getImageData: () => drawn };
+    }
+  }
+  const rgba = (...alpha: number[]) => ({ width: alpha.length, height: 1, data: Uint8ClampedArray.from(alpha.flatMap((a) => [128, 128, 128, a])) });
 
   it('writes a glTF material as a UsdPreviewSurface with its textures, the factors as their scale, st flipped and transformed', () => {
     const base = new Texture(image(4)), normal = new Texture(image(2));
@@ -96,6 +105,39 @@ describe('toUsda: the look', () => {
     expect(text).toContain('float inputs:metallic = 0');
     expect(text).toContain(`float inputs:roughness = ${+Math.sqrt(2 / 32).toPrecision(9)}`);
     expect(text).not.toContain('uniform bool doubleSided');
+  });
+  it('writes the opacity only when transparent or cut out: a glTF OPAQUE alpha factor stays out', () => {
+    const map = new Texture(image(2));
+    expect(look(new MeshStandardMaterial({ name: 'Opaque', opacity: 0.5 }))).not.toContain('inputs:opacity');
+    const textured = look(new MeshStandardMaterial({ name: 'Opaque', opacity: 0.5, map }));
+    expect(textured).toContain('float4 inputs:scale = (1, 1, 1, 1)');
+    expect(textured).not.toContain('inputs:opacity');
+    expect(look(new MeshStandardMaterial({ name: 'Blend', opacity: 0.5, transparent: true }))).toContain('float inputs:opacity = 0.5\n');
+    expect(look(new MeshStandardMaterial({ name: 'Mask', opacity: 0.3, alphaTest: 0.5 }))).toContain('float inputs:opacity = 0.3\n    float inputs:opacityThreshold = 0.5\n');
+  });
+  it('writes an MTL map_d as an opacity texture times d: its alpha where that varies (a cut-out PNG), else its grey levels', () => {
+    vi.stubGlobal('OffscreenCanvas', Canvas);
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    const grey = new Texture(rgba(255, 255)), cut = new Texture(rgba(0, 255)), map = new Texture(image(2));
+    grey.name = 'Leaf mask';
+    const g = look(new MeshPhongMaterial({ name: 'Leaves', alphaMap: grey, transparent: true, opacity: 0.8 })); // MTLLoader: map_d sets transparent, d the opacity
+    expect(g).toContain('asset inputs:file = @./textures/Leaf_mask.png@\n    token inputs:sourceColorSpace = "raw"\n    float4 inputs:scale = (0.8, 0.8, 0.8, 0.8)');
+    expect(g).toContain('float inputs:opacity.connect = </Model/Materials/Leaves/Opacity.outputs:r>');
+    expect(g).toContain('texCoord2f[] primvars:st = [(0, 0), (1, 0), (0, 1)]'); // the mask alone reads st
+    const c = look(new MeshPhongMaterial({ name: 'Leaves', map, alphaMap: cut, transparent: true }));
+    expect(c).toContain('color3f inputs:diffuseColor.connect = </Model/Materials/Leaves/BaseColor.outputs:rgb>');
+    expect(c).toContain('float inputs:opacity.connect = </Model/Materials/Leaves/Opacity.outputs:a>');
+  });
+  it('writes glTF transmission as a constant opacity, max(1 - T, 0.2) x alpha, with or without a texture; a cut-out stays one', () => {
+    const map = new Texture(image(2));
+    expect(look(new MeshPhysicalMaterial({ name: 'Clear', transmission: 1 }))).toContain('float inputs:opacity = 0.2\n');
+    expect(look(new MeshPhysicalMaterial({ name: 'Metal', transmission: 1, metalness: 1 }))).not.toContain('inputs:opacity'); // glTF: metals pass no light
+    const tinted = look(new MeshPhysicalMaterial({ name: 'Tinted', transmission: 0.7, opacity: 0.5, map })); // OPAQUE: its alpha factor stays out
+    expect(tinted).toContain('float inputs:opacity = 0.3\n');
+    expect(tinted).not.toContain('inputs:opacity.connect');
+    expect(look(new MeshPhysicalMaterial({ name: 'Blend', transmission: 0.25, opacity: 0.5, transparent: true, map }))).toContain('float inputs:opacity = 0.375\n');
+    // glTF MASK: the constant under the threshold would draw nothing, so the texture's alpha cuts it out as before
+    expect(look(new MeshPhysicalMaterial({ name: 'Mask', transmission: 1, alphaTest: 0.5, map }))).toContain('float inputs:opacity.connect = </Model/Materials/Mask/BaseColor.outputs:a>\n    float inputs:opacityThreshold = 0.5\n');
   });
   it('binds one material per geometry group (OBJ usemtl) through GeomSubsets', () => {
     const g = new BoxGeometry(); // 6 groups of 2 triangles

@@ -2,13 +2,13 @@
 // survey offsets keep their precision; mirrored nodes stay mirrored, so fromThree flips them as before), every triangle
 // mesh a Mesh with its own points, triangles and vertex normals, a GPU-instanced one (EXT_mesh_gpu_instancing) a
 // PointInstancer; names made USD identifiers, unique per parent. The look comes along: every material the file defines
-// a UsdPreviewSurface under /Model/Materials (base colour, metal / roughness, normal and emissive maps), UVs as
+// a UsdPreviewSurface under /Model/Materials (base colour, opacity, metal / roughness, normal and emissive maps), UVs as
 // primvars:st, a multi-material mesh as GeomSubsets, vertex colours as displayColor; the textures are listed for the
 // caller to write as PNG files beside the layer.
 // ponytail: text USDA, ~66 MB and ~5 s (generate + core parse) per 1M indexed triangles, non-indexed OBJ ~4x; usdc if that hurts
 import { Matrix3, Matrix4, MirroredRepeatWrapping, Quaternion, RepeatWrapping, Vector3, DoubleSide, type BufferAttribute, type Color, type InstancedMesh, type InterleavedBufferAttribute, type Material, type Mesh, type Object3D, type Texture, type Vector2 } from 'three';
 import { dmeshStems } from 'daylight-mesh';
-import { listMeshes, materialsOf } from './loaders';
+import { alphaVaries, listMeshes, materialsOf } from './loaders';
 
 export const num = (x: number) => (Number.isFinite(x) ? +x.toPrecision(9) : 0); // float32 round trip; USDA has no NaN
 const vec = (a: BufferAttribute | InterleavedBufferAttribute) => (i: number) => `(${num(a.getX(i))}, ${num(a.getY(i))}, ${num(a.getZ(i))})`;
@@ -22,13 +22,13 @@ export function arrayParts(head: string, n: number, item: (i: number) => string,
   return out;
 }
 
-/** The material properties toUsda reads: three's standard (glTF) and Phong / Lambert (OBJ + MTL) materials. */
+/** The material properties toUsda reads: three's standard / physical (glTF) and Phong / Lambert (OBJ + MTL) materials. */
 type Look = Material & {
   color?: Color; map?: Texture | null; metalness?: number; metalnessMap?: Texture | null; roughness?: number; roughnessMap?: Texture | null;
   shininess?: number; normalMap?: Texture | null; normalScale?: Vector2; emissive?: Color; emissiveIntensity?: number; emissiveMap?: Texture | null;
-  isMeshStandardMaterial?: boolean;
+  alphaMap?: Texture | null; transmission?: number; isMeshStandardMaterial?: boolean;
 };
-const SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap'] as const;
+const SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap'] as const;
 const WRAP: Record<number, string> = { [RepeatWrapping]: 'repeat', [MirroredRepeatWrapping]: 'mirror' }; // else clamp
 
 /** A model as a USDA layer: text parts, USD path -> the model's own names, and the textures as [layer-relative path, texture]. */
@@ -139,18 +139,24 @@ export function toUsda(root: Object3D): Usda {
         + '    float3 outputs:rgb\n    float outputs:r\n    float outputs:g\n    float outputs:b\n    float outputs:a\n}\n');
       return `<${path}/${name}.outputs:`;
     };
-    const c = m.color ?? { r: 0.18, g: 0.18, b: 0.18 }, opacity = m.opacity ?? 1, cutout = m.alphaTest > 0;
-    if (loaded(m.map)) {
-      const o = texture('BaseColor', m.map, true, [c.r, c.g, c.b, opacity]);
-      inputs.push(`color3f inputs:diffuseColor.connect = ${o}rgb>`);
-      if (m.transparent || cutout) inputs.push(`float inputs:opacity.connect = ${o}a>`);
-    } else {
-      if (m.vertexColors) { // glTF COLOR_0, OBJ v r g b: the diffuse reads displayColor (the factor only as its fallback)
-        shaders.push(`def Shader "Color"\n{\n    uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = ${tuple(c.r, c.g, c.b)}\n    float3 outputs:result\n}\n`);
-        inputs.push(`color3f inputs:diffuseColor.connect = <${path}/Color.outputs:result>`);
-      } else inputs.push(`color3f inputs:diffuseColor = ${tuple(c.r, c.g, c.b)}`);
-      if (opacity < 1) inputs.push(`float inputs:opacity = ${num(opacity)}`);
-    }
+    // The alpha counts only when transparent or cut out: glTF OPAQUE leaves its factor's alpha in opacity, drawn opaque.
+    const c = m.color ?? { r: 0.18, g: 0.18, b: 0.18 }, cutout = m.alphaTest > 0, alpha = m.transparent || cutout ? m.opacity ?? 1 : 1;
+    const base = loaded(m.map) ? texture('BaseColor', m.map, true, [c.r, c.g, c.b, alpha]) : null;
+    if (base) inputs.push(`color3f inputs:diffuseColor.connect = ${base}rgb>`);
+    else if (m.vertexColors) { // glTF COLOR_0, OBJ v r g b: the diffuse reads displayColor (the factor only as its fallback)
+      shaders.push(`def Shader "Color"\n{\n    uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = ${tuple(c.r, c.g, c.b)}\n    float3 outputs:result\n}\n`);
+      inputs.push(`color3f inputs:diffuseColor.connect = <${path}/Color.outputs:result>`);
+    } else inputs.push(`color3f inputs:diffuseColor = ${tuple(c.r, c.g, c.b)}`);
+    // glTF transmission (three draws it in a pass of its own, transparent stays false) as a constant, never below 0.2 so the
+    // glass stays in view; metals pass none. An MTL map_d: its alpha where that varies (a cut-out PNG), else its grey levels.
+    // ponytail: the factors only (no transmission / metalness texture); a cut-out with transmission (glTF MASK) stays a
+    // cut-out with opaque glass: UsdPreviewSurface has no translucent cut-out, the constant under its threshold draws nothing
+    const transmit = (m.transmission ?? 0) * (1 - (m.metalness ?? 0));
+    const opacity = transmit && !cutout ? `float inputs:opacity = ${num(Math.max(1 - transmit, 0.2) * alpha)}`
+      : loaded(m.alphaMap) ? `float inputs:opacity.connect = ${texture('Opacity', m.alphaMap, false, [alpha, alpha, alpha, alpha])}${alphaVaries(m.alphaMap.image) ? 'a' : 'r'}>`
+      : base && (m.transparent || cutout) ? `float inputs:opacity.connect = ${base}a>`
+      : alpha < 1 ? `float inputs:opacity = ${num(alpha)}` : null;
+    if (opacity) inputs.push(opacity);
     if (cutout) inputs.push(`float inputs:opacityThreshold = ${num(m.alphaTest)}`);
     if (m.isMeshStandardMaterial) { // glTF metal / roughness: roughness in G, metalness in B
       const metal = m.metalness ?? 0, rough = m.roughness ?? 1;
