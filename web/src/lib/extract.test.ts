@@ -1,5 +1,6 @@
 import { BufferGeometry, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial } from 'three';
 import { describe, expect, it } from 'vitest';
+import { toDmesh } from 'daylight-mesh';
 import { extract } from './extract';
 
 const close = (got: ArrayLike<number>, want: number[]) => {
@@ -60,6 +61,10 @@ describe('extract', () => {
     const all = out[2].make!();
     expect(Array.from(all.slots!)).toEqual([0, 0, 1, 0, 0, 1]);
     expect(all.slots!.length).toBe(all.indices.length / 3);
+    // what the server gets: flags 1 and the slots after the indices; a mesh without subsets: flags 0, no block
+    const bytes = toDmesh(out[0].obj!);
+    expect([new DataView(bytes.buffer).getUint32(4, true), Array.from(new Uint16Array(bytes.buffer, bytes.length - 6, 3))]).toEqual([1, [0, 0, 1]]);
+    expect(new DataView(toDmesh(out[1].obj!).buffer).getUint32(4, true)).toBe(0);
   });
   it('a group range not on a triangle boundary takes the triangles it starts (start <= 3t < start + count)', () => {
     const geometry = new BufferGeometry().setAttribute('position', new Float32BufferAttribute(new Array(27).fill(0), 3)).setIndex([0, 1, 2, 3, 4, 5, 6, 7, 8]);
