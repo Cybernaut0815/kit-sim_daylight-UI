@@ -40,7 +40,7 @@ precise: Transmission on, 2 reflections, 4096 samples.
 
 ```
 git clone --recurse-submodules <this repo>
-cd server && cmake --preset vs2022 && cmake --build --preset release     # needs VS 2022, CUDA 12.6, OptiX 9 headers, an RTX GPU
+cd server && cmake --preset vs2022 && cmake --build --preset release     # needs VS 2022, CUDA 12.6, OptiX 9 headers
 cd ../web && npm install && npm run core && npm run build                # needs GitHub access to GitZHACODE/zha-ui and Cybernaut0815/kit-UI_template
 server\build\RelWithDebInfo\daylight_server.exe --web web\dist            # http://localhost:8080
 ```
@@ -50,6 +50,11 @@ Pages into `USD_WebViewer/web/public/core/`, after checking that it was built fr
 commit, and records that commit in `web/usdcore.pin`; the build refuses a core fetched for another commit, so run it
 again after every bump of that submodule (a core built yourself can be copied there instead, see `web/scripts/core.mjs`). The core needs a cross-origin isolated
 page: the server and the dev server send the headers, and browsers honour them on `localhost` or over HTTPS.
+
+To run the server: Windows 10/11 x64, an NVIDIA GPU of compute capability 7.5 or newer (Turing and later, no rebuild
+per card), an NVIDIA driver R570+ and the VC++ 2015-2022 x64 runtime; details and why containers on WSL2 cannot run
+it yet (OptiX is not in NVIDIA's WSL driver; a Linux GPU host is the container path, and the OptiX SDK licence
+restricts hosted / internet use by third parties) are in the core's [README](kit-sim_daylight/README.md#build).
 
 Development: `cd web && npm run dev` (Vite proxies the API paths to `localhost:8080`; `npm run dev:mock` fakes the
 server for GPU-free UI work). Judge speed in the built app served by the server: the dev build adds about 40 ms to
