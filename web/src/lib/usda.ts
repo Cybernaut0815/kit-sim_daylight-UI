@@ -26,7 +26,7 @@ export function arrayParts(head: string, n: number, item: (i: number) => string,
 type Look = Material & {
   color?: Color; map?: Texture | null; metalness?: number; metalnessMap?: Texture | null; roughness?: number; roughnessMap?: Texture | null;
   shininess?: number; normalMap?: Texture | null; normalScale?: Vector2; emissive?: Color; emissiveIntensity?: number; emissiveMap?: Texture | null;
-  alphaMap?: Texture | null; transmission?: number; isMeshStandardMaterial?: boolean;
+  alphaMap?: Texture | null; transmission?: number; isMeshStandardMaterial?: boolean; isMeshPhongMaterial?: boolean;
 };
 const SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap'] as const;
 const WRAP: Record<number, string> = { [RepeatWrapping]: 'repeat', [MirroredRepeatWrapping]: 'mirror' }; // else clamp
@@ -147,7 +147,10 @@ export function toUsda(root: Object3D): Usda {
     // under the threshold and draw nothing
     const c = m.color ?? { r: 0.18, g: 0.18, b: 0.18 }, cutout = m.alphaTest > 0, transmit = (m.transmission ?? 0) * (1 - (m.metalness ?? 0));
     const alpha = (m.transparent || cutout ? m.opacity ?? 1 : 1) * (transmit && !cutout ? Math.max(1 - transmit, 0.2) : 1);
-    const base = loaded(m.map) ? texture('BaseColor', m.map, true, [c.r, c.g, c.b, alpha]) : null;
+    // An MTL map_Kd replaces Kd (MTLLoader's Phong; 3ds Max writes Kd 0.588 beside it, Maya 0): scale 1, so neither darkens
+    // nor blackens the texture (nor the albedo derived from it). glTF factors (standard, unlit) multiply it.
+    const tint = m.isMeshPhongMaterial ? [1, 1, 1] : [c.r, c.g, c.b];
+    const base = loaded(m.map) ? texture('BaseColor', m.map, true, [...tint, alpha]) : null;
     if (base) inputs.push(`color3f inputs:diffuseColor.connect = ${base}rgb>`);
     else if (m.vertexColors) { // glTF COLOR_0, OBJ v r g b: the diffuse reads displayColor (the factor only as its fallback)
       shaders.push(`def Shader "Color"\n{\n    uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = ${tuple(c.r, c.g, c.b)}\n    float3 outputs:result\n}\n`);

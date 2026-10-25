@@ -1,4 +1,4 @@
-import { BoxGeometry, BufferGeometry, DoubleSide, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, Quaternion, RepeatWrapping, Texture, Vector3, type Material } from 'three';
+import { BoxGeometry, BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, Quaternion, RepeatWrapping, Texture, Vector3, type Material } from 'three';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { toUsda } from './usda';
 
@@ -105,6 +105,15 @@ describe('toUsda: the look', () => {
     expect(text).toContain('float inputs:metallic = 0');
     expect(text).toContain(`float inputs:roughness = ${+Math.sqrt(2 / 32).toPrecision(9)}`);
     expect(text).not.toContain('uniform bool doubleSided');
+  });
+  it('writes an MTL map_Kd at scale 1 whatever its Kd (3ds Max 0.588, Maya 0); glTF factors (standard, unlit) still multiply', () => {
+    const map = new Texture(image(2)), kd = (v: number) => new Color(v, v, v);
+    expect(look(new MeshPhongMaterial({ name: 'Max', color: kd(0.588), map }))).toContain('float4 inputs:scale = (1, 1, 1, 1)');
+    expect(look(new MeshPhongMaterial({ name: 'Maya', color: kd(0), map }))).toContain('float4 inputs:scale = (1, 1, 1, 1)');
+    expect(look(new MeshPhongMaterial({ name: 'Tinted', color: kd(0.588), map, transparent: true, opacity: 0.5 }))).toContain('float4 inputs:scale = (1, 1, 1, 0.5)'); // d stays
+    expect(look(new MeshPhongMaterial({ name: 'Plain', color: kd(0.588) }))).toContain('color3f inputs:diffuseColor = (0.588, 0.588, 0.588)'); // no map: Kd is the colour
+    expect(look(new MeshStandardMaterial({ name: 'Pbr', color: kd(0.5), map }))).toContain('float4 inputs:scale = (0.5, 0.5, 0.5, 1)');
+    expect(look(new MeshBasicMaterial({ name: 'Unlit', color: kd(0.5), map }))).toContain('float4 inputs:scale = (0.5, 0.5, 0.5, 1)'); // KHR_materials_unlit
   });
   it('writes the opacity only when transparent or cut out: a glTF OPAQUE alpha factor stays out', () => {
     const map = new Texture(image(2));
