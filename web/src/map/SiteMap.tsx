@@ -57,6 +57,8 @@ export function SiteMap(p: Props) {
       a?.classList.remove('maplibregl-compact-show');
       a?.removeAttribute('open');
     });
+    // The OpenFreeMap style names icons its own sprite lacks ("circle-11"): draw nothing instead of a console warning.
+    map.setMissingStyleImageResolver((id) => { if (!map.hasImage(id)) map.addImage(id, { width: 1, height: 1, data: new Uint8Array(4) }); });
     map.on('style.load', () => {
       repaint(map);
       map.addSource('stations', { type: 'geojson', data: fc([]) });
