@@ -39,6 +39,13 @@ describe('the viewer look for GLTFExporter', () => {
     expect(s.map).not.toBe(tex);
     expect(s.map?.flipY).toBe(true);
   });
+  it('is transparent (BLEND) only with an alpha the export carries: through another texture alone (an MTL map_d) it is opaque', () => {
+    expect(standard(new MeshPhysicalMaterial({ transparent: true })).transparent).toBe(false); // the viewer's opacity node: opacity 1, no base map
+    expect(standard(new MeshPhysicalMaterial({ transparent: true, opacity: 0.5 })).transparent).toBe(true);
+    const textured = new MeshPhysicalMaterial({ transparent: true });
+    (textured as unknown as { colorNode: unknown }).colorNode = texture(new Texture()).rgb;
+    expect(standard(textured).transparent).toBe(true); // the base texture's alpha, as before
+  });
 });
 
 describe('export space and the scene', () => {

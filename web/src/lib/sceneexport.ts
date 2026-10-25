@@ -63,12 +63,14 @@ export function textureOf(node: unknown): Texture | null {
  */
 export function standard(m: Material): MeshStandardMaterial {
   const s = m as Material & { color?: Color; metalness?: number; roughness?: number; vertexColors?: boolean; colorNode?: unknown };
+  const map = textureOf(s.colorNode);
   const out = new MeshStandardMaterial({
+    // BLEND only with an alpha the export carries (a constant below 1, the base texture's): transparent through another
+    // texture (an MTL map_d alone) would be BLEND at alpha 1, without depth writes
     name: m.name, color: s.color ?? new Color(1, 1, 1), metalness: s.metalness ?? 0, roughness: s.roughness ?? 1,
-    opacity: m.opacity, transparent: m.transparent, alphaTest: m.alphaTest, side: m.side,
+    opacity: m.opacity, transparent: m.transparent && (m.opacity < 1 || !!map), alphaTest: m.alphaTest, side: m.side,
     vertexColors: !!(s.vertexColors || m.userData.readsDisplayColor),
   });
-  const map = textureOf(s.colorNode);
   if (map) {
     out.map = map.clone();
     out.map.flipY = true; // GLTFExporter flips the canvas back

@@ -30,7 +30,8 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
 - Surfaces: opaque and black by default; numbers only, no materials. --optics NAME[/SLOT]=RHO[,TAU[,glass|porous]]
   (repeatable, ';' packs several in one token, * = every mesh; NAME/SLOT > NAME > * > built-in rho 0.2 tau 0; 0..1,
   rho + tau <= 1, glass: rho 0 and 0 < tau <= 0.918; porous when tau > 0 unless glass). --transmission on (physical
-  mode only; ladybug refuses it) lets tau through; --fresnel off makes glass pass tau at every angle (default on).
+  mode only; ladybug refuses it) lets tau through; --fresnel off makes glass pass tau at every angle and, with
+  --bounces, mirror nothing (default on: both by angle).
 - Reflected light: --bounces N (0..20, default 0 = none; physical mode only, ladybug refuses N > 0) adds up to N
   diffuse reflections by each slot's rho (unused without it: every surface black); 1 for outdoor studies, 5-8 for
   interiors. --bounce-samples M (64..65536, default 1024) paths per sensor: time linear in M (at 1024 about 2 s more
@@ -38,9 +39,10 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
   2.3 % p95; a single --time instant 2.3 % / 14 %: use 4096-16384 for instants and small differences).
 - cache.scene: reused = the scene was still on the GPU. A scene = the sensors ids then the context ids, in order,
   --no-self-occlude, and the layout of the slots that cast shade: the set that transmits (tau > 0 with --transmission
-  on), else with --bounces > 0 whether their rho or glass differ (a hit record per slot). New --optics values reuse it
-  while that layout stays; a slot that starts or stops transmitting, or --bounces switched on or off for a model whose
-  slots differ (none transmitting), is another scene (built, then kept).
+  on), else with --bounces > 0 and a quantity other than direct / sunhours whether their rho or glass differ (with
+  --fresnel off none is glass; a hit record per slot). New --optics values reuse it while that layout stays; a slot
+  that starts or stops transmitting, or --bounces switched on or off (with such a quantity) for a model whose slots
+  differ (none transmitting), is another scene (built, then kept).
 - Columns: <quantity>_<side>, e.g. radiation_front.
 - Time (standard time, no DST): annual by default; --time MM-DDTHH:MM one instant; --from TS --to TS --step MIN a
   range (the sun at the middle of each step); add --hours HH:MM-HH:MM for only those hours of every day (e.g.

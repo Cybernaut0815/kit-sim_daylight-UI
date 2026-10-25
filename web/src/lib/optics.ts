@@ -10,7 +10,9 @@ import type { ObjectRow, Role, SimMode } from '../store';
 
 export interface Optics {
   rho: number; tau: number; kind: 'opaque' | 'glass' | 'porous';
-  source: 'derived' | 'default' | 'edited'; // the material's settings, the default material, or the user's edit
+  // the material's settings, the default material, the user's edit, or the material's settings while a texture they read
+  // waits to be decoded (it is, once its numbers count): the values without it
+  source: 'derived' | 'default' | 'edited' | 'unread';
   warning?: string; // what clamp() changed
 }
 /** No material, or an albedo the material does not give: Honeybee generic_context_0.20, BRE GN50 Table 2 (obstructions
@@ -20,7 +22,8 @@ export const DEFAULT_OPTICS: Optics = { rho: 0.2, tau: 0, kind: 'opaque', source
  *  same unit passes 0.37 of solar energy. */
 export const DEFAULT_GLASS: Optics = { rho: 0, tau: 0.64, kind: 'glass', source: 'default' };
 
-/** A preset: absolute, aged values (glass tau at normal incidence); `source`: where the numbers come from (a tooltip). */
+/** A preset: absolute, aged values (glass tau at normal incidence, visible light like the default glass: one band, the
+ *  solar figure stays in the source); `source`: where the numbers come from (a tooltip). */
 export interface Preset { name: string; rho: number; tau: number; kind: Optics['kind']; source: string }
 export const PRESETS: Preset[] = ([
   ['Asphalt', 0.12, 0, 'opaque', 'pvlib 0.12; EPA Cool Pavements: aged 0.15-0.20, new 0.05'],
@@ -37,10 +40,10 @@ export const PRESETS: Preset[] = ([
   ['Soil', 0.15, 0, 'opaque', 'pvlib 0.17; DOE-2: dark soil 0.08'],
   ['Water', 0.07, 0, 'opaque', 'pvlib: sea 0.06; Penn State EARTH 103: 0.06-0.10'],
   ['Snow', 0.8, 0, 'opaque', 'CIBSE: fresh 0.8-0.9, old 0.45-0.7; pvlib: fresh 0.75'],
-  ['Single clear', 0, 0.87, 'glass', 'EN 410, 4 mm clear float (Saint-Gobain PLANICLEAR): 0.87 solar, 0.91 visible'],
-  ['Double clear', 0, 0.76, 'glass', 'Two 4 mm clear panes (PLANICLEAR): about 0.76 solar, 0.82 visible'],
-  ['Double low-e', 0, 0.64, 'glass', 'Honeybee generic_exterior_window_vis_0.64 (visible; 0.37 solar)'],
-  ['Solar control', 0, 0.35, 'glass', 'EN 410, Saint-Gobain SKN 176: 0.35 solar, 0.70 visible'],
+  ['Single clear', 0, 0.91, 'glass', 'EN 410, 4 mm clear float (Saint-Gobain PLANICLEAR): 0.91 visible (0.87 solar)'],
+  ['Double clear', 0, 0.82, 'glass', 'Two 4 mm clear panes (PLANICLEAR): about 0.82 visible (0.76 solar)'],
+  ['Double low-e', 0, 0.64, 'glass', 'Honeybee generic_exterior_window_vis_0.64: 0.64 visible (0.37 solar)'],
+  ['Solar control', 0, 0.7, 'glass', 'EN 410, Saint-Gobain SKN 176: 0.70 visible (0.35 solar)'],
   ['Deciduous tree, in leaf', 0.1, 0.32, 'porous', 'Crown 0.10 (Larsson 2011: 0.05-0.15), crossed twice: sqrt(0.10) per surface; leaves 0.15 x (1 - tau)'],
   ['Deciduous tree, leafless', 0.04, 0.71, 'porous', 'Crown 0.50 (Larsson 2011: 0.50-0.55), crossed twice: sqrt(0.50) per surface; 0.15 x (1 - tau)'],
   ['Perforated metal, 40 % open', 0.24, 0.4, 'porous', 'The open area, an upper bound (Bustamante et al. 2018 measured 0.29 of the light); metal 0.40 x (1 - tau)'],
@@ -89,21 +92,37 @@ const LUT = Float64Array.from({ length: 256 }, (_, i) => { const c = i / 255; re
  * weighs the same, as if the UVs covered the surface uniformly
  */
 export function textureStats(rgba: ArrayLike<number>, w: number, h: number, opacity?: OpacityRead): TextureStats {
-  const n = w * h, ch = opacity ? 'rgba'.indexOf(opacity.channel) : 0, mean = [0, 0, 0], covered = [0, 0, 0];
-  let cover = 0, lo = 1, hi = 0;
-  for (let i = 0; i < 4 * n; i += 4) {
-    let c = 1;
-    if (opacity) {
-      const o = Math.min(1, Math.max(0, (rgba[i + ch] / 255) * opacity.scale + opacity.bias));
-      lo = Math.min(lo, o);
-      hi = Math.max(hi, o);
-      c = opacity.threshold > 0 ? +(o >= opacity.threshold) : o;
-    }
-    cover += c;
-    for (let k = 0; k < 3; k++) { const v = LUT[rgba[i + k]]; mean[k] += v; covered[k] += c * v; }
-  }
-  const avg = mean.map((v) => v / Math.max(n, 1));
-  return { mean: avg, covered: cover > 0 ? covered.map((v) => v / cover) : avg, coverage: n ? cover / n : 1, range: opacity && n ? hi - lo : 0 };
+  const s = texelSums(opacity);
+  s.add(rgba, w * h);
+  return s.stats();
+}
+
+/** textureStats() of an image fed in strips of whole texels, in order (add() each strip's RGBA8, then stats()): the same
+ *  sums in the same order, so the same numbers, without the whole image in one buffer. */
+export function texelSums(opacity?: OpacityRead) {
+  const ch = opacity ? 'rgba'.indexOf(opacity.channel) : 0, mean = [0, 0, 0], covered = [0, 0, 0];
+  let n = 0, cover = 0, lo = 1, hi = 0;
+  return {
+    add(rgba: ArrayLike<number>, texels = rgba.length / 4) {
+      let cv = cover, l = lo, u = hi; // locals in the loop, written back after it
+      for (let i = 0; i < 4 * texels; i += 4) {
+        let c = 1;
+        if (opacity) {
+          const o = Math.min(1, Math.max(0, (rgba[i + ch] / 255) * opacity.scale + opacity.bias));
+          l = Math.min(l, o);
+          u = Math.max(u, o);
+          c = opacity.threshold > 0 ? +(o >= opacity.threshold) : o;
+        }
+        cv += c;
+        for (let k = 0; k < 3; k++) { const v = LUT[rgba[i + k]]; mean[k] += v; covered[k] += c * v; }
+      }
+      cover = cv; lo = l; hi = u; n += texels;
+    },
+    stats(): TextureStats {
+      const avg = mean.map((v) => v / Math.max(n, 1));
+      return { mean: avg, covered: cover > 0 ? covered.map((v) => v / cover) : avg, coverage: n ? cover / n : 1, range: opacity && n ? hi - lo : 0 };
+    },
+  };
 }
 
 /** Component k of a float / floatN parameter (a scale, a bias), else `d`. */
@@ -205,7 +224,7 @@ export interface MaterialRow { path: string; network?: MaterialNetwork; optics: 
  * A face slot's material (`materials` by the viewer's rid; 0 or a rid without an entry = none) takes its edit, else
  * derive() over the textures decoded so far (`stats` by readKey, null = unreadable), else the default material; the
  * default rows take their edits too. `albedo`: the reflectance counts (Reflections on), so the diffuse textures are read
- * too; else a textured albedo is the default's until then.
+ * too; else a textured albedo is the default's until then. A material with a texture not decoded yet is 'unread'.
  */
 export function resolveOptics(
   rows: readonly Pick<ObjectRow, 'id' | 'role' | 'materials'>[], materials: ReadonlyMap<number, { path: string; network?: MaterialNetwork }>,
@@ -219,9 +238,10 @@ export function resolveOptics(
     if (!m) return fallback;
     let row = seen.get(m.path);
     if (!row) {
-      const reads = textureReads(m.network, albedo), edit = edited(m.path);
-      if (!edit) for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r); // an edit needs none of them
-      const optics = edit ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
+      const all = textureReads(m.network, true), edit = edited(m.path); // every texture derive() reads: one decoded earlier counts too
+      if (!edit) for (const r of albedo ? all : textureReads(m.network)) if (!stats.has(readKey(r))) unread.set(readKey(r), r); // an edit needs none of them
+      const derived = edit ?? derive(m.network, new Map(all.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
+      const optics = !edit && all.some((r) => !stats.has(readKey(r))) ? { ...derived, source: 'unread' as const } : derived;
       seen.set(m.path, (row = { path: m.path, network: m.network, optics }));
     }
     return row.optics;
@@ -235,7 +255,8 @@ export interface OpticsSwitches { mode: SimMode; transmission: boolean; fresnel:
 
 /**
  * The optics flags of a run, physical mode only (Ladybug: every surface opaque and black): --transmission on, --fresnel
- * off and --bounces N --bounce-samples M when not the default, and with transmission or reflections the packed --optics
+ * off (with transmission or reflections: glass then passes tau at every angle and mirrors nothing, the core's meaning in
+ * both passes) and --bounces N --bounce-samples M when not the default, and with transmission or reflections the packed --optics
  * token `*=V;ID/SLOT=V;...` with V = RHO,TAU,KIND (RHO,0 when nothing passes), every value clamped first: `*` (the
  * default material) only when it differs from the built-in default, a slot only when it differs from `*`. RHO counts
  * only with reflections (0 without), so a reflectance change alone never changes the request. Ignore meshes are never
@@ -245,7 +266,7 @@ export function opticsArgs(meshes: readonly RunMesh[], fallback: Optics, sim: Op
   const a: string[] = [], bounces = sim.bounces ?? 0;
   if (sim.mode !== 'physical') return a;
   if (sim.transmission) a.push('--transmission', 'on');
-  if (sim.transmission && !sim.fresnel) a.push('--fresnel', 'off');
+  if (!sim.fresnel && (sim.transmission || bounces > 0)) a.push('--fresnel', 'off');
   if (bounces > 0) a.push('--bounces', String(bounces), '--bounce-samples', String(sim.bounceSamples ?? 1024));
   if (!sim.transmission && !bounces) return a; // every surface opaque and black: the numbers are not used
   const val = (o: Optics) => { const c = clamp(o), rho = bounces ? c.rho : 0; return c.tau > 0 ? `${rho},${c.tau},${c.kind}` : `${rho},0`; };
@@ -261,7 +282,8 @@ export function opticsArgs(meshes: readonly RunMesh[], fallback: Optics, sim: Op
 export function runSwitches(sim: OpticsSwitches): string {
   const w: string[] = [], n = sim.bounces ?? 0;
   if (sim.mode !== 'physical') return '';
-  if (sim.transmission) w.push(sim.fresnel ? 'Transmission' : 'Transmission, angle-dependent glass off');
+  if (sim.transmission) w.push('Transmission');
   if (n > 0) w.push(`${n} reflection${n > 1 ? 's' : ''} × ${sim.bounceSamples ?? 1024} samples`);
+  if (!sim.fresnel && (sim.transmission || n > 0)) w.push('angle-dependent glass off');
   return w.join(', ');
 }

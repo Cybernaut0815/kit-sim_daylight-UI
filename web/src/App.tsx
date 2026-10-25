@@ -239,7 +239,7 @@ export default function App() {
   // re-read of the stage, so the rows key it.
   const physical = s.sim.mode === 'physical', reflect = physical && s.sim.bounces > 0;
   const optics = useMemo(() => resolveOptics(state.objects, materials, texStats, state.optics, reflect), [state.objects, texStats, state.optics, reflect]);
-  // The textures are read (on the main thread) only while their numbers count: physical mode with Transmission or
+  // The textures are read (decoded in a worker) only while their numbers count: physical mode with Transmission or
   // Reflections on; a default or Ladybug run never waits for them.
   const live = physical && (s.sim.transmission || reflect), materialsReady = !live || !optics.unread.length;
   useEffect(() => {

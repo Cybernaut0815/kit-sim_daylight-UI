@@ -32,8 +32,9 @@ and cut-out trees pass their transmittance τ, and *Reflections* (off, 1-20; 1 f
 *Reflection samples* under Advanced, 1024) adds the light the model's own surfaces reflect by their reflectance ρ. The
 Materials table reads each material's kind, ρ and τ from its own settings, never its name: opacity, cut-out and opacity
 texture tell glass (the default glass: double low-e, τ 0.64) and porous apart, the colour or colour map gives ρ (its
-luminance, 0.02-0.9; no colour of its own: the default 0.20); edit a value or pick a preset (kept for the session).
-Ladybug mode keeps every surface opaque and black. More precise: Transmission on, 2 reflections, 4096 samples.
+luminance, 0.02-0.9; no colour of its own: the default 0.20); edit a value or pick a preset (kept while the model is
+open: re-reads keep them, opening another model clears them). Ladybug mode keeps every surface opaque and black. More
+precise: Transmission on, 2 reflections, 4096 samples.
 
 ![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
 

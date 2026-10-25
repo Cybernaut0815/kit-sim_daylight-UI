@@ -130,13 +130,18 @@ export async function png(image: unknown, name: string): Promise<File> {
   return new File([await canvas.convertToBlob({ type: 'image/png' })], name, { type: 'image/png' });
 }
 
-/** Whether an image's alpha varies: an MTL map_d then holds its mask there (a cut-out PNG), else in its grey levels. */
+/** Whether an image's alpha varies: an MTL map_d then holds its mask there (a cut-out PNG), else in its grey levels.
+ *  Read from a point-sampled copy of at most 512 px a side (a cut-out's alpha varies over far more than one sample), so
+ *  an 8k mask costs no full-size canvas at import.
+ *  ponytail: alpha that varies only in specks finer than the sampling step reads as grey levels */
 export function alphaVaries(image: unknown): boolean {
   const img = image as CanvasImageSource & { width: number; height: number };
   try {
-    const ctx = new OffscreenCanvas(img.width, img.height).getContext('2d')!;
-    ctx.drawImage(img, 0, 0);
-    const d = ctx.getImageData(0, 0, img.width, img.height).data;
+    const k = Math.min(1, 512 / Math.max(img.width, img.height)), w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+    const ctx = new OffscreenCanvas(w, h).getContext('2d')!;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data;
     for (let i = 7; i < d.length; i += 4) if (d[i] !== d[3]) return true;
   } catch { /* not readable (an empty image): its grey levels */ }
   return false;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MaterialNetwork, MaterialNode } from 'usd-viewer';
 import type { ObjectRow } from '../store';
-import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, editOptics, opticsArgs, readKey, resolveOptics, runSwitches, textureReads, textureStats, type Optics, type RunMesh } from './optics';
+import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, editOptics, opticsArgs, readKey, resolveOptics, runSwitches, texelSums, textureReads, textureStats, type Optics, type RunMesh } from './optics';
 
 // Networks as the viewer hands them over for what usda.ts writes: a Surface, its textures read through st.
 const surface = (params: MaterialNode['params'], inputs: MaterialNode['inputs'] = {}, nodes: MaterialNetwork['nodes'] = {}): MaterialNetwork =>
@@ -134,6 +134,14 @@ describe('textureStats', () => {
     expect(textureStats(texels([255, 0, 0, 255], [0, 0, 0, 255]), 2, 1, { channel: 'r', scale: 2, bias: -0.5, threshold: 0 })).toMatchObject({ coverage: 0.5, range: 1 });
     expect(textureStats(texels([255, 0, 0, 0]), 1, 1, { channel: 'a', scale: 1, bias: 0, threshold: 0.5 })).toMatchObject({ covered: [1, 0, 0], coverage: 0 }); // nothing covered: no NaN
   });
+  it('fed in strips (texelSums, as the worker counts a big image) gives the very numbers of one call', () => {
+    const px = Uint8ClampedArray.from({ length: 4 * 37 }, (_, i) => (i * 97 + 13) % 256), read = { channel: 'a', scale: 0.9, bias: 0.05, threshold: 0 } as const;
+    for (const opacity of [undefined, read, { ...read, threshold: 0.5 }]) {
+      const s = texelSums(opacity);
+      for (const [a, b] of [[0, 5], [5, 6], [6, 37]]) s.add(px.subarray(4 * a, 4 * b));
+      expect(s.stats(), JSON.stringify(opacity)).toEqual(textureStats(px, 37, 1, opacity));
+    }
+  });
 });
 
 describe('clamp', () => {
@@ -165,6 +173,7 @@ describe('PRESETS', () => {
       expect(p.source.length, p.name).toBeGreaterThan(20);
     }
     expect(new Set(PRESETS.map((p) => p.name)).size).toBe(PRESETS.length);
+    for (const p of PRESETS.filter((x) => x.kind === 'glass')) expect(p.source, p.name).toContain(`${p.tau.toFixed(2)} visible`); // one band, the default glass's
     expect(PRESETS.map((p) => p.kind).filter((k, i, a) => k !== a[i - 1])).toEqual(['opaque', 'glass', 'porous']); // one optgroup each
   });
   it('hold an opening, the default glass, crowns crossed twice, and porous rho = the solid albedo x (1 - tau)', () => {
@@ -214,7 +223,9 @@ describe('runSwitches', () => {
     expect(runSwitches({ ...sim, fresnel: false, bounceSamples: 4096 })).toBe(''); // not sent without Transmission / Reflections
     expect(runSwitches({ ...sim, transmission: true })).toBe('Transmission');
     expect(runSwitches({ ...sim, bounces: 1 })).toBe('1 reflection × 1024 samples');
-    expect(runSwitches({ ...sim, transmission: true, fresnel: false, bounces: 2, bounceSamples: 4096 })).toBe('Transmission, angle-dependent glass off, 2 reflections × 4096 samples');
+    expect(runSwitches({ ...sim, transmission: true, fresnel: false })).toBe('Transmission, angle-dependent glass off');
+    expect(runSwitches({ ...sim, transmission: true, fresnel: false, bounces: 2, bounceSamples: 4096 })).toBe('Transmission, 2 reflections × 4096 samples, angle-dependent glass off');
+    expect(runSwitches({ ...sim, fresnel: false, bounces: 1 })).toBe('1 reflection × 1024 samples, angle-dependent glass off'); // the bounce pass: glass mirrors nothing
     expect(runSwitches({ ...sim, mode: 'ladybug', transmission: true, bounces: 3 })).toBe('');
   });
 });
@@ -234,8 +245,9 @@ describe('opticsArgs', () => {
   it('with transmission: one token of the slots that differ from *, never an Ignore mesh', () => {
     expect(opticsArgs(meshes, DEFAULT_OPTICS, sim({ transmission: true }))).toEqual(['--transmission', 'on', '--optics', 'r1/1=0,0.64,glass;s1/0=0,0.32,porous']);
   });
-  it('--fresnel off only with transmission on', () => {
+  it('--fresnel off only with transmission or reflections on (the core: glass by angle in both passes)', () => {
     expect(opticsArgs([], DEFAULT_OPTICS, sim({ fresnel: false }))).toEqual([]);
+    expect(opticsArgs([], DEFAULT_OPTICS, sim({ fresnel: false, bounces: 0, bounceSamples: 4096 }))).toEqual([]);
     expect(opticsArgs([], DEFAULT_OPTICS, sim({ transmission: true, fresnel: false }))).toEqual(['--transmission', 'on', '--fresnel', 'off']);
   });
   it('a textured opaque model with Reflections Off sends no --optics: its reflectance is not used', () => {
@@ -253,6 +265,8 @@ describe('opticsArgs', () => {
     const brick: Optics = { rho: 0.13, tau: 0, kind: 'opaque', source: 'derived' }, facade: RunMesh[] = [{ id: 'f', role: 'receiver', optics: [brick, wall, glass] }];
     expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 2, bounceSamples: 4096 }))).toEqual(['--bounces', '2', '--bounce-samples', '4096', '--optics', 'f/0=0.13,0;f/2=0,0.64,glass']);
     expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 1, transmission: true, fresnel: false }))).toEqual(['--transmission', 'on', '--fresnel', 'off', '--bounces', '1', '--bounce-samples', '1024', '--optics', 'f/0=0.13,0;f/2=0,0.64,glass']);
+    // Transmission off: the glass still mirrors by angle in the bounce pass unless Angle-dependent glass is off
+    expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 1, fresnel: false }))).toEqual(['--fresnel', 'off', '--bounces', '1', '--bounce-samples', '1024', '--optics', 'f/0=0.13,0;f/2=0,0.64,glass']);
     expect(opticsArgs([{ id: 'w', role: 'receiver', optics: [wall] }], DEFAULT_OPTICS, sim({ bounces: 1 }))).toEqual(['--bounces', '1', '--bounce-samples', '1024']); // all at the built-in default
     expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 0, bounceSamples: 4096 }))).toEqual([]); // Off: the samples are not sent
   });
@@ -282,10 +296,10 @@ describe('resolveOptics', () => {
     expect(r.unread).toEqual([leaf]); // not the Ignore row's bark
     expect(r.meshes.map((m) => [m.id, m.role])).toEqual([['r', 'receiver'], ['s', 'shade'], ['n', 'shade']]);
     expect(r.meshes[0].optics).toEqual([glass, DEFAULT_OPTICS, glass]);
-    expect(r.meshes[1].optics).toEqual([{ rho: 0.2, tau: 0, kind: 'opaque', source: 'derived' }, DEFAULT_OPTICS]); // the mask not read yet
+    expect(r.meshes[1].optics).toEqual([{ rho: 0.2, tau: 0, kind: 'opaque', source: 'unread' }, DEFAULT_OPTICS]); // the mask not read yet: the values without it, said so
     expect([r.fallback, r.glass, r.meshes[2].optics]).toEqual([DEFAULT_OPTICS, DEFAULT_GLASS, [DEFAULT_OPTICS]]);
     // the Materials table's rows: each run material once, first use first, never the Ignore row's bark
-    expect(r.materials.map((m) => [m.path, m.optics.kind, m.optics.source])).toEqual([['/M/Glass', 'glass', 'derived'], ['/M/Tint', 'glass', 'derived'], ['/M/Leaves', 'opaque', 'derived'], ['/M/Mtlx', 'opaque', 'default']]);
+    expect(r.materials.map((m) => [m.path, m.optics.kind, m.optics.source])).toEqual([['/M/Glass', 'glass', 'derived'], ['/M/Tint', 'glass', 'derived'], ['/M/Leaves', 'opaque', 'unread'], ['/M/Mtlx', 'opaque', 'default']]);
     expect(r.materials[0].network).toBe(mats.get(2)!.network);
   });
   it('a decoded texture counts once it lands, a failed one as absent; then nothing waits', () => {
@@ -293,7 +307,7 @@ describe('resolveOptics', () => {
     expect([read.unread, read.meshes[1].optics[0]]).toEqual([[], { rho: 0.1, tau: 0.5, kind: 'porous', source: 'derived' }]);
     expect(opticsArgs(read.meshes, read.fallback, { mode: 'physical', transmission: true, fresnel: true })).toEqual(['--transmission', 'on', '--optics', 'r/0=0,0.64,glass;r/2=0,0.64,glass;s/0=0,0.5,porous']);
     const failed = resolveOptics(rows, mats, new Map([[readKey(leaf), null]]), {});
-    expect([failed.unread, failed.meshes[1].optics[0].kind]).toEqual([[], 'opaque']);
+    expect([failed.unread, failed.meshes[1].optics[0].kind, failed.meshes[1].optics[0].source]).toEqual([[], 'opaque', 'derived']); // unreadable: decided without it
     expect(readKey({ ...leaf, opacity: { ...leaf.opacity!, threshold: 0.5 } })).not.toBe(readKey(leaf)); // the same file read otherwise
   });
   it('an edit overrides by prim path, clamped; the default rows take theirs, and derived glass the default glass', () => {
@@ -311,11 +325,13 @@ describe('resolveOptics', () => {
   it('with Reflections on the colour maps are read too; a row takes its albedo once decoded, and the run sends it', () => {
     const brick = surface({}, { diffuseColor: { node: 'BaseColor', output: 'rgb' } }, { BaseColor: texture('brick', [1, 1, 1, 1]) }), read = { file: '/drop/1/textures/brick.png' };
     const m = new Map([...mats, [6, { path: '/M/Brick', network: brick }]]), r = [...rows, { id: 'w', role: 'receiver' as const, materials: [6] }];
-    expect(resolveOptics(r, m, new Map(), {}).unread).toEqual([leaf]); // Reflections off: the colour map holds nothing
+    const off = resolveOptics(r, m, new Map(), {});
+    expect([off.unread, off.meshes[3].optics[0].source]).toEqual([[leaf], 'unread']); // Reflections off: the colour map is not read, and the row says so
     const on = resolveOptics(r, m, new Map(), {}, true);
-    expect([on.unread, on.meshes[3].optics[0].rho]).toEqual([[leaf, read], 0.2]); // the default until it is read
-    const done = resolveOptics(r, m, new Map([[readKey(leaf), null], [readKey(read), textureStats(texels([180, 80, 60, 255], [120, 60, 40, 255]), 2, 1)]]), {}, true);
-    expect([done.unread, done.meshes[3].optics[0].rho]).toEqual([[], expect.closeTo(0.1295546983, 9)]);
+    expect([on.unread, on.meshes[3].optics[0].rho, on.meshes[3].optics[0].source]).toEqual([[leaf, read], 0.2, 'unread']); // the default until it is read
+    const stats = new Map([[readKey(leaf), null], [readKey(read), textureStats(texels([180, 80, 60, 255], [120, 60, 40, 255]), 2, 1)]]), done = resolveOptics(r, m, stats, {}, true);
+    expect([done.unread, done.meshes[3].optics[0].rho, done.meshes[3].optics[0].source]).toEqual([[], expect.closeTo(0.1295546983, 9), 'derived']);
+    expect(resolveOptics(r, m, stats, {}).meshes[3].optics[0]).toEqual(done.meshes[3].optics[0]); // Reflections off again: read once, it still shows
     const args = opticsArgs(done.meshes, done.fallback, { mode: 'physical', transmission: false, fresnel: true, bounces: 1 });
     expect(args.slice(0, 5)).toEqual(['--bounces', '1', '--bounce-samples', '1024', '--optics']);
     expect(args[5]).toMatch(/^r\/0=0,0\.64,glass;r\/2=0,0\.64,glass;w\/0=0\.12955\d+,0$/); // glass absorbs (Transmission off), the brick reflects its own

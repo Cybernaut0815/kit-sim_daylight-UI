@@ -137,6 +137,21 @@ describe('toUsda: the look', () => {
     expect(c).toContain('color3f inputs:diffuseColor.connect = </Model/Materials/Leaves/BaseColor.outputs:rgb>');
     expect(c).toContain('float inputs:opacity.connect = </Model/Materials/Leaves/Opacity.outputs:a>');
   });
+  it('reads a map_d that names the map_Kd file through the base colour: one PNG, one texture, as before map_d was read', () => {
+    vi.stubGlobal('OffscreenCanvas', Canvas);
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    // MTLLoader loads an Image per map: two images of one file (one blob URL)
+    const of = (src: string, ...alpha: number[]) => { const t = new Texture(Object.assign(rgba(...alpha), { src })); t.name = 'leaf'; return t; };
+    const cut = layer(new Mesh(triangle(), new MeshPhongMaterial({ name: 'Leaves', map: of('blob:leaf', 0, 255), alphaMap: of('blob:leaf', 0, 255), transparent: true })));
+    expect(cut.textures.map(([p]) => p)).toEqual(['textures/leaf.png']);
+    expect(cut.text).toContain('float inputs:opacity.connect = </Model/Materials/Leaves/BaseColor.outputs:a>');
+    expect(cut.text).not.toContain('def Shader "Opacity"');
+    // its alpha uniform: the grey levels, through a raw read of the same one file
+    const grey = layer(new Mesh(triangle(), new MeshPhongMaterial({ name: 'Grey', map: of('blob:grey', 255, 255), alphaMap: of('blob:grey', 255, 255), transparent: true })));
+    expect(grey.textures).toHaveLength(1);
+    expect(grey.text).toContain('float inputs:opacity.connect = </Model/Materials/Grey/Opacity.outputs:r>');
+    expect(grey.text.match(/asset inputs:file = @\.\/textures\/leaf\.png@/g)).toHaveLength(2);
+  });
   it('writes glTF transmission as opacity max(1 - T, 0.2) x alpha: a constant, or a BLEND texture alpha times it; a cut-out stays one', () => {
     const map = new Texture(image(2));
     expect(look(new MeshPhysicalMaterial({ name: 'Clear', transmission: 1 }))).toContain('float inputs:opacity = 0.2\n');

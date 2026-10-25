@@ -3,7 +3,7 @@
 // node tests never import it.
 import 'usd-viewer';
 import type { MaterialNetwork, RenderDelta } from 'usd-viewer';
-import { textureStats, type TextureRead, type TextureStats } from '../lib/optics';
+import type { TextureRead, TextureStats } from '../lib/optics';
 
 // A Vite hot update re-runs this module: reuse the live element (worker, core, stage), never boot a second one under it.
 export const usd = document.querySelector('usd-viewer') ?? document.createElement('usd-viewer');
@@ -25,19 +25,19 @@ usd.session.addEventListener('delta', (e) => {
 });
 usd.session.addEventListener('stageclose', () => materials.clear());
 
-/** textureStats() of a texture read (lib/optics.ts textureReads), from the file's own bytes; null when it cannot be read
- *  or decoded (readBytes null, EXR / HDR, a decode error): it then counts as absent.
- *  ponytail: counted on the main thread (a 4096 px texture: about 1 s in headless Chromium); move into a worker if big
- *  masks or colour maps with Reflections on are common */
+/** textureStats() of a texture read (lib/optics.ts textureReads), from the file's own bytes, decoded and counted in a
+ *  worker of its own (gone with its memory once it answers); null when it cannot be read or decoded (readBytes null,
+ *  EXR / HDR, a decode error): it then counts as absent. */
 export async function readTexture({ file, opacity }: TextureRead): Promise<TextureStats | null> {
   try {
     const bytes = await usd.session.readBytes(file);
     if (!bytes) return null;
-    const bitmap = await createImageBitmap(bytes instanceof Blob ? bytes : new Blob([bytes]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-    const { width: w, height: h } = bitmap, ctx = new OffscreenCanvas(w, h).getContext('2d')!;
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    return textureStats(ctx.getImageData(0, 0, w, h).data, w, h, opacity);
+    const blob = bytes instanceof Blob ? bytes : new Blob([bytes]), worker = new Worker(new URL('./texstats.worker.ts', import.meta.url), { type: 'module' });
+    return await new Promise<TextureStats | null>((resolve) => {
+      worker.onmessage = (e: MessageEvent<TextureStats | null>) => resolve(e.data);
+      worker.onerror = () => resolve(null);
+      worker.postMessage({ blob, opacity });
+    }).finally(() => worker.terminate());
   } catch {
     return null;
   }

@@ -1,11 +1,12 @@
 // Materials: what the run's surfaces reflect and let through, the two default rows first, then each material bound to a
-// receiver or a shade: its kind, reflectance and transmittance from its own settings (lib/optics.ts derive()), the
-// default, or the user's edit (by material path, for this model); a preset sets the numbers at once. A fixed-height box
-// (drag the corner to enlarge) and a fixed-height status, so a model's rows and its texture reads never move the panels
-// below. The status is what a run held for the reads focuses, and says when they end.
+// receiver or a shade: its kind, reflectance and transmittance from its own settings (lib/optics.ts derive(); "Not
+// read" while a texture waits), the default, or the user's edit (by material path, for this model); a preset sets the
+// numbers at once. A fixed-height box (drag the corner to enlarge) and a fixed-height status, so a model's rows and its
+// texture reads never move the panels below. The status is what a run held for the reads focuses, and says when they end.
 import { Fragment, memo, type Dispatch } from 'react';
 import type { MaterialNetwork } from 'usd-viewer';
 import { DEFAULT_KEY, GLASS_KEY, PRESETS, clamp, editOptics, type MaterialRow, type Optics, type OpticsEdit, type Preset } from '../lib/optics';
+import { rowNames } from '../lib/tree';
 import type { Action, SimMode } from '../store';
 import { ResetButton, Section, Swatch } from '../ui';
 
@@ -13,15 +14,16 @@ const KINDS = [['opaque', 'Opaque'], ['glass', 'Glass'], ['porous', 'Porous']] a
 // a preset group's numbers: opaque ones reflect, glass passes, porous does both
 const PRESET_VALUES: Record<Optics['kind'], [string, (p: Preset) => string]> = {
   opaque: ['reflectance', (p) => p.rho.toFixed(2)],
-  glass: ['transmittance', (p) => p.tau.toFixed(2)],
+  glass: ['visible transmittance', (p) => p.tau.toFixed(2)],
   porous: ['reflectance | transmittance', (p) => `${p.rho.toFixed(2)} | ${p.tau.toFixed(2)}`],
 };
-const RHO = 'ρ, reflectance: the share of the light reflected diffusely, used with Reflections on; glass reflects by angle instead';
+const RHO = 'ρ, reflectance: the share of the light reflected diffusely, used with Reflections on; glass reflects none diffusely (with Angle-dependent glass it mirrors by angle)';
 const TAU = 'τ, transmittance: the share of the light passed straight through at normal incidence, used with Transmission on; glass passes less at grazing angles with Angle-dependent glass';
 const SOURCE: Record<Optics['source'], [string, string, string]> = { // badge text, intent, what it means
   derived: ['Derived', 'badge--neutral', "Read from the material's own settings (colour, opacity, cut-out, their textures), never its name"],
   default: ['Default', 'badge--neutral', 'The default values'],
   edited: ['Edited', 'badge--info', 'Your values for this model (not saved)'],
+  unread: ['Not read', 'badge--neutral', "Its textures are read once their numbers count (masks with Transmission on, colour maps with Reflections on); until then, the values without them"],
 };
 
 /** The material's own colour, its constant diffuseColor (linear) as sRGB hex; none when a texture or no preview surface gives it. */
@@ -50,10 +52,11 @@ function ValueBox({ value, label, max, disabled, describedBy, commit }: { value:
 interface Props { rows: MaterialRow[]; fallback: Optics; glass: Optics; reading: boolean; mode: SimMode; transmission: boolean; reflections: boolean; dispatch: Dispatch<Action> }
 
 export const MaterialsPanel = memo(function MaterialsPanel({ rows, fallback, glass, reading, mode, transmission, reflections, dispatch }: Props) {
+  const names = rowNames(rows.map((m) => m.path)); // parent names in front while two share one (/A/Looks/Glass, /B/Looks/Glass)
   const list: { key: string; name: string; title: string; optics: Optics; colour?: string }[] = [
     { key: DEFAULT_KEY, name: 'Default - no material', optics: fallback, title: 'Surfaces without a material, materials other than a UsdPreviewSurface (MaterialX, OpenPBR), and the reflectance of a material without a colour of its own (none set, or vertex colours). Built in: opaque, reflectance 0.20 (Honeybee generic_context_0.20, BRE GN50).' },
     { key: GLASS_KEY, name: 'Default glass', optics: glass, title: 'Every material that reads as glass: its opacity tells glass apart, not how much it passes. Built in: double low-e, 0.64 (visible light; 0.37 of the solar energy).' },
-    ...rows.map((m) => ({ key: m.path, name: m.path.slice(m.path.lastIndexOf('/') + 1), title: m.path, optics: m.optics, colour: colourOf(m.network) })),
+    ...rows.map((m, i) => ({ key: m.path, name: names[i], title: m.path, optics: m.optics, colour: colourOf(m.network) })),
   ];
   const status = mode === 'ladybug' ? 'Ladybug mode: every surface opaque and black'
     : !transmission && !reflections ? 'Transmission and Reflections are off: every surface opaque and black'

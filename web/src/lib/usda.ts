@@ -45,10 +45,13 @@ export function toUsda(root: Object3D): Usda {
   const mats = [...new Set([...tri].flatMap((o) => materialsOf(o as Mesh)))].filter((m) => !m.userData.fallback) as Look[];
   const matIds = dmeshStems(mats.map((m) => ident(m.name || 'Material')), 'Material');
   const matPath = new Map<Material, string>(mats.map((m, i) => [m, `/Model/Materials/${matIds[i]}`]));
-  const images = [...new Map(mats.flatMap((m) => SLOTS.map((k) => m[k])).filter((t): t is Texture => !!t?.image).map((t) => [t.image, t])).values()];
+  // An image by its source: MTLLoader loads an Image per map, so map_Kd and map_d naming one file are one PNG
+  // (glTF ImageBitmaps have no src: the object itself)
+  const src = (t: Texture): unknown => (t.image as { src?: string } | null)?.src || t.image;
+  const images = [...new Map(mats.flatMap((m) => SLOTS.map((k) => m[k])).filter((t): t is Texture => !!t?.image).map((t) => [src(t), t])).values()];
   const files = dmeshStems(images.map((t) => ident(t.name || 'texture')), 'texture').map((n) => `textures/${n}.png`);
-  const fileOf = new Map<unknown, string>(images.map((t, i) => [t.image, files[i]]));
-  const loaded = (t: Texture | null | undefined): t is Texture => !!t && fileOf.has(t.image); // a failed image: no texture
+  const fileOf = new Map<unknown, string>(images.map((t, i) => [src(t), files[i]]));
+  const loaded = (t: Texture | null | undefined): t is Texture => !!t && fileOf.has(src(t)); // a failed image: no texture
 
   const out = ['#usda 1.0\n(\n    defaultPrim = "Model"\n    metersPerUnit = 1\n    upAxis = "Y"\n)\n\n'];
   const arr = (decl: string, n: number, item: (i: number) => string, tail = '') => out.push(...arrayParts(`    ${decl}`, n, item, `${tail}\n`));
@@ -133,7 +136,7 @@ export function toUsda(root: Object3D): Usda {
   const material = (m: Look, id: string): string => {
     const path = `/Model/Materials/${id}`, shaders: string[] = [], inputs: string[] = [];
     const texture = (name: string, t: Texture, srgb: boolean, scale: number[], bias?: number[]) => {
-      shaders.push(`def Shader "${name}"\n{\n    uniform token info:id = "UsdUVTexture"\n    asset inputs:file = @./${fileOf.get(t.image)}@\n`
+      shaders.push(`def Shader "${name}"\n{\n    uniform token info:id = "UsdUVTexture"\n    asset inputs:file = @./${fileOf.get(src(t))}@\n`
         + `    token inputs:sourceColorSpace = "${srgb ? 'sRGB' : 'raw'}"\n    float4 inputs:scale = ${tuple(...scale)}\n${bias ? `    float4 inputs:bias = ${tuple(...bias)}\n` : ''}`
         + `    token inputs:wrapS = "${WRAP[t.wrapS] ?? 'clamp'}"\n    token inputs:wrapT = "${WRAP[t.wrapT] ?? 'clamp'}"\n    float2 inputs:st.connect = <${path}/St.outputs:result>\n`
         + '    float3 outputs:rgb\n    float outputs:r\n    float outputs:g\n    float outputs:b\n    float outputs:a\n}\n');
@@ -156,9 +159,12 @@ export function toUsda(root: Object3D): Usda {
       shaders.push(`def Shader "Color"\n{\n    uniform token info:id = "UsdPrimvarReader_float3"\n    string inputs:varname = "displayColor"\n    float3 inputs:fallback = ${tuple(c.r, c.g, c.b)}\n    float3 outputs:result\n}\n`);
       inputs.push(`color3f inputs:diffuseColor.connect = <${path}/Color.outputs:result>`);
     } else inputs.push(`color3f inputs:diffuseColor = ${tuple(c.r, c.g, c.b)}`);
-    // An MTL map_d: its alpha where that varies (a cut-out PNG), else its grey levels.
-    const opacity = loaded(m.alphaMap) ? `float inputs:opacity.connect = ${texture('Opacity', m.alphaMap, false, [alpha, alpha, alpha, alpha])}${alphaVaries(m.alphaMap.image) ? 'a' : 'r'}>`
-      : base && (m.transparent || cutout) ? `float inputs:opacity.connect = ${base}a>`
+    // An MTL map_d: its alpha where that varies (a cut-out PNG; map_Kd's own when it names the same file, one texture as
+    // before map_d was read), else its grey levels.
+    const mask = loaded(m.alphaMap) ? (alphaVaries(m.alphaMap.image) ? 'a' : 'r') : null;
+    const ownAlpha = !!base && (mask ? mask === 'a' && src(m.alphaMap!) === src(m.map!) : m.transparent || cutout);
+    const opacity = ownAlpha ? `float inputs:opacity.connect = ${base}a>`
+      : mask ? `float inputs:opacity.connect = ${texture('Opacity', m.alphaMap!, false, [alpha, alpha, alpha, alpha])}${mask}>`
       : alpha < 1 ? `float inputs:opacity = ${num(alpha)}` : null;
     if (opacity) inputs.push(opacity);
     if (cutout) inputs.push(`float inputs:opacityThreshold = ${num(m.alphaTest)}`);
