@@ -47,9 +47,13 @@ Change an endpoint: edit `server.cpp` and `openapi.json` together.
   the client uploads those and resubmits (`runRemote` in `bindings/ts` does this).
 - Identical request (same mesh ids, args, weather): answered from the result cache at once (`cache.response: hit`).
 - Scenes: the acceleration structures of the last `--gpu-scenes` (default 4) scenes stay on the GPU, so users who
-  alternate between models do not rebuild each other's (`cache.scene: reused`). A scene is the job's mesh ids, its
-  `--no-self-occlude` and its set of transmitting slots: new `--optics` values or `--fresnel` reuse it, a slot that
-  starts or stops transmitting is another scene (`built`). The report is the core's own (`Result::sceneReused`).
+  alternate between models do not rebuild each other's (`cache.scene: reused`). A scene is the job's `sensors` ids and
+  then its `context` ids, in order, its `--no-self-occlude`, and the layout of the slots that cast shade: the set of
+  those that transmit, else (with `--bounces` above 0) whether their RHO or glass differ, which gives the scene a hit
+  record per slot (~20 % more GPU memory). New `--optics` values or `--fresnel` reuse it while that layout stays; a
+  slot that starts or stops transmitting, or `--bounces` switched on or off for a model whose slots differ (none
+  transmitting), is another scene (`built`, then kept like the others). The report is the core's own
+  (`Result::sceneReused`).
 - Weather: every `/proxy` download stays on disk under `--cache` (delete the file to refresh); parsed EPWs stay in RAM.
 
 ## Simulation flags
@@ -57,8 +61,14 @@ Change an endpoint: edit `server.cpp` and `openapi.json` together.
 A job's `args` go to the core's CLI parser unchanged (the table in `/docs`, `submitJob`), so the server stays agnostic
 of materials: `.dmesh` uploads may carry a uint16 optics slot per face (header flags bit 0), `--optics` gives meshes and
 slots their numbers by mesh name (`PUT /mesh/{id}?name=`, else the id), `--transmission on` and `--fresnel off` switch
-the glass and porous paths (physical mode; ladybug mode refuses `--transmission on`). Rows out of range are a `400`;
-rows the run's meshes do not resolve (unknown or ambiguous name, slot out of range, a row given twice) fail the job (500).
+the glass and porous paths, and `--bounces N` (0..20, default 0) adds the light the model reflects (up to N diffuse
+reflections by each slot's RHO) to diffuse, radiation, irradiance and illuminance, never to direct or sun hours.
+Ladybug mode refuses `--transmission on` and `--bounces` above 0. `--bounce-samples M` (64..65536, default 1024) sets
+the paths per sensor: the reflected-light pass takes about 2 s per million sensors at 1024 on a city-like model (RTX
+2060; linear in M, more among dense overlapping geometry and indoors), and its noise falls as 1 / sqrt(M) (annual
+values average it out; raise M to 4096-16384 for a single `--time` instant). Rows or switches out of range are a
+`400`; rows the run's meshes do not resolve (unknown or ambiguous name, slot out of range, a row given twice) fail the
+job (500).
 
 ## Flags
 
