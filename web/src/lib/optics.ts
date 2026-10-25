@@ -1,10 +1,10 @@
-// Optics per face slot from the model's materials, and the run's --transmission / --fresnel / --optics flags. The core
-// takes numbers only: the kind (opaque / glass / porous) comes from a UsdPreviewSurface's own settings (never its name),
-// classified glass gets the default glass's transmittance (render opacity is a display choice: SketchUp glass d 0.75,
-// Revit d 0.25), the user can override, and every value is brought into the core's ranges first, so one value never
-// fails a run. rho = the fraction reflected diffusely, tau = the fraction transmitted straight at normal incidence,
-// rho + tau <= 1. Glass is Radiance glass (n 1.52; rho 0, it reflects by angle); porous passes tau at every angle, its
-// rho = the solid part's albedo x (1 - tau).
+// Optics per face slot from the model's materials, and the run's --transmission / --fresnel / --bounces / --optics flags.
+// The core takes numbers only: the kind (opaque / glass / porous) and the albedo come from a UsdPreviewSurface's own
+// settings (never its name), classified glass gets the default glass's transmittance (render opacity is a display
+// choice: SketchUp glass d 0.75, Revit d 0.25), the user can override, and every value is brought into the core's ranges
+// first, so one value never fails a run. rho = the fraction reflected diffusely, tau = the fraction transmitted straight
+// at normal incidence, rho + tau <= 1. Glass is Radiance glass (n 1.52; rho 0, it reflects by angle); porous passes tau
+// at every angle, its rho = the solid part's albedo x (1 - tau).
 import type { MaterialNetwork } from 'usd-viewer';
 import type { ObjectRow, Role, SimMode } from '../store';
 
@@ -74,7 +74,7 @@ export interface OpacityRead { channel: 'r' | 'g' | 'b' | 'a'; scale: number; bi
 /** What derive() takes from a decoded texture. Colours are linear r, g, b. */
 export interface TextureStats {
   mean: number[]; // every texel alike
-  covered: number[]; // weighted by each texel's coverage: the colour of the solid part (phase 2: a porous albedo)
+  covered: number[]; // weighted by each texel's coverage: the colour of the solid part (a porous albedo)
   coverage: number; // the share of texels at or above the threshold, else the mean opacity; 1 without an opacity read
   range: number; // max - min of the texels' opacity; 0 without an opacity read
 }
@@ -106,15 +106,25 @@ export function textureStats(rgba: ArrayLike<number>, w: number, h: number, opac
   return { mean: avg, covered: cover > 0 ? covered.map((v) => v / cover) : avg, coverage: n ? cover / n : 1, range: opacity && n ? hi - lo : 0 };
 }
 
-/** The texture a UsdPreviewSurface's opacity reads (a UsdUVTexture with a resolved file), through the output its
- *  connection names (r for a grey map_d, a for an alpha), with that channel's scale and bias. */
-function opacityRead(net: MaterialNetwork): { file: string; opacity: OpacityRead } | null {
-  const s = net.nodes[net.surface], link = s?.type === 'UsdPreviewSurface' ? s.inputs.opacity : undefined, t = link && net.nodes[link.node];
+/** Component k of a float / floatN parameter (a scale, a bias), else `d`. */
+const comp = (v: unknown, k: number, d: number) => num(Array.isArray(v) ? v[k] : v, d);
+/** A linear colour's broadband share: Radiance's luminance weights (color.h CIE_rf / gf / bf, the core's bright()). */
+const luminance = (c: readonly unknown[]) => 0.265074126 * num(c[0], 0) + 0.670114631 * num(c[1], 0) + 0.064811243 * num(c[2], 0);
+
+/** The UsdUVTexture with a resolved file that `input` of a UsdPreviewSurface reads, and the output it reads it through. */
+function textureAt(net: MaterialNetwork, input: string) {
+  const s = net.nodes[net.surface], link = s?.type === 'UsdPreviewSurface' ? s.inputs[input] : undefined, t = link && net.nodes[link.node];
   const file = t?.type === 'UsdUVTexture' ? (t.params.file as { resolved?: unknown } | null)?.resolved : undefined;
-  if (!link || !t || typeof file !== 'string' || !file) return null;
-  const channel = (/^[rgba]$/.test(link.output) ? link.output : 'r') as OpacityRead['channel'], k = 'rgba'.indexOf(channel);
-  const at = (v: unknown, d: number) => num(Array.isArray(v) ? v[k] : v, d);
-  return { file, opacity: { channel, scale: at(t.params.scale, 1), bias: at(t.params.bias, 0), threshold: num(s.params.opacityThreshold, 0) } };
+  return link && t && typeof file === 'string' && file ? { file, output: link.output, params: t.params, surface: s.params } : null;
+}
+
+/** The texture a UsdPreviewSurface's opacity reads, through the output its connection names (r for a grey map_d, a for
+ *  an alpha), with that channel's scale and bias. */
+function opacityRead(net: MaterialNetwork): { file: string; opacity: OpacityRead } | null {
+  const t = textureAt(net, 'opacity');
+  if (!t) return null;
+  const channel = (/^[rgba]$/.test(t.output) ? t.output : 'r') as OpacityRead['channel'], k = 'rgba'.indexOf(channel);
+  return { file: t.file, opacity: { channel, scale: comp(t.params.scale, k, 1), bias: comp(t.params.bias, k, 0), threshold: num(t.surface.opacityThreshold, 0) } };
 }
 
 /** A texture derive() reads, and its key among the decoded ones: the file and how it is read. */
@@ -123,10 +133,11 @@ export const readKey = (r: TextureRead) => JSON.stringify([r.file, r.opacity ?? 
 
 /** The textures derive() reads from a material's network: decode each file and keep textureStats(rgba, w, h, opacity)
  *  under it, or null when it cannot be read or decoded (readBytes null, EXR / HDR, a decode error). Per material: another
- *  material may read the same file with another scale or threshold. */
-export function textureReads(net: MaterialNetwork | undefined): TextureRead[] {
-  const r = net && opacityRead(net);
-  return r ? [r] : []; // phase 2: + the diffuse texture (with this opacity read when it is the same file)
+ *  material may read the same file with another scale or threshold. The opacity texture always; with `albedo` (the
+ *  reflectance counts: Reflections on) the diffuse one too, read once with the opacity when it is the same file. */
+export function textureReads(net: MaterialNetwork | undefined, albedo = false): TextureRead[] {
+  const o = net && opacityRead(net), d = albedo && net ? textureAt(net, 'diffuseColor') : null;
+  return [...(o ? [o] : []), ...(d && d.file !== o?.file ? [{ file: d.file }] : [])];
 }
 
 /**
@@ -137,6 +148,12 @@ export function textureReads(net: MaterialNetwork | undefined): TextureRead[] {
  * - kind: porous when cut out (opacityThreshold > 0), in presence mode, or when the opacity texture varies by more than
  *   0.1; else glass below opacity 0.98, unless metallic is 1 (a cut-out metal sheet is still porous); else opaque.
  * - tau: porous 1 - coverage (a constant with a threshold: 1 below it, else 0); glass the default glass's; opaque 0.
+ * - rho: the albedo, Y(linear diffuseColor) by Radiance's weights within 0.02..0.9; a diffuse texture gives its mean
+ *   colour x scale + bias (a porous one: its covered texels' when the opacity reads the same texture). Unauthored, fed by
+ *   displayColor (vertex colours, a re-opened result look) or another reader, or a texture that is absent: the default
+ *   material's rho. Porous albedo x (1 - tau); glass 0 (it reflects by angle); a metal's base colour as if Lambertian.
+ * ponytail: the diffuse texture is decoded as sRGB whatever its sourceColorSpace (a "raw" colour map reads dark); pass the
+ * colour space with the read if such models appear
  */
 export function derive(net: MaterialNetwork | undefined, stats: ReadonlyMap<string, TextureStats | null> = new Map(), fallback = DEFAULT_OPTICS, glass = DEFAULT_GLASS): Optics {
   const s = net && net.nodes[net.surface];
@@ -144,8 +161,12 @@ export function derive(net: MaterialNetwork | undefined, stats: ReadonlyMap<stri
   if (!net || s?.type !== 'UsdPreviewSurface') return { rho: fallback.rho, tau: fallback.tau, kind: fallback.kind, source: 'default' };
   const p = s.params, read = opacityRead(net), t = read ? stats.get(read.file) : null;
   const threshold = num(p.opacityThreshold, 0), opacity = num(p.opacity, 1);
-  const albedo = fallback.rho; // phase 2: Y(diffuseColor, or its texture's stats x scale + bias), Radiance weights, 0.02..0.9
-  if (threshold > 0 || p.opacityMode === 'presence' || (t && t.range > 0.1)) {
+  const porous = threshold > 0 || p.opacityMode === 'presence' || (!!t && t.range > 0.1);
+  const d = textureAt(net, 'diffuseColor'), dt = d && stats.get(d.file), feed = s.inputs.diffuseColor && net.nodes[s.inputs.diffuseColor.node];
+  const rgb = dt ? [0, 1, 2].map((k) => (porous ? dt.covered : dt.mean)[k] * comp(d.params.scale, k, 1) + comp(d.params.bias, k, 0))
+    : feed && feed.type !== 'UsdUVTexture' ? null : p.diffuseColor; // a texture that is absent: the constant decides
+  const albedo = Array.isArray(rgb) ? Math.min(0.9, Math.max(0.02, luminance(rgb))) : fallback.rho;
+  if (porous) {
     const tau = t ? 1 - t.coverage : threshold > 0 ? +(opacity < threshold) : 1 - opacity;
     return clamp({ rho: albedo * (1 - tau), tau, kind: 'porous', source: 'derived' });
   }
@@ -162,16 +183,16 @@ export type OpticsEdit = Pick<Optics, 'rho' | 'tau' | 'kind'>;
 export const DEFAULT_KEY = 'default', GLASS_KEY = 'glass';
 
 /**
- * A Materials-table change of kind or transmittance as an edit of `cur`, the solid part's albedo kept (glass reflects
- * nothing diffusely, porous albedo x (1 - tau)), so a change never trips clamp() over a value the table does not show. A
- * kind that passes light keeps the row's transmittance, else glass starts at the default glass's and porous at 0; opaque
- * passes nothing.
+ * A Materials-table change of kind, reflectance or transmittance as an edit of `cur`. A kind or transmittance change
+ * keeps the solid part's albedo (glass reflects nothing diffusely, porous albedo x (1 - tau)), so it never trips clamp().
+ * A kind that passes light keeps the row's transmittance, else glass starts at the default glass's and porous at 0; opaque
+ * passes nothing. A reflectance is the row's rho as typed (glass keeps 0).
  */
-export function editOptics(cur: Optics, patch: { kind?: Optics['kind']; tau?: number }, fallback: Optics, glass: Optics): OpticsEdit {
+export function editOptics(cur: Optics, patch: { kind?: Optics['kind']; tau?: number; rho?: number }, fallback: Optics, glass: Optics): OpticsEdit {
   const albedo = cur.kind === 'opaque' ? cur.rho : cur.kind === 'porous' && cur.tau < 1 ? cur.rho / (1 - cur.tau) : fallback.rho;
   const kind = patch.kind ?? cur.kind, start = kind === 'glass' ? (glass.kind === 'glass' ? glass.tau : DEFAULT_GLASS.tau) : 0;
   const tau = kind === 'opaque' ? 0 : patch.tau ?? (cur.tau > 0 ? cur.tau : start);
-  return { rho: kind === 'glass' ? 0 : kind === 'porous' ? albedo * (1 - tau) : albedo, tau, kind };
+  return { rho: kind === 'glass' ? 0 : patch.rho ?? (kind === 'porous' ? albedo * (1 - tau) : albedo), tau, kind };
 }
 
 /** A material bound to a run slot (a receiver's or a shade's): a Materials-table row. */
@@ -183,11 +204,12 @@ export interface MaterialRow { path: string; network?: MaterialNetwork; optics: 
  * (an edited material's are never read).
  * A face slot's material (`materials` by the viewer's rid; 0 or a rid without an entry = none) takes its edit, else
  * derive() over the textures decoded so far (`stats` by readKey, null = unreadable), else the default material; the
- * default rows take their edits too.
+ * default rows take their edits too. `albedo`: the reflectance counts (Reflections on), so the diffuse textures are read
+ * too; else a textured albedo is the default's until then.
  */
 export function resolveOptics(
   rows: readonly Pick<ObjectRow, 'id' | 'role' | 'materials'>[], materials: ReadonlyMap<number, { path: string; network?: MaterialNetwork }>,
-  stats: ReadonlyMap<string, TextureStats | null>, edits: Readonly<Record<string, OpticsEdit>>,
+  stats: ReadonlyMap<string, TextureStats | null>, edits: Readonly<Record<string, OpticsEdit>>, albedo = false,
 ): { meshes: RunMesh[]; fallback: Optics; glass: Optics; materials: MaterialRow[]; unread: TextureRead[] } {
   const edited = (key: string): Optics | undefined => { const e: OpticsEdit | undefined = edits[key]; return e && clamp({ ...e, source: 'edited' }); };
   const fallback = edited(DEFAULT_KEY) ?? DEFAULT_OPTICS, glass = edited(GLASS_KEY) ?? DEFAULT_GLASS, unread = new Map<string, TextureRead>();
@@ -197,7 +219,7 @@ export function resolveOptics(
     if (!m) return fallback;
     let row = seen.get(m.path);
     if (!row) {
-      const reads = textureReads(m.network), edit = edited(m.path);
+      const reads = textureReads(m.network, albedo), edit = edited(m.path);
       if (!edit) for (const r of reads) if (!stats.has(readKey(r))) unread.set(readKey(r), r); // an edit needs none of them
       const optics = edit ?? derive(m.network, new Map(reads.map((r) => [r.file, stats.get(readKey(r)) ?? null])), fallback, glass);
       seen.set(m.path, (row = { path: m.path, network: m.network, optics }));
@@ -208,20 +230,24 @@ export function resolveOptics(
   return { meshes, fallback, glass, materials: [...seen.values()], unread: [...unread.values()] };
 }
 
+/** The switches opticsArgs() takes from the settings (Settings['sim']); reflections off without `bounces`. */
+export interface OpticsSwitches { mode: SimMode; transmission: boolean; fresnel: boolean; bounces?: number; bounceSamples?: number }
+
 /**
- * The optics flags of a run, physical mode only (Ladybug: every surface opaque and black): --transmission on and
- * --fresnel off when not the default, and with transmission (or reflections) the packed --optics token
- * `*=V;ID/SLOT=V;...` with V = RHO,TAU,KIND (RHO,0 when nothing passes), every value clamped first: `*` (the default
- * material) only when it differs from the built-in default, a slot only when it differs from `*`. RHO counts only with
- * reflections (0 without), so a reflectance change alone never changes the request. Ignore meshes are never named: the
- * core would not know them.
+ * The optics flags of a run, physical mode only (Ladybug: every surface opaque and black): --transmission on, --fresnel
+ * off and --bounces N --bounce-samples M when not the default, and with transmission or reflections the packed --optics
+ * token `*=V;ID/SLOT=V;...` with V = RHO,TAU,KIND (RHO,0 when nothing passes), every value clamped first: `*` (the
+ * default material) only when it differs from the built-in default, a slot only when it differs from `*`. RHO counts
+ * only with reflections (0 without), so a reflectance change alone never changes the request. Ignore meshes are never
+ * named: the core would not know them.
  */
-export function opticsArgs(meshes: readonly RunMesh[], fallback: Optics, sim: { mode: SimMode; transmission: boolean; fresnel: boolean; bounces?: number }): string[] {
+export function opticsArgs(meshes: readonly RunMesh[], fallback: Optics, sim: OpticsSwitches): string[] {
   const a: string[] = [], bounces = sim.bounces ?? 0;
   if (sim.mode !== 'physical') return a;
   if (sim.transmission) a.push('--transmission', 'on');
   if (sim.transmission && !sim.fresnel) a.push('--fresnel', 'off');
-  if (!sim.transmission && !bounces) return a; // every surface opaque: the numbers are not used
+  if (bounces > 0) a.push('--bounces', String(bounces), '--bounce-samples', String(sim.bounceSamples ?? 1024));
+  if (!sim.transmission && !bounces) return a; // every surface opaque and black: the numbers are not used
   const val = (o: Optics) => { const c = clamp(o), rho = bounces ? c.rho : 0; return c.tau > 0 ? `${rho},${c.tau},${c.kind}` : `${rho},0`; };
   const all = val(fallback), specs = all === val(DEFAULT_OPTICS) ? [] : [`*=${all}`];
   for (const m of meshes) {
@@ -229,4 +255,13 @@ export function opticsArgs(meshes: readonly RunMesh[], fallback: Optics, sim: { 
   }
   if (specs.length) a.push('--optics', specs.join(';'));
   return a;
+}
+
+/** The switches opticsArgs() sends, in words for the run line: '' for a default or Ladybug run. */
+export function runSwitches(sim: OpticsSwitches): string {
+  const w: string[] = [], n = sim.bounces ?? 0;
+  if (sim.mode !== 'physical') return '';
+  if (sim.transmission) w.push(sim.fresnel ? 'Transmission' : 'Transmission, angle-dependent glass off');
+  if (n > 0) w.push(`${n} reflection${n > 1 ? 's' : ''} × ${sim.bounceSamples ?? 1024} samples`);
+  return w.join(', ');
 }

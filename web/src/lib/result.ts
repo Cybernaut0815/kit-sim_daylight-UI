@@ -111,9 +111,9 @@ const UNITS: Record<string, [string, string]> = {
 
 /** What each result column means, in plain words, shown under the column selector. */
 export const QUANTITY_HELP: Record<string, string> = {
-  radiation: 'Solar energy received over the period, kWh per m²: sun, sky and ground light weighted by their angle on the surface, minus what the scene blocks (with Transmission on, glass, screens and trees let their share through). The basis for solar gains, overheating and PV yield.',
+  radiation: 'Solar energy received over the period, kWh per m²: sun, sky and ground light weighted by their angle on the surface, minus what the scene blocks (with Transmission on, glass, screens and trees let their share through), plus what it reflects with Reflections on. The basis for solar gains, overheating and PV yield.',
   direct: 'Only the beam from the sun disc, kWh/m² over the period, times the transmittance of the glass, screens and trees it crosses when Transmission is on. Zero whenever the sun is down or hidden behind solid geometry, so it shows where shading works.',
-  diffuse: 'Only sky and ground-reflected light, kWh/m² over the period. Smooth and hardly changed by small obstructions; the larger share in overcast climates.',
+  diffuse: 'Only sky and ground-reflected light, kWh/m² over the period, plus the light the scene reflects when Reflections are on. Smooth and hardly changed by small obstructions; the larger share in overcast climates.',
   irradiance: 'Average power received, W/m², over the evaluated hours (for one instant, the value at that moment). A clear noon on a sun-facing surface gives about 1,000 W/m².',
   illuminance: 'Average daylight level, lux, over the evaluated hours. Compare with task targets such as 300 to 500 lx for desk work; a clear day outdoors gives 50,000 lx and more.',
   sunhours: 'Hours in the period when the sun is up and not blocked by any geometry; no weather: the classic solar-access and right-to-light measure. With Transmission on, equivalent full-sun hours: an hour behind a surface transmitting 0.6 counts 0.6; for EN 17037 / BRE window checks set the glazing to Opening, or its mesh to Ignore.',

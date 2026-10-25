@@ -169,6 +169,15 @@ describe('persistence', () => {
     d.sim.fresnel = false;
     expect(parseSettings(serializeSettings(d)).sim).toMatchObject({ transmission: true, fresnel: false });
   });
+  it('Reflections default to off with 1024 samples; a record from before them (phase 1 too) loads with those', () => {
+    expect(defaultSettings().sim).toMatchObject({ bounces: 0, bounceSamples: 1024 });
+    const old = parseSettings('{"sim":{"mode":"physical","quantities":["radiation"],"transmission":true,"fresnel":false}}');
+    expect(old.sim).toMatchObject({ transmission: true, fresnel: false, bounces: 0, bounceSamples: 1024 });
+    const d = defaultSettings();
+    d.sim.bounces = 3;
+    d.sim.bounceSamples = 4096;
+    expect(parseSettings(serializeSettings(d)).sim).toMatchObject({ bounces: 3, bounceSamples: 4096 });
+  });
 });
 
 describe('optics edits', () => {

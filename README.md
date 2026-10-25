@@ -25,6 +25,16 @@ same app in the ZHA design system (`zha-ui`, `data-brand="code"`) stays at `/zha
 switches between them (settings carry over). Each page loads only its own design system (`web/src/kit.css`,
 `web/src/zha.css`).
 
+**Materials.** By default every surface is opaque and black (today's numbers and speed, as Ladybug's RadiationStudy);
+only the virtual ground reflects (*Ground reflectance*). Two switches in Simulation, each slower, add what the model's
+materials do: *Transmission* lets glass (by angle, as Radiance glass, unless *Angle-dependent glass* is off), screens
+and cut-out trees pass their transmittance τ, and *Reflections* (off, 1-20; 1 for outdoor studies, 5-8 for interiors;
+*Reflection samples* under Advanced, 1024) adds the light the model's own surfaces reflect by their reflectance ρ. The
+Materials table reads each material's kind, ρ and τ from its own settings, never its name: opacity, cut-out and opacity
+texture tell glass (the default glass: double low-e, τ 0.64) and porous apart, the colour or colour map gives ρ (its
+luminance, 0.02-0.9; no colour of its own: the default 0.20); edit a value or pick a preset (kept for the session).
+Ladybug mode keeps every surface opaque and black. More precise: Transmission on, 2 reflections, 4096 samples.
+
 ![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
 
 ```

@@ -66,13 +66,15 @@
 .tree tbody { user-select: none; } /* shift-click extends the selection of prims, not of text */
 .tree tbody tr[aria-current="true"] { box-shadow: inset 2px 0 0 var(--accent); } /* the active prim, as in the viewer's hierarchy */
 .tree :is(th, td) { padding-inline: var(--space-2); } /* three columns in a 22rem panel */
-.materials :is(th, td) { padding-inline: var(--space-1); } /* a name, a kind and a transmittance in a 22rem panel */
+.materials :is(th, td) { padding-inline: var(--space-1); } /* a name, a kind, a reflectance and a transmittance in a 22rem panel */
 .tree__col-role { inline-size: 6.5rem; }
 .tree__col-variant { inline-size: 5rem; }
-/* a variant set per line; a material's kind and transmittance, its reset beside its source */
+/* a variant set per line; a material's kind, reflectance and transmittance, its reset beside its source */
 :is(.tree .select, .materials :is(.select, .input, .icon-btn)) { --control-h: 24px; --control-pad-y: 2px; padding-inline: var(--space-1); font-size: var(--fs-small); }
-.materials__col-kind { inline-size: 6rem; }
-.materials__col-tau { inline-size: 4.5rem; }
+.materials__col-kind { inline-size: 5.5rem; }
+.materials__col-num { inline-size: 5rem; }
+.materials__value { display: grid; grid-template-columns: 1ch minmax(0, 1fr); gap: var(--space-1); align-items: center; } /* ρ over τ, each with its symbol */
+.materials__value + .materials__value { margin-block-start: var(--space-1); }
 /* lock and eye at the end of the prim cell, as in the viewer's hierarchy; with a mouse only on the hovered row, unless set */
 .tree__flags { float: inline-end; display: inline-flex; gap: var(--space-1); font-size: var(--fs-small); }
 .tree__flag { padding: 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; opacity: .55; }

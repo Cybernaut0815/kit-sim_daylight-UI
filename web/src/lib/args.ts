@@ -39,7 +39,8 @@ export function buildArgs(s: Settings): string[] {
 /**
  * Field id -> message (cause and fix), in the order of the fields. Empty when the settings can run. `materialsReady`:
  * every texture the run's materials read is decoded (or failed); until then a run whose optics count (physical,
- * transmission on) is held, never started on half-read materials. The hold comes last: a field error keeps the focus.
+ * Transmission or Reflections on) is held, never started on half-read materials. The hold comes last: a field error
+ * keeps the focus.
  */
 export function validate(s: Settings, hasReceiver: boolean, materialsReady = true): Record<string, string> {
   const e: Record<string, string> = {};
@@ -65,6 +66,6 @@ export function validate(s: Settings, hasReceiver: boolean, materialsReady = tru
   const notLeap = (s.weather.source === 'clear-sky' || !!s.epwMeta) && !weatherLeap(s); // known only once the weather header is read
   if (notLeap && time.mode === 'instant' && feb29(time.date)) e.timeDate = noFeb29;
   if (notLeap && time.mode === 'range' && (feb29(time.from.date) || feb29(time.to.date))) e.timeTo = noFeb29;
-  if (!materialsReady && sim.mode === 'physical' && sim.transmission) e.materials = 'Reading the materials…';
+  if (!materialsReady && sim.mode === 'physical' && (sim.transmission || sim.bounces > 0)) e.materials = 'Reading the materials…';
   return e;
 }

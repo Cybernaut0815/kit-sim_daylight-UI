@@ -11,7 +11,7 @@ import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
 import { loadFiles, png } from './lib/loaders';
-import { opticsArgs, readKey, resolveOptics, type TextureStats } from './lib/optics';
+import { opticsArgs, readKey, resolveOptics, runSwitches, type TextureStats } from './lib/optics';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, unitFor, vertexAreas } from './lib/result';
@@ -234,12 +234,14 @@ export default function App() {
   const s = state.settings;
   const receivers = state.objects.filter((o) => o.role === 'receiver'), shades = state.objects.filter((o) => o.role === 'shade');
   const running = state.run.status === 'running' || state.run.status === 'queued';
-  // Each run mesh's optics per face slot, and the textures its materials still wait for. `materials` changes only in a
-  // flush, and every flush that can change a binding is followed by a re-read of the stage, so the rows key it.
-  const optics = useMemo(() => resolveOptics(state.objects, materials, texStats, state.optics), [state.objects, texStats, state.optics]);
-  // The textures are read (on the main thread) only while their numbers count: physical mode with Transmission on
-  // (phase 2: or reflections); a default or Ladybug run never waits for them.
-  const live = s.sim.mode === 'physical' && s.sim.transmission, materialsReady = !live || !optics.unread.length;
+  // Each run mesh's optics per face slot, and the textures its materials still wait for (the diffuse ones only while the
+  // reflectance counts). `materials` changes only in a flush, and every flush that can change a binding is followed by a
+  // re-read of the stage, so the rows key it.
+  const physical = s.sim.mode === 'physical', reflect = physical && s.sim.bounces > 0;
+  const optics = useMemo(() => resolveOptics(state.objects, materials, texStats, state.optics, reflect), [state.objects, texStats, state.optics, reflect]);
+  // The textures are read (on the main thread) only while their numbers count: physical mode with Transmission or
+  // Reflections on; a default or Ladybug run never waits for them.
+  const live = physical && (s.sim.transmission || reflect), materialsReady = !live || !optics.unread.length;
   useEffect(() => {
     const r = optics.unread[0];
     if (!live || !r || reading.current) return; // the read in flight lands first, then the next starts
@@ -284,7 +286,7 @@ export default function App() {
         const o = receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
         if (!o || m.count !== want) throw new Error(`${o?.name ?? m.name}: the server returned ${m.count} rows, expected ${want}. Reload the model and run again.`);
       });
-      dispatch({ type: 'RUN', run: { status: 'done', result: { ...res, receivers: receivers.map((o) => o.id), on: s.sim.on, key: runKey, elapsed: (performance.now() - t0) / 1000 } } });
+      dispatch({ type: 'RUN', run: { status: 'done', result: { ...res, receivers: receivers.map((o) => o.id), on: s.sim.on, key: runKey, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
     } catch (e) {
       if (ctrl.signal.aborted) lastKey.current = null; // cancelled: the same inputs may run again (Auto included)
       // The server and the core name a mesh by its id: say the row's name (a job id matches no row and stays)
@@ -305,7 +307,8 @@ export default function App() {
     if (!state.result && state.run.status === 'idle') lastKey.current = null;
     if (autoOn && !busy.current && runKey !== lastKey.current) void onRun(true);
   }, [autoOn, runKey, ended, state.result, state.run.status]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings runKey came from
-  // Nothing waits for the materials any more (read, or Transmission off): Auto re-checks (ended), a click held for them runs.
+  // Nothing waits for the materials any more (read, or Transmission and Reflections off): Auto re-checks (ended), a click
+  // held for them runs.
   useEffect(() => {
     if (!materialsReady) return;
     setEnded((n) => n + 1);
@@ -365,7 +368,7 @@ export default function App() {
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
                 <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
-                <MaterialsPanel rows={optics.materials} fallback={optics.fallback} glass={optics.glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} dispatch={dispatch} />
+                <MaterialsPanel rows={optics.materials} fallback={optics.fallback} glass={optics.glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} reflections={reflect} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />

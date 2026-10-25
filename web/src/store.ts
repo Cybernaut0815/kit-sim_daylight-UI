@@ -33,6 +33,7 @@ export interface Settings {
     mode: SimMode; quantities: Quantity[]; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices';
     cullBackfaces: boolean; selfOcclude: boolean; skyDensity: 1 | 2 | 4; patchSamples: number; ground: number; north: number; offset: number;
     transmission: boolean; fresnel: boolean; // light through glass / porous materials; glass by angle (Radiance glass)
+    bounces: number; bounceSamples: number; // reflected light: diffuse reflections 0..20 (0 = off), paths per sensor 64..65536
   };
   // Result colouring per quantity: gradient key, legend domain (null = data range), the problem range (null = open),
   // and the two range colours (hex, shared by every quantity).
@@ -51,6 +52,7 @@ export interface RunResult {
   on: 'faces' | 'vertices'; // element kind the rows describe (weights: face areas or vertex areas)
   key: string; // the run key (args, weather, mesh ids) it was computed for: differs from the current one = stale
   elapsed: number; // s, click to result (the round trip the user waits for)
+  switches?: string; // the optics switches it ran with, in words (lib/optics.ts runSwitches); '' = the defaults
 }
 export type Run = { status: 'idle' } | { status: 'queued'; position: number } | { status: 'running' } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
 
@@ -103,7 +105,7 @@ export const defaultSettings = (): Settings => ({
   weather: { source: 'station', file: null, station: null, turbidity: 3, altitude: 0 },
   epwMeta: null,
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
-  sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true },
+  sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true, bounces: 0, bounceSamples: 1024 },
   viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
 });
 

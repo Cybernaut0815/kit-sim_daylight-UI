@@ -84,8 +84,15 @@ describe('buildArgs', () => {
     s.sim.fresnel = false;
     expect(buildArgs(s)).toEqual(buildArgs(defaultSettings())); // the switches are opticsArgs' alone
     expect(run(s).slice(buildArgs(s).length)).toEqual(['--transmission', 'on', '--fresnel', 'off', '--optics', 'r/1=0,0.64,glass']);
+    s.sim.bounces = 2;
+    s.sim.bounceSamples = 4096;
+    expect(buildArgs(s)).toEqual(buildArgs(defaultSettings()));
+    expect(run(s).slice(buildArgs(s).length)).toEqual(['--transmission', 'on', '--fresnel', 'off', '--bounces', '2', '--bounce-samples', '4096', '--optics', 'r/1=0,0.64,glass']);
     s.sim.mode = 'ladybug';
-    expect(run(s)).toEqual(buildArgs(s));
+    expect(run(s)).toEqual(buildArgs(s)); // Ladybug: none of the new flags, whatever the switches
+    const r = defaultSettings();
+    r.sim.bounceSamples = 65536; // Reflections off: the samples are not sent
+    expect(run(r)).toEqual(buildArgs(defaultSettings()));
   });
 });
 
@@ -130,10 +137,13 @@ describe('validate', () => {
     s.time.to = { date: '2026-05-31', hour: 1020 };
     expect(validate(s, true).timeTo).toMatch(/end date/);
   });
-  it('holds a run on materials still being read only where they count: physical mode with transmission', () => {
+  it('holds a run on materials still being read only where they count: physical mode with transmission or reflections', () => {
     const s = defaultSettings();
     s.weather.source = 'clear-sky';
-    expect(validate(s, true, false)).toEqual({}); // transmission off: every surface opaque, the materials unused
+    expect(validate(s, true, false)).toEqual({}); // transmission and reflections off: every surface opaque and black, the materials unused
+    s.sim.bounces = 1;
+    expect(validate(s, true, false)).toEqual({ materials: expect.stringMatching(/^Reading the materials/) }); // the albedo needs the colour maps
+    s.sim.bounces = 0;
     s.sim.transmission = true;
     expect(validate(s, true, false)).toEqual({ materials: expect.stringMatching(/^Reading the materials/) });
     expect(validate(s, true, true)).toEqual({});
@@ -141,6 +151,7 @@ describe('validate', () => {
     s.sim.quantities = [];
     expect(Object.keys(validate(s, true, false))).toEqual(['quantities', 'materials']); // a field error first: it gets the focus, the click is not held
     s.sim.mode = 'ladybug';
-    expect(validate(s, true, false).materials).toBeUndefined(); // Ladybug: opaque and black whatever the switch
+    s.sim.bounces = 3;
+    expect(validate(s, true, false).materials).toBeUndefined(); // Ladybug: opaque and black whatever the switches
   });
 });

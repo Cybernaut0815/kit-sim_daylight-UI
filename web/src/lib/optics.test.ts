@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MaterialNetwork, MaterialNode } from 'usd-viewer';
 import type { ObjectRow } from '../store';
-import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, editOptics, opticsArgs, readKey, resolveOptics, textureReads, textureStats, type Optics, type RunMesh } from './optics';
+import { DEFAULT_GLASS, DEFAULT_KEY, DEFAULT_OPTICS, GLASS_KEY, PRESETS, clamp, derive, editOptics, opticsArgs, readKey, resolveOptics, runSwitches, textureReads, textureStats, type Optics, type RunMesh } from './optics';
 
 // Networks as the viewer hands them over for what usda.ts writes: a Surface, its textures read through st.
 const surface = (params: MaterialNode['params'], inputs: MaterialNode['inputs'] = {}, nodes: MaterialNetwork['nodes'] = {}): MaterialNetwork =>
@@ -11,21 +11,27 @@ const texture = (name: string, scale: number[], resolved = `/drop/1/textures/${n
   params: { file: { asset: `./textures/${name}.png`, resolved }, sourceColorSpace: name === 'leaf' ? 'raw' : 'sRGB', scale },
 });
 const texels = (...t: number[][]) => Uint8ClampedArray.from(t.flat()); // RGBA8, one row
-/** derive() as the App runs it: every texture textureReads() names decoded (here: `px`) into its textureStats. */
-const run = (net: MaterialNetwork, px: Uint8ClampedArray, glass = DEFAULT_GLASS) =>
-  derive(net, new Map(textureReads(net).map((r) => [r.file, textureStats(px, px.length / 4, 1, r.opacity)])), DEFAULT_OPTICS, glass);
+/** derive() as the App runs it with Reflections on: every texture textureReads() names decoded (here: `px`, or `more`
+ *  by file) into its textureStats. */
+const run = (net: MaterialNetwork, px: Uint8ClampedArray, glass = DEFAULT_GLASS, more: Record<string, Uint8ClampedArray> = {}) =>
+  derive(net, new Map(textureReads(net, true).map((r) => { const p = more[r.file] ?? px; return [r.file, textureStats(p, p.length / 4, 1, r.opacity)]; })), DEFAULT_OPTICS, glass);
+// Expected albedos computed apart (rho-check.mjs in the session scratchpad): Radiance weights 0.265074126 / 0.670114631 /
+// 0.064811243 over the sRGB formula, not the app's table.
 
 describe('derive', () => {
   it('reads a grey map_d through r: a cut-out tree with a varying mask is porous, tau = 1 - its mean opacity', () => {
     const net = surface({ diffuseColor: [0.2, 0.4, 0.1], metallic: 0 }, { opacity: { node: 'Opacity', output: 'r' } }, { Opacity: texture('leaf', [1, 1, 1, 1]) });
     expect(textureReads(net)).toEqual([{ file: '/drop/1/textures/leaf.png', opacity: { channel: 'r', scale: 1, bias: 0, threshold: 0 } }]);
-    expect(run(net, texels([255, 255, 255, 255], [255, 255, 255, 255], [0, 0, 0, 255], [0, 0, 0, 255]))).toEqual({ rho: 0.1, tau: 0.5, kind: 'porous', source: 'derived' });
+    // rho = Y(0.2, 0.4, 0.1) x (1 - tau)
+    expect(run(net, texels([255, 255, 255, 255], [255, 255, 255, 255], [0, 0, 0, 255], [0, 0, 0, 255]))).toEqual({ rho: expect.closeTo(0.163770901, 9), tau: 0.5, kind: 'porous', source: 'derived' });
   });
   it('reads an RGBA cut-out through a with its scale: with a threshold, tau is the share of texels below it', () => {
     const net = surface({ opacityThreshold: 0.5 }, { diffuseColor: { node: 'BaseColor', output: 'rgb' }, opacity: { node: 'BaseColor', output: 'a' } }, { BaseColor: texture('leaves', [1, 1, 1, 0.9]) });
     expect(textureReads(net)[0].opacity).toEqual({ channel: 'a', scale: 0.9, bias: 0, threshold: 0.5 });
-    // alphas 1, 0.78, 0.39, 0 x 0.9: two at or above 0.5
-    expect(run(net, texels([40, 90, 20, 255], [40, 90, 20, 200], [0, 0, 0, 100], [0, 0, 0, 0]))).toEqual({ rho: 0.1, tau: 0.5, kind: 'porous', source: 'derived' });
+    expect(textureReads(net, true)).toEqual(textureReads(net)); // the diffuse is the same file: one read, with the opacity
+    // alphas 1, 0.78, 0.39, 0 x 0.9: two at or above 0.5; rho = Y(the covered texels, (40, 90, 20)) x (1 - tau), not the
+    // plain mean's 0.0186 (the open texels are black)
+    expect(run(net, texels([40, 90, 20, 255], [40, 90, 20, 200], [0, 0, 0, 100], [0, 0, 0, 0]))).toEqual({ rho: expect.closeTo(0.0372958366, 9), tau: 0.5, kind: 'porous', source: 'derived' });
   });
   it('a constant opacity with a threshold is open below it and closed at or above it', () => {
     expect(derive(surface({ opacity: 0.3, opacityThreshold: 0.5 }))).toEqual({ rho: 0, tau: 1, kind: 'porous', source: 'derived' });
@@ -39,8 +45,9 @@ describe('derive', () => {
   });
   it('textured glass of one alpha below 0.98 gets the default glass (or the edited one), never 1 - opacity', () => {
     const net = surface({}, { diffuseColor: { node: 'BaseColor', output: 'rgb' }, opacity: { node: 'BaseColor', output: 'a' } }, { BaseColor: texture('glass', [0.8, 0.9, 1, 1]) });
-    expect(run(net, texels([200, 220, 255, 128], [190, 220, 250, 128]))).toEqual({ ...DEFAULT_GLASS, source: 'derived' });
-    expect(run(net, texels([200, 220, 255, 255], [190, 220, 250, 255]))).toEqual({ rho: 0.2, tau: 0, kind: 'opaque', source: 'derived' }); // alpha 1
+    expect(run(net, texels([200, 220, 255, 128], [190, 220, 250, 128]))).toEqual({ ...DEFAULT_GLASS, source: 'derived' }); // glass reflects by angle: rho 0
+    // alpha 1: opaque, rho = Y(the mean colour x the scale 0.8, 0.9, 1)
+    expect(run(net, texels([200, 220, 255, 255], [190, 220, 250, 255]))).toEqual({ rho: expect.closeTo(0.6108587418, 9), tau: 0, kind: 'opaque', source: 'derived' });
     expect(run(net, texels([0, 0, 0, 128]), { ...DEFAULT_GLASS, tau: 0.5, source: 'edited' })).toEqual({ rho: 0, tau: 0.5, kind: 'glass', source: 'derived' });
   });
   it('a constant opacity below 0.98 is glass whatever its value; a metal is never glass', () => {
@@ -49,9 +56,47 @@ describe('derive', () => {
     expect(derive(surface({ opacity: 0.5, metallic: 1 })).kind).toBe('opaque');
     expect(derive(surface({ opacity: 0.5, metallic: 1, opacityThreshold: 0.6 })).kind).toBe('porous'); // a perforated sheet
   });
-  it('an opaque material takes the default albedo (rho is derived in phase 2)', () => {
-    expect(derive(surface({ diffuseColor: [0.8, 0.1, 0.1] }))).toEqual({ rho: 0.2, tau: 0, kind: 'opaque', source: 'derived' });
-    expect(derive(surface({ diffuseColor: [0.8, 0.1, 0.1] }), new Map(), { ...DEFAULT_OPTICS, rho: 0.3, source: 'edited' }).rho).toBe(0.3);
+  it("an opaque material's rho is Y(its linear diffuseColor) by Radiance's weights, metals too", () => {
+    expect(derive(surface({ diffuseColor: [0.8, 0.1, 0.1] }))).toEqual({ rho: expect.closeTo(0.2855518882, 9), tau: 0, kind: 'opaque', source: 'derived' });
+    expect(derive(surface({ diffuseColor: [0.8, 0.1, 0.1] }), new Map(), { ...DEFAULT_OPTICS, rho: 0.3, source: 'edited' }).rho).toBeCloseTo(0.2855518882, 9); // its own, not the default's
+    expect(derive(surface({ diffuseColor: [0.8, 0.1, 0.1], metallic: 1, opacity: 0.5 })).rho).toBeCloseTo(0.2855518882, 9); // a metal: Lambertian approximation
+    expect(derive(surface({ diffuseColor: [0.8, 0.1, 0.1], opacity: 0.5 })).rho).toBe(0); // glass
+  });
+  it('clamps a derived albedo to 0.02..0.9', () => {
+    expect(derive(surface({ diffuseColor: [0, 0, 0] })).rho).toBe(0.02);
+    expect(derive(surface({ diffuseColor: [1, 1, 1] })).rho).toBe(0.9);
+    expect(derive(surface({ diffuseColor: [1, 1, 1], opacityThreshold: 0.5, opacity: 0.6 })).rho).toBe(0.9); // porous: the solid part's albedo x 1
+  });
+  it('an unauthored diffuse, displayColor (vertex colours, a result look) or another reader gives the default material its albedo', () => {
+    const edited: Optics = { ...DEFAULT_OPTICS, rho: 0.35, source: 'edited' };
+    expect(derive(surface({}))).toEqual({ rho: 0.2, tau: 0, kind: 'opaque', source: 'derived' }); // not UsdPreviewSurface's 0.18
+    expect(derive(surface({}), new Map(), edited).rho).toBe(0.35);
+    const reader: MaterialNode = { type: 'UsdPrimvarReader_float3', params: { varname: 'displayColor', fallback: [1, 1, 1] }, inputs: {} };
+    const vertex = surface({ diffuseColor: [0.9, 0.9, 0.9] }, { diffuseColor: { node: 'Color', output: 'result' } }, { Color: reader });
+    expect(derive(vertex).rho).toBe(0.2);
+    expect(derive(vertex, new Map(), edited).rho).toBe(0.35);
+    expect(textureReads(vertex, true)).toEqual([]);
+  });
+  it('a diffuse texture gives its mean colour x scale + bias; absent, the constant decides, else the default', () => {
+    const brick = texture('brick', [0.5, 0.5, 0.5, 1]);
+    brick.params.bias = [0.1, 0.1, 0.1, 0];
+    const net = surface({}, { diffuseColor: { node: 'BaseColor', output: 'rgb' } }, { BaseColor: brick });
+    expect(textureReads(net)).toEqual([]); // Reflections off: nothing to read for the albedo
+    expect(textureReads(net, true)).toEqual([{ file: '/drop/1/textures/brick.png' }]);
+    const px = texels([180, 80, 60, 255], [120, 60, 40, 255]);
+    expect(run(net, px).rho).toBeCloseTo(0.1647773492, 9); // Y(mean x 0.5 + 0.1)
+    expect(derive(net, new Map([['/drop/1/textures/brick.png', null]])).rho).toBe(0.2); // unreadable: the default
+    expect(derive(net).rho).toBe(0.2); // not read (yet)
+    const both = surface({ diffuseColor: [0.8, 0.1, 0.1] }, { diffuseColor: { node: 'BaseColor', output: 'rgb' } }, { BaseColor: brick });
+    expect(derive(both).rho).toBeCloseTo(0.2855518882, 9); // a constant authored beside the texture
+    expect(textureReads(surface({}, { diffuseColor: { node: 'BaseColor', output: 'rgb' } }, { BaseColor: texture('lost', [1, 1, 1, 1], '') }), true)).toEqual([]); // unresolved
+  });
+  it("porous rho: a separate colour map's plain mean x (1 - tau) (MTL map_Kd + map_d)", () => {
+    const net = surface({}, { diffuseColor: { node: 'BaseColor', output: 'rgb' }, opacity: { node: 'Opacity', output: 'r' } }, { BaseColor: texture('bark', [1, 1, 1, 1]), Opacity: texture('leaf', [1, 1, 1, 1]) });
+    expect(textureReads(net, true)).toEqual([{ file: '/drop/1/textures/leaf.png', opacity: { channel: 'r', scale: 1, bias: 0, threshold: 0 } }, { file: '/drop/1/textures/bark.png' }]);
+    const mask = texels([255, 255, 255, 255], [255, 255, 255, 255], [0, 0, 0, 255], [0, 0, 0, 255]); // tau 0.5
+    const colour = texels([180, 80, 60, 255], [120, 60, 40, 255]); // Y(mean) 0.1295546983
+    expect(run(net, mask, DEFAULT_GLASS, { '/drop/1/textures/bark.png': colour })).toEqual({ rho: expect.closeTo(0.1295546983 * 0.5, 9), tau: 0.5, kind: 'porous', source: 'derived' });
   });
   it('an opacity texture that could not be read counts as absent: the constants decide, else opacity 1', () => {
     const link = { opacity: { node: 'Opacity', output: 'r' } }, nodes = { Opacity: texture('leaf', [1, 1, 1, 1]) }, failed = new Map([['/drop/1/textures/leaf.png', null]]);
@@ -154,6 +199,24 @@ describe('editOptics', () => {
       expect(clamp({ ...edit({ ...p, source: 'edited' }, patch), source: 'edited' }).warning, `${p.name} ${JSON.stringify(patch)}`).toBeUndefined();
     }
   });
+  it("a reflectance edit is the row's rho as typed (a porous row's own, not its solid part's); glass keeps 0", () => {
+    expect(edit(wall, { rho: 0.35 })).toEqual({ rho: 0.35, tau: 0, kind: 'opaque' });
+    expect(edit(fabric, { rho: 0.3 })).toEqual({ rho: 0.3, tau: 0.14, kind: 'porous' });
+    expect(edit({ ...DEFAULT_GLASS, source: 'derived' }, { rho: 0.3 })).toEqual({ rho: 0, tau: 0.64, kind: 'glass' });
+    expect(clamp({ ...edit(fabric, { rho: 0.95 }), source: 'edited' })).toMatchObject({ rho: expect.closeTo(0.86, 12), warning: expect.stringMatching(/1 - transmittance/) }); // shown as held
+  });
+});
+
+describe('runSwitches', () => {
+  it('names the switches opticsArgs sends: none for the defaults or Ladybug', () => {
+    const sim = { mode: 'physical' as const, transmission: false, fresnel: true, bounces: 0, bounceSamples: 1024 };
+    expect(runSwitches(sim)).toBe('');
+    expect(runSwitches({ ...sim, fresnel: false, bounceSamples: 4096 })).toBe(''); // not sent without Transmission / Reflections
+    expect(runSwitches({ ...sim, transmission: true })).toBe('Transmission');
+    expect(runSwitches({ ...sim, bounces: 1 })).toBe('1 reflection × 1024 samples');
+    expect(runSwitches({ ...sim, transmission: true, fresnel: false, bounces: 2, bounceSamples: 4096 })).toBe('Transmission, angle-dependent glass off, 2 reflections × 4096 samples');
+    expect(runSwitches({ ...sim, mode: 'ladybug', transmission: true, bounces: 3 })).toBe('');
+  });
 });
 
 describe('opticsArgs', () => {
@@ -184,7 +247,14 @@ describe('opticsArgs', () => {
     const screen: Optics = { rho: 0.2, tau: 0.3, kind: 'porous', source: 'edited' };
     expect(opticsArgs(meshes.slice(0, 1), screen, sim({ transmission: true }))).toEqual(['--transmission', 'on', '--optics', '*=0,0.3,porous;r1/0=0,0;r1/1=0,0.64,glass']);
     const bright: Optics = { ...DEFAULT_OPTICS, rho: 0.3, source: 'edited' };
-    expect(opticsArgs(meshes.slice(0, 1), bright, sim({ bounces: 1 }))).toEqual(['--optics', '*=0.3,0;r1/0=0.2,0;r1/1=0,0.64,glass']);
+    expect(opticsArgs(meshes.slice(0, 1), bright, sim({ bounces: 1 }))).toEqual(['--bounces', '1', '--bounce-samples', '1024', '--optics', '*=0.3,0;r1/0=0.2,0;r1/1=0,0.64,glass']);
+  });
+  it('with reflections: --bounces N --bounce-samples M, and every slot whose rho, tau or kind differs from *', () => {
+    const brick: Optics = { rho: 0.13, tau: 0, kind: 'opaque', source: 'derived' }, facade: RunMesh[] = [{ id: 'f', role: 'receiver', optics: [brick, wall, glass] }];
+    expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 2, bounceSamples: 4096 }))).toEqual(['--bounces', '2', '--bounce-samples', '4096', '--optics', 'f/0=0.13,0;f/2=0,0.64,glass']);
+    expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 1, transmission: true, fresnel: false }))).toEqual(['--transmission', 'on', '--fresnel', 'off', '--bounces', '1', '--bounce-samples', '1024', '--optics', 'f/0=0.13,0;f/2=0,0.64,glass']);
+    expect(opticsArgs([{ id: 'w', role: 'receiver', optics: [wall] }], DEFAULT_OPTICS, sim({ bounces: 1 }))).toEqual(['--bounces', '1', '--bounce-samples', '1024']); // all at the built-in default
+    expect(opticsArgs(facade, DEFAULT_OPTICS, sim({ bounces: 0, bounceSamples: 4096 }))).toEqual([]); // Off: the samples are not sent
   });
   it('clamps every value first: one value never fails a run', () => {
     const edited: RunMesh[] = [{ id: 'g', role: 'receiver', optics: [{ rho: 0.1, tau: 0.95, kind: 'glass', source: 'edited' }, { rho: 0.2, tau: 0, kind: 'glass', source: 'edited' }] }];
@@ -237,5 +307,18 @@ describe('resolveOptics', () => {
     expect(e.meshes[2].optics).toEqual([e.fallback]);
     expect(e.unread).toEqual([leaf]);
     expect(resolveOptics(rows, mats, new Map(), { '/M/Leaves': { rho: 0, tau: 1, kind: 'porous' } }).unread).toEqual([]); // edited: its mask is never read
+  });
+  it('with Reflections on the colour maps are read too; a row takes its albedo once decoded, and the run sends it', () => {
+    const brick = surface({}, { diffuseColor: { node: 'BaseColor', output: 'rgb' } }, { BaseColor: texture('brick', [1, 1, 1, 1]) }), read = { file: '/drop/1/textures/brick.png' };
+    const m = new Map([...mats, [6, { path: '/M/Brick', network: brick }]]), r = [...rows, { id: 'w', role: 'receiver' as const, materials: [6] }];
+    expect(resolveOptics(r, m, new Map(), {}).unread).toEqual([leaf]); // Reflections off: the colour map holds nothing
+    const on = resolveOptics(r, m, new Map(), {}, true);
+    expect([on.unread, on.meshes[3].optics[0].rho]).toEqual([[leaf, read], 0.2]); // the default until it is read
+    const done = resolveOptics(r, m, new Map([[readKey(leaf), null], [readKey(read), textureStats(texels([180, 80, 60, 255], [120, 60, 40, 255]), 2, 1)]]), {}, true);
+    expect([done.unread, done.meshes[3].optics[0].rho]).toEqual([[], expect.closeTo(0.1295546983, 9)]);
+    const args = opticsArgs(done.meshes, done.fallback, { mode: 'physical', transmission: false, fresnel: true, bounces: 1 });
+    expect(args.slice(0, 5)).toEqual(['--bounces', '1', '--bounce-samples', '1024', '--optics']);
+    expect(args[5]).toMatch(/^r\/0=0,0\.64,glass;r\/2=0,0\.64,glass;w\/0=0\.12955\d+,0$/); // glass absorbs (Transmission off), the brick reflects its own
+    expect(resolveOptics(r, m, new Map(), { '/M/Brick': { rho: 0.3, tau: 0, kind: 'opaque' } }, true).unread).toEqual([leaf]); // an edit reads nothing
   });
 });

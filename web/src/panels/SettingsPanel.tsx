@@ -4,11 +4,12 @@ import { NumberField, Segmented, knob, Section } from '../ui';
 
 interface Props { sim: Settings['sim']; errors: Record<string, string>; dispatch: Dispatch<Action> }
 
-// The light-through-materials switches (the numbers are the Materials table's); Ladybug mode keeps RadiationStudy's
-// opaque black scene. Each hint fits two lines at the narrowest panel, so a mode switch moves nothing; the phase-2
-// Reflections switches make it "Transmission on, 2 reflections, 4096 samples (slower); interiors need 5-8 reflections".
-const PRECISE = 'More precise: Transmission on (slower).';
+// The material switches, light through and off the surfaces (the numbers are the Materials table's); Ladybug mode keeps
+// RadiationStudy's opaque black scene. The hint holds its lines in either mode at the narrowest panel, so a mode switch
+// moves nothing.
+const PRECISE = 'More precise: Transmission on, 2 reflections, 4096 samples (slower); interiors need 5-8 reflections.';
 const LADYBUG = 'Ladybug mode: every surface opaque and black, as in RadiationStudy';
+const SAMPLES = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
 
 export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch }: Props) {
   const set = (patch: Partial<Settings['sim']>) => dispatch({ type: 'SIM', patch });
@@ -49,7 +50,15 @@ export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch
         <label title="Glass passes less light at grazing angles, as real panes do (Radiance glass, refractive index 1.52); off: it passes its transmittance at every angle">
           <input id="fresnel" type="checkbox" checked={sim.fresnel} disabled={ladybug || !sim.transmission} onChange={(e) => set({ fresnel: e.target.checked })} /> Angle-dependent glass
         </label>
-        <span className="field__help lines-2">{ladybug ? LADYBUG : PRECISE}</span>
+        <label className="field__label" htmlFor="bounces">Reflections</label>
+        <select
+          className="select" id="bounces" value={sim.bounces} disabled={ladybug} onChange={(e) => set({ bounces: Number(e.target.value) })}
+          title="Light the model's own surfaces reflect, by their reflectance (the Materials table): up to this many diffuse reflections, glass mirroring by angle. 1 for outdoor studies; off: every surface is black"
+        >
+          <option value={0}>Off</option>
+          {Array.from({ length: 20 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
+        </select>
+        <span className="field__help lines-3">{ladybug ? LADYBUG : PRECISE}</span>
       </fieldset>
       <details className="accordion">
         <summary>Advanced</summary>
@@ -69,6 +78,13 @@ export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch
               {[1, 4, 9, 16].map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
             <span className="field__help">Physical mode: stratified rays per sky patch; 4, 9 or 16 smooth the patch discretisation.</span>
+          </div>
+          <div className="field">
+            <label className="field__label" htmlFor="bounce-samples">Reflection samples</label>
+            <select className="select" id="bounce-samples" value={sim.bounceSamples} disabled={sim.mode === 'ladybug' || !sim.bounces} onChange={(e) => set({ bounceSamples: Number(e.target.value) })}>
+              {SAMPLES.map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+            <span className="field__help">With Reflections: paths per sensor. Noise falls as 1 / √samples; raise them for a single instant or small differences.</span>
           </div>
           <label className="slider-row">
             <span>Ground reflectance</span>

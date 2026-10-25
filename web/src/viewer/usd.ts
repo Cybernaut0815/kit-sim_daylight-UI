@@ -27,8 +27,8 @@ usd.session.addEventListener('stageclose', () => materials.clear());
 
 /** textureStats() of a texture read (lib/optics.ts textureReads), from the file's own bytes; null when it cannot be read
  *  or decoded (readBytes null, EXR / HDR, a decode error): it then counts as absent.
- *  ponytail: counted on the main thread (a 4096 px mask: about 1 s in headless Chromium); move into a worker if big
- *  masks are common */
+ *  ponytail: counted on the main thread (a 4096 px texture: about 1 s in headless Chromium); move into a worker if big
+ *  masks or colour maps with Reflections on are common */
 export async function readTexture({ file, opacity }: TextureRead): Promise<TextureStats | null> {
   try {
     const bytes = await usd.session.readBytes(file);

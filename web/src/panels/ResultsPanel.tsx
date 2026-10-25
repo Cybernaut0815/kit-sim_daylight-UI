@@ -86,6 +86,7 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
           return x.stats.area ? w / x.stats.area : 0;
         };
         const what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, ${fmtNum(r.values.length)} ${r.on} on ${rows.length} ${rows.length === 1 ? 'mesh' : 'meshes'}.`;
+        const timing = `${r.manifest.run_s !== undefined && r.cache?.response !== 'hit' ? `${r.manifest.run_s.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip${r.switches ? `; ${r.switches}` : ''}`;
         const select = (id: string, additive: boolean) => dispatch({ type: 'SELECT', ids: [id], additive });
         const inUnit = unit.value ? ` (${unit.value})` : ''; // the unit once per group: the labels stay one short word
         const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
@@ -108,11 +109,11 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
               <Segmented name="colour-by" label="Colour the meshes" value={colourBy} options={[['value', 'Values'], ['plain', 'Plain']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
             </div>
             <p className="text-muted lines-6">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
-            {/* three fixed lines whatever the run, the cache or the panel width: nothing below them moves */}
+            {/* three fixed lines whatever the run, the cache or the panel width: nothing below them moves; the first also
+                names the optics switches the run used when they are not the defaults */}
             <div className="text-muted">
-              <div className="line">
-                {status ? <><span className="spinner" aria-hidden="true" /> {status}</>
-                  : `${r.manifest.run_s !== undefined && r.cache?.response !== 'hit' ? `${r.manifest.run_s.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip`}
+              <div className="line" title={status ? undefined : timing}>
+                {status ? <><span className="spinner" aria-hidden="true" /> {status}</> : timing}
               </div>
               <div className="line">{stale ? 'Inputs changed since this run.' : cacheLine(r.cache)}</div>
               <div className="line" title={what}>{what}</div>
