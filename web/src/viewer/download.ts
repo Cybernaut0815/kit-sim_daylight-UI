@@ -14,7 +14,6 @@ import { lin, rgbFor, scaleFor } from '../lib/gradients';
 import { exportMatrices, gltfScene, objText, type Drawn } from '../lib/sceneexport';
 import { freeName, overlay, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
 import { usdz } from '../lib/usdz';
-import { cameraPrims, type SavedView } from '../lib/views';
 import type { ObjectRow, RunResult, Settings } from '../store';
 import { usd } from './usd';
 
@@ -27,7 +26,6 @@ export interface PickedModel { files: [path: string, file: File][]; root: string
 export interface DownloadOptions {
   result: RunResult; objects: ObjectRow[]; meshes: ReadonlyMap<string, Object3D>; viz: Settings['viz']; column: number; model: PickedModel;
   weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
-  cameras?: SavedView[]; // views saved in the app: USD cameras under <root>/Cameras, glTF cameras
 }
 
 /** What the overlay blocks on a receiver written with other polygons: authored data that no longer fits them. */
@@ -74,8 +72,6 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
     };
   }));
   const taken = (await usd.usd.children('/')).map((s) => s.name), root = freeName('Daylight', taken);
-  usd.three.root.updateMatrixWorld();
-  const cameras = o.cameras?.length ? cameraPrims(o.cameras, usd.three.root.matrixWorld, '        ') : '';
   const mount = /^\/drop\/\d+\//.exec(o.model.info.url)?.[0], assets: [string, string][] = mount ? [[mount, './']] : [];
   const name = `${stem}_daylight${mode === 'variants' ? '_variants' : ''}`;
   /** The picked files the core says the export uses (a .usdz member counts as its package). */
@@ -94,8 +90,8 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
 
   if (format !== 'usdz') { // one flattened layer: usda text, or usdc (also as .usd)
     const spec = mode === 'variants'
-      ? variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets, cameras })
-      : { spec: { set: '', selection: '', material: '', geometryRoot: '', prims: [], assets, overlay: overlay({ meta: [], subLayers: [], root, meshes: await overlayMeshes(), shown: o.column, cameras }).join('') }, floats: new Float32Array(), ints: new Int32Array() };
+      ? variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets })
+      : { spec: { set: '', selection: '', material: '', geometryRoot: '', prims: [], assets, overlay: overlay({ meta: [], subLayers: [], root, meshes: await overlayMeshes(), shown: o.column }).join('') }, floats: new Float32Array(), ints: new Int32Array() };
     const out = await usd.usd.exportVariants({ ...spec.spec, format: format === 'usda' ? 'usda' : 'usdc' }, spec.floats, spec.ints);
     if (out.error !== undefined) throw new Error(out.error);
     const files = await used(out.assets);
@@ -110,10 +106,10 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
       ...(i.defaultPrim ? [`defaultPrim = "${i.defaultPrim.replace(/^\//, '')}"`] : []), `metersPerUnit = ${i.metersPerUnit}`, `upAxis = "${i.upAxis}"`,
       ...(i.hasTimeRange ? [`startTimeCode = ${i.startTimeCode}`, `endTimeCode = ${i.endTimeCode}`, `timeCodesPerSecond = ${i.timeCodesPerSecond}`] : []),
     ];
-    const layer = overlay({ meta, subLayers: [...(sessionText ? ['./_session.usda'] : []), `./${o.model.root}`], root, meshes: await overlayMeshes(), shown: o.column, cameras });
+    const layer = overlay({ meta, subLayers: [...(sessionText ? ['./_session.usda'] : []), `./${o.model.root}`], root, meshes: await overlayMeshes(), shown: o.column });
     files = [['_daylight.usda', await bytes(layer)], ...(sessionText ? [['_session.usda', sessionText] as [string, Uint8Array]] : []), ...(await Promise.all(o.model.files.map(read)))];
   } else {
-    const { spec, floats, ints } = variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets, cameras });
+    const { spec, floats, ints } = variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets });
     const out = await usd.usd.exportVariants(spec, floats, ints);
     if (out.error !== undefined) throw new Error(out.error);
     files = [[`${stem}_daylight.usdc`, out.bytes], ...(await used(out.assets))];
@@ -141,6 +137,6 @@ async function drawnFile(format: Format, o: DownloadOptions, stem: string): Prom
     });
   }
   if (format === 'obj') return save(objText(drawn), `${stem}_daylight.obj`);
-  const out = await new GLTFExporter().parseAsync(gltfScene(drawn, o.cameras ?? [], scale), { binary: format === 'glb' });
+  const out = await new GLTFExporter().parseAsync(gltfScene(drawn), { binary: format === 'glb' });
   save([format === 'glb' ? (out as ArrayBuffer) : JSON.stringify(out)], `${stem}_daylight.${format}`);
 }

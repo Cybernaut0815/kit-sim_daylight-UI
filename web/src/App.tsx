@@ -103,8 +103,7 @@ export default function App() {
   const rows = useRef(state.objects); // the rows now, for the stable onVariant
   rows.current = state.objects;
   const [stage, setStage] = useState(0); // bumped per opened model: the tree resets and the camera frames; a variant switch keeps both
-  const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, this model
-  useEffect(() => setViews([]), [stage]);
+  const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, across models, never in a file
 
   // The drawn meshes -> rows, their conversions and the viewer's objects: after open(), and after a variant switch.
   // roles: the old rows' roles by path (a new mesh is 'none'; a row hidden with the eye or H stays); without them a lone
@@ -327,18 +326,18 @@ export default function App() {
   // overridden), its problem range and the two range colours, all from the persisted viz settings.
   const scale = useMemo<Scale | null>(() => (result ? scaleFor(result.values, result.columns, column, s.viz) : null), [result, column, s.viz]);
   const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<string | null>(null);
-  const onDownload = useCallback(async (format: Format, mode: ExportMode, cameras: boolean) => {
+  const onDownload = useCallback(async (format: Format, mode: ExportMode) => {
     if (!result || !model.current.picked) return;
     setExporting(true);
     setExportError(null);
     try {
-      await download(format, mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor, cameras: cameras ? views : undefined });
+      await download(format, mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
     } catch (e) {
       setExportError((e as Error).message);
     } finally {
       setExporting(false);
     }
-  }, [result, state.objects, meshes, s.viz, column, weightsFor, views]);
+  }, [result, state.objects, meshes, s.viz, column, weightsFor]);
   const probeLabel = state.probe && result
     ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
     : null;
@@ -382,7 +381,7 @@ export default function App() {
               <div className="cluster cluster--between">
                 <div className="cluster">
                   <ViewsMenu disabled={!meshes.size} views={views} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} />
-                  <DownloadMenu ready={!!result} exporting={exporting} error={exportError} views={views.length} onDownload={onDownload} />
+                  <DownloadMenu ready={!!result} exporting={exporting} error={exportError} onDownload={onDownload} />
                 </div>
                 <div className="cluster cluster--end">
                   {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}

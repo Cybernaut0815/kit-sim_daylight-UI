@@ -1,7 +1,8 @@
 // The run bar's two menus.
 // - Views: the model's own cameras and the views saved here. Picking one moves the 3D view there, and orbiting goes on
 //   from it. The current view can be saved under a name, and a saved one removed again (the model's cameras cannot).
-// - Download USD: the result as USD (download.ts), with the saved views as cameras if wanted.
+//   Saved views last this session and never go into a file.
+// - Download: the result as USD, glTF or OBJ (download.ts).
 import { useEffect, useState } from 'react';
 import { Box3, Sphere } from 'three';
 import { cameraView, type SavedView, type StageCamera } from '../lib/views';
@@ -28,8 +29,7 @@ export function ViewsMenu({ disabled, views, onSave, onRemove }: { disabled: boo
     usd.view = cameraView(c, usd.three.root.matrixWorld, s.center, Math.max(s.radius, 1e-6));
   };
   const save = () => {
-    const canvas = usd.three.renderer.domElement, lens = usd.cameraSettings;
-    onSave({ id: crypto.randomUUID(), name: name.trim() || nextName(views), view: usd.view, aspect: canvas.clientWidth / Math.max(canvas.clientHeight, 1), near: lens.near, far: lens.far });
+    onSave({ id: crypto.randomUUID(), name: name.trim() || nextName(views), view: usd.view });
     setName('');
   };
   return (
@@ -75,14 +75,14 @@ const MODE_HELP: Record<ExportMode, string> = {
 const help = (format: Format, mode: ExportMode) => ({
   usdz: `${MODE_HELP[mode]} ${mode === 'replace' ? 'A layer over the model files, packed with them.' : 'Packed with the files it uses.'}`,
   usda: `${MODE_HELP[mode]} One file; a .zip with the textures it uses, if any.`,
-  glb: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*), the saved views as cameras.',
-  gltf: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*), the saved views as cameras. One text file.',
-  obj: 'The model as drawn, in metres, receivers coloured as shown (vertex colours). OBJ holds no values and no cameras.',
+  glb: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*).',
+  gltf: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*). One text file.',
+  obj: 'The model as drawn, in metres, receivers coloured as shown (vertex colours). OBJ holds no values.',
 })[format === 'usdc' || format === 'usd' ? 'usda' : format];
 
-export function DownloadMenu({ ready, exporting, error, views, onDownload }: { ready: boolean; exporting: boolean; error: string | null; views: number; onDownload: (format: Format, mode: ExportMode, cameras: boolean) => void }) {
-  const [format, setFormat] = useState<Format>('usdz'), [mode, setMode] = useState<ExportMode>('replace'), [cameras, setCameras] = useState(true);
-  const usdFormat = isUsd(format), withCameras = cameras && views > 0 && format !== 'obj';
+export function DownloadMenu({ ready, exporting, error, onDownload }: { ready: boolean; exporting: boolean; error: string | null; onDownload: (format: Format, mode: ExportMode) => void }) {
+  const [format, setFormat] = useState<Format>('usdz'), [mode, setMode] = useState<ExportMode>('replace');
+  const usdFormat = isUsd(format);
   return (
     <MenuButton id="download-menu" label="Download" disabled={!ready} busy={exporting} title={ready ? 'The result as USD, glTF or OBJ' : 'Run the simulation first'}>
       {() => (
@@ -100,15 +100,10 @@ export function DownloadMenu({ ready, exporting, error, views, onDownload }: { r
             </label>
           ))}
           <p className="views__note text-muted lines-5">{help(format, mode)}</p>
-          <div className="menu__separator" />
-          <label className="menu__item">
-            <input className="menu__check" type="checkbox" checked={withCameras} disabled={!views || format === 'obj'} onChange={(e) => setCameras(e.target.checked)} />
-            <span>Include saved views ({views})</span>
-          </label>
           {error && <Alert title="Download failed">{error}</Alert>}
           <div className="menu__footer views__download">
             <span className="text-muted">{exporting ? <><span className="spinner" aria-hidden="true" /> {usdFormat ? `Packing${mode === 'variants' || format !== 'usdz' ? ', flattening first' : ''}` : 'Writing'}</> : null}</span>
-            <button className="btn btn--primary" type="button" disabled={exporting} aria-busy={exporting} onClick={() => onDownload(format, mode, withCameras)}>Download</button>
+            <button className="btn btn--primary" type="button" disabled={exporting} aria-busy={exporting} onClick={() => onDownload(format, mode)}>Download</button>
           </div>
         </>
       )}

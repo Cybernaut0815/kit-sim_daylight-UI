@@ -12,14 +12,14 @@ around the model, and every CLI option; run on the GPU box (or tick "Run on ever
 meshes (per-quantity gradients, a problem range painted blue / red) and in charts (legend, area-weighted histogram,
 cumulative area curve, each over the colour scale or the whole data range, range split, per-mesh table); the cursor's
 element is read out on every chart. Set the 3D view to one of the model's cameras or to a view saved in the app (kept
-for the session, removed again from the same menu). Download the result from the bar under the 3D view as `.usdz`,
+for the session, never written to a file, removed again from the same menu). Download the result from the bar under the 3D view as `.usdz`,
 `.usda`, `.usdc`, `.usd`, `.glb`, `.gltf` or `.obj`. In USD either the result colours replace the receivers' materials,
 or the flattened stage gets a variant set `daylight` on each receiver (`original` plus one variant per result); both
 keep every result column as a value primvar (`primvars:daylight_<result>`) on the polygons the run simulated: a mesh's
 own faces, or the subdivided faces when the run used subdivision, never the triangulation. A `.usdz` packs the model
 files with it; a `.usda` / `.usdc` / `.usd` is the flattened stage, zipped with the textures it uses. glTF and OBJ hold
 the model as drawn, in metres, the receivers coloured with the shown result; glTF also every result as a value
-attribute (`_DAYLIGHT_<RESULT>`). The views saved in the app go along as cameras (USD, glTF) when ticked.
+attribute (`_DAYLIGHT_<RESULT>`).
 Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM) at `/`; for now the
 same app in the ZHA design system (`zha-ui`, `data-brand="code"`) stays at `/zha.html`, and a link in the app bar
 switches between them (settings carry over). Each page loads only its own design system (`web/src/kit.css`,

@@ -105,13 +105,10 @@ function extent(points: ArrayLike<number>): Float32Array {
   return e;
 }
 
-/**
- * `def Scope "<root>"` with the material every result binds (UsdPreviewSurface, diffuse = displayColor) and, when
- * given, the saved views as cameras (`cameras`: Camera prims at an indent of 8, from lib/views cameraPrims).
- */
-export const materialScope = (root: string, cameras = '') => `
+/** `def Scope "<root>"` with the material every result binds (UsdPreviewSurface, diffuse = displayColor). */
+export const materialScope = (root: string) => `
 def Scope "${root}" (
-    doc = "Daylight results: the material of the result meshes (diffuse = primvars:displayColor)${cameras ? ' and the views saved in the app (Cameras)' : ''}"
+    doc = "Daylight results: the material of the result meshes (diffuse = primvars:displayColor)"
 )
 {
     def Material "Result"
@@ -133,11 +130,7 @@ def Scope "${root}" (
             float3 outputs:result
         }
     }
-${cameras ? `
-    def Scope "Cameras"
-    {
-${cameras}    }
-` : ''}}
+}
 `;
 
 /**
@@ -145,7 +138,7 @@ ${cameras}    }
  * layers strongest first, `root` = a free top-level name for the material, `shown` = the column whose colours are drawn.
  * Without meta and subLayers a bare layer: the overlay the core composes over the stage for one flattened file.
  */
-export function overlay(o: { meta: string[]; subLayers: string[]; root: string; meshes: OverlayMesh[]; shown: number; cameras?: string }): string[] {
+export function overlay(o: { meta: string[]; subLayers: string[]; root: string; meshes: OverlayMesh[]; shown: number }): string[] {
   const out = o.meta.length || o.subLayers.length
     ? ['#usda 1.0\n(\n', ...o.meta.map((l) => `    ${l}\n`), ...(o.subLayers.length ? ['    subLayers = [\n', o.subLayers.map((l) => `        @${l}@`).join(',\n'), '\n    ]\n'] : []), ')\n']
     : ['#usda 1.0\n'];
@@ -185,7 +178,7 @@ export function overlay(o: { meta: string[]; subLayers: string[]; root: string; 
     out.push(`${indent}}\n`);
   };
   for (const [k, c] of tree.kids) emit(k, c, '');
-  out.push(materialScope(o.root, o.cameras));
+  out.push(materialScope(o.root));
   return out;
 }
 
@@ -193,7 +186,7 @@ export function overlay(o: { meta: string[]; subLayers: string[]; root: string; 
  * The core's exportVariants input: on every receiver a variant set "daylight" with "original" and one variant per
  * result column (`shown` selected); the value primvars once per receiver; other polygons once, in a class.
  */
-export function variantsSpec(meshes: ResultMesh[], o: { columns: string[]; shown: number; root: string; geometryRoot: string; assets: [string, string][]; cameras?: string }): { spec: ExportVariantsSpec; floats: Float32Array; ints: Int32Array } {
+export function variantsSpec(meshes: ResultMesh[], o: { columns: string[]; shown: number; root: string; geometryRoot: string; assets: [string, string][] }): { spec: ExportVariantsSpec; floats: Float32Array; ints: Int32Array } {
   const floats: ArrayLike<number>[] = [], ints: ArrayLike<number>[] = [];
   let nf = 0, ni = 0;
   const f = (a: ArrayLike<number>): [number, number] => { floats.push(a); nf += a.length; return [nf - a.length, a.length]; };
@@ -216,7 +209,7 @@ export function variantsSpec(meshes: ResultMesh[], o: { columns: string[]; shown
   });
   const pack = <T extends Float32Array | Int32Array>(out: T, parts: ArrayLike<number>[]) => { let at = 0; for (const p of parts) { out.set(p, at); at += p.length; } return out; };
   return {
-    spec: { set: 'daylight', selection: o.columns[o.shown], material: `/${o.root}/Result`, geometryRoot: `/${o.geometryRoot}`, usda: `#usda 1.0\n${materialScope(o.root, o.cameras)}`, assets: o.assets, prims },
+    spec: { set: 'daylight', selection: o.columns[o.shown], material: `/${o.root}/Result`, geometryRoot: `/${o.geometryRoot}`, usda: `#usda 1.0\n${materialScope(o.root)}`, assets: o.assets, prims },
     floats: pack(new Float32Array(nf), floats), ints: pack(new Int32Array(ni), ints),
   };
 }

@@ -1,9 +1,8 @@
 // glTF / OBJ downloads: the model as drawn (every visible mesh, instances as copies) in metres and Y-up, receivers
 // coloured with the shown result. glTF also carries every result as a value attribute (_DAYLIGHT_<RESULT>, on the drawn
-// triangles' corners) and the saved views as cameras; OBJ only the colours (v x y z r g b).
+// triangles' corners); OBJ only the colours (v x y z r g b).
 // The viewer draws stage materials as node materials (TSL): standard() turns them back into what GLTFExporter reads.
-import { BufferAttribute, BufferGeometry, Color, DoubleSide, Matrix3, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, Scene, Vector3, type InstancedMesh, type Material, type Object3D, type Texture } from 'three';
-import type { SavedView } from './views';
+import { BufferAttribute, BufferGeometry, Color, DoubleSide, Matrix3, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Scene, Vector3, type InstancedMesh, type Material, type Object3D, type Texture } from 'three';
 
 /** One drawn mesh: its geometry as the viewer has it, its copies in export space, its look or its result. */
 export interface Drawn {
@@ -96,8 +95,8 @@ function lookGeometry(g: BufferGeometry): BufferGeometry {
 
 const GREY = new MeshStandardMaterial({ name: 'Grey', color: 0xb4b4b4, roughness: 1, side: DoubleSide });
 
-/** The scene GLTFExporter writes: one node per copy (named by prim path, matrix in metres), the views as cameras. */
-export function gltfScene(drawn: Drawn[], views: SavedView[], scale: number): Scene {
+/** The scene GLTFExporter writes: one node per copy (named by prim path, matrix in metres). */
+export function gltfScene(drawn: Drawn[]): Scene {
   const scene = new Scene(), looks = new Map<Material, Material>(), result = new MeshBasicMaterial({ name: 'Daylight result', vertexColors: true, side: DoubleSide });
   const look = (m: Material) => { let x = looks.get(m); if (!x) looks.set(m, (x = standard(m))); return x; };
   for (const d of drawn) {
@@ -110,16 +109,6 @@ export function gltfScene(drawn: Drawn[], views: SavedView[], scale: number): Sc
       mesh.matrix.copy(m);
       scene.add(mesh);
     });
-  }
-  for (const v of views) {
-    const near = v.near * scale, far = v.far * scale, h = v.view.height * scale; // height: the orthographic half-height
-    const camera = v.view.projection === 'orthographic'
-      ? new OrthographicCamera((-h * v.aspect) / 2, (h * v.aspect) / 2, h / 2, -h / 2, near, far) // GLTFExporter writes ymag = top * 2
-      : new PerspectiveCamera(v.view.fov, v.aspect, near, far);
-    camera.name = v.name;
-    camera.position.fromArray(v.view.eye).multiplyScalar(scale);
-    camera.lookAt(new Vector3().fromArray(v.view.target).multiplyScalar(scale)); // up +Y, as the orbit's
-    scene.add(camera);
   }
   return scene;
 }

@@ -1,8 +1,7 @@
-import { BufferGeometry, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, OrthographicCamera, PerspectiveCamera, Texture, Vector3 } from 'three';
+import { BufferGeometry, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, Texture, Vector3 } from 'three';
 import { texture, vec4 } from 'three/tsl';
 import { describe, expect, it } from 'vitest';
 import { exportMatrices, gltfScene, objText, resultGeometry, standard, textureOf, type Drawn } from './sceneexport';
-import type { SavedView } from './views';
 
 /** Two triangles over four vertices (a unit quad), with normals. */
 const quad = () => new BufferGeometry()
@@ -58,26 +57,19 @@ describe('export space and the scene', () => {
     expect(new Vector3().setFromMatrixPosition(exportMatrices(plain, 0.01)[0]).toArray()).toEqual([1, 0, 0]);
     expect(exportMatrices(inst, 0.01).map((m) => new Vector3().setFromMatrixPosition(m).y)).toEqual([0, 0.5]);
   });
-  it('one node per copy with its matrix, receivers unlit with their values, the saved views as cameras in metres', () => {
-    const view = (projection: 'perspective' | 'orthographic'): SavedView => ({
-      id: projection, name: projection, aspect: 2, near: 10, far: 1000,
-      view: { eye: [0, 100, 500], target: [0, 100, 0], fov: 40, projection, height: 50 },
-    });
+  it('one node per copy with its matrix, receivers unlit with their values', () => {
     const drawn: Drawn[] = [
       { name: '/World/Shade', geometry: quad(), matrices: [new Matrix4(), new Matrix4().makeTranslation(5, 0, 0)], material: null },
       { name: '/World/Roof', geometry: quad(), matrices: [new Matrix4()], material: null, result: { perFace: true, rgb: new Float32Array(6), values: [{ name: 'a', data: [1, 2] }] } },
     ];
-    const scene = gltfScene(drawn, [view('perspective'), view('orthographic')], 0.01);
+    const scene = gltfScene(drawn);
     const meshes = scene.children.filter((c): c is Mesh => (c as Mesh).isMesh);
     expect(meshes.map((m) => m.name)).toEqual(['/World/Shade 1', '/World/Shade 2', '/World/Roof']);
     expect(meshes[1].matrixAutoUpdate).toBe(false);
     expect(meshes[1].matrix.elements[12]).toBe(5);
     expect((meshes[2].material as MeshBasicMaterial).isMeshBasicMaterial).toBe(true);
     expect(meshes[2].geometry.attributes._daylight_a).toBeDefined();
-    const [p, o] = scene.children.filter((c) => (c as PerspectiveCamera).isCamera) as [PerspectiveCamera, OrthographicCamera];
-    expect([p.fov, p.aspect, p.near, p.far]).toEqual([40, 2, 0.1, 10]);
-    expect(p.position.toArray()).toEqual([0, 1, 5]);
-    expect([o.top, o.right]).toEqual([0.25, 0.5]); // GLTFExporter writes ymag = top * 2 = the half-height
+    expect(scene.children).toHaveLength(3); // meshes only: saved views never go into a file
   });
 });
 
