@@ -3,7 +3,7 @@
 // tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
 // several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
 // and north. A click or focus in the view makes its model the active one.
-import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { applyToThree } from 'daylight-mesh';
@@ -70,6 +70,13 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   const [{ PAINT, TINT, EMPTY, tint }] = useState(look);
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
+  const at = useRef({ x: 0, y: 0 }); // the cursor in the canvas, where the floating readout sits
+  /** JS owns the readout's position: right of the cursor, or left of it where the view would cut it. */
+  const place = () => {
+    const t = tip.current, { x, y } = at.current, w = t?.offsetWidth ?? 0;
+    if (t) t.style.transform = `translate(${x + 14 + w > usd.three.renderer.domElement.clientWidth ? Math.max(x - 14 - w, 0) : x + 14}px, ${y + 14}px)`;
+  };
+  useLayoutEffect(place, [probeLabel]); // eslint-disable-line react-hooks/exhaustive-deps -- its width is known once its text is in
   const labelsEl = useRef<HTMLDivElement>(null);
   const stats = useRef<HTMLSpanElement>(null); // the frame line of the scene info, written per frame
   const ctx = useRef<Ctx | null>(null);
@@ -162,7 +169,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
         const h = pick(e);
         dispatch({ type: 'HOVER', id: h?.id ?? null });
         dispatch({ type: 'PROBE', probe: h && h.element !== null ? { id: h.id, element: h.element, value: h.value } : null });
-        if (tip.current && h) tip.current.style.transform = `translate(${h.x + 14}px, ${h.y + 14}px)`; // JS owns the readout's position
+        if (h) { at.current = { x: h.x, y: h.y }; place(); }
       });
     };
     const onLeave = () => { cancelAnimationFrame(raf); dispatch({ type: 'HOVER', id: null }); dispatch({ type: 'PROBE', probe: null }); };
