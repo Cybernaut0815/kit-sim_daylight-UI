@@ -24,10 +24,11 @@ own faces, or the subdivided faces when the run used subdivision, never the tria
 files with it; a `.usda` / `.usdc` / `.usd` is the flattened stage, zipped with the textures it uses. glTF and OBJ hold
 the model as drawn, in metres, the receivers coloured with the shown result; glTF also every result as a value
 attribute (`_DAYLIGHT_<RESULT>`).
-Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM) at `/`; for now the
-same app in the ZHA design system (`zha-ui`, `data-brand="code"`) stays at `/zha.html`, and a link in the app bar
-switches between them (settings carry over). Each page loads only its own design system (`web/src/kit.css`,
-`web/src/zha.css`).
+*Info* in the app bar explains the app: a quick start, reading the results, comparing models, glass and reflective
+materials.
+Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM) at `/`; the same
+app in the ZHA design system (`zha-ui`, `data-brand="code"`) is still built at `/zha.html`, no longer linked from the
+app (settings carry over). Each page loads only its own design system (`web/src/kit.css`, `web/src/zha.css`).
 
 **Materials.** By default every surface is opaque and black (today's numbers and speed, as Ladybug's RadiationStudy);
 only the virtual ground reflects (*Ground reflectance*). Two switches in Simulation, each slower, add what the model's

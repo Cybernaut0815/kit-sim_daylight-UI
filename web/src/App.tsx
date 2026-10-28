@@ -17,6 +17,7 @@ import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, unionRange, unitFor, vertexAreas } from './lib/result';
 import { link, type SavedView } from './lib/views';
+import { InfoButton } from './panels/InfoPanel';
 import { LocationPanel } from './panels/LocationPanel';
 import { MaterialsPanel } from './panels/MaterialsPanel';
 import { ModelPanel } from './panels/ModelPanel';
@@ -443,8 +444,7 @@ export default function App() {
           <span className="app-bar__app">Daylight</span>
         </span>
         <span className="app-bar__spacer" />
-        {/* While both design systems are compared: the same app in the other one (settings carry over). */}
-        <a className="btn btn--ghost" href={KIT ? '/zha.html' : '/'} title={`The same app in the ${KIT ? 'ZHA' : 'kit-ui'} design system`}>{KIT ? 'ZHA UI' : 'kit-ui'}</a>
+        <InfoButton />
         <a className="btn btn--ghost" href="/docs" target="_blank" rel="noreferrer" title="API documentation (Swagger UI); machine-readable at /openapi.json">API</a>
         <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={cycleTheme}>
           <Icon name="contrast" />
