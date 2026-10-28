@@ -1,4 +1,5 @@
-// App state: types, reducer, settings persistence (pure; the App does the localStorage I/O).
+// App state: types, reducer (the models by slot, the shared settings), the run batch, settings persistence (pure; the
+// App does the localStorage I/O).
 import type { RemoteManifest } from 'daylight-mesh';
 import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
@@ -60,26 +61,40 @@ export type Run = { status: 'idle' } | { status: 'queued'; position: number } | 
 export interface Selection { paths: string[]; active: string | null; source: string }
 const NO_SELECTION: Selection = { paths: [], active: null, source: 'api' };
 
-export interface State {
+/** A model in a pane: `slot` 0..3 = A..D (its letter, its chart colour, its viewer), fixed for its life. */
+export interface Model {
+  slot: number;
+  name: string; // the open file's stem; '' until one is open
   objects: ObjectRow[];
   selection: Selection;
   selected: Set<string>; // the rows at or under the selection: what the role buttons apply to
-  hovered: string | null;
-  probe: Probe | null; // element under the cursor in the viewport
-  bin: [number, number] | null; // hovered histogram bin [lo, hi): the viewer fades everything else
-  settings: Settings; stations: Station[] | null; run: Run; column: number; colourBy: 'plain' | 'value';
+  run: Run;
   result: RunResult | null; // the last finished run: stays on screen while the next one is queued, running or failed
   error: string | null; // why the last run failed: kept while the next one runs, so the alert does not blink between Auto runs
-  errors: Record<string, string>; // validate() output keyed by field id
   optics: Record<string, OpticsEdit>; // Materials-table edits (lib/optics.ts keys): kept across re-reads, cleared per model
 }
 
+export interface State {
+  models: Model[]; // 1..4, in slot order
+  active: number; // the slot the Model and Materials panels, Views and Download act on
+  hovered: string | null; // row ids are unique across models
+  probe: Probe | null; // element under the cursor in a view
+  bin: [number, number] | null; // hovered histogram bin [lo, hi): the views fade everything else
+  settings: Settings; stations: Station[] | null;
+  column: number; // the result column shown: an index into the first result in slot order, found by name in the others
+  colourBy: 'plain' | 'value';
+  errors: Record<string, string>; // validate() output keyed by field id
+}
+
 export type Action =
-  | { type: 'LOAD'; objects: ObjectRow[] }
-  | { type: 'RELOAD'; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection stays
-  | { type: 'ROLE'; ids: string[]; role: Role }
-  | { type: 'SELECT'; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
-  | ({ type: 'SELECTION' } & Selection) // the viewer's selection changed
+  | { type: 'LOAD'; slot: number; objects: ObjectRow[]; name?: string }
+  | { type: 'RELOAD'; slot: number; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection stays
+  | { type: 'ROLE'; slot: number; ids: string[]; role: Role }
+  | { type: 'SELECT'; slot: number; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
+  | ({ type: 'SELECTION'; slot: number } & Selection) // the viewer's selection changed
+  | { type: 'ADD' } // a model to compare, in the lowest free slot, made active
+  | { type: 'REMOVE'; slot: number } // never the last one
+  | { type: 'ACTIVE'; slot: number }
   | { type: 'HOVER'; id: string | null }
   | { type: 'SITE'; patch: Partial<Settings['site']> }
   | { type: 'WEATHER'; patch: Partial<Settings['weather']> }
@@ -87,7 +102,7 @@ export type Action =
   | { type: 'TIME'; patch: Partial<Settings['time']> }
   | { type: 'SIM'; patch: Partial<Settings['sim']> }
   | { type: 'STATIONS'; stations: Station[] }
-  | { type: 'RUN'; run: Run }
+  | { type: 'RUN'; slot: number; run: Run }
   | { type: 'COLUMN'; column: number }
   | { type: 'COLOUR_BY'; colourBy: 'plain' | 'value' }
   | { type: 'PROBE'; probe: Probe | null }
@@ -95,8 +110,8 @@ export type Action =
   | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
   | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
   | { type: 'ERRORS'; errors: Record<string, string> }
-  | { type: 'OPTICS_EDIT'; key: string; edit: OpticsEdit } // a material by prim path, or a default row
-  | { type: 'OPTICS_RESET'; key: string }; // back to the derived (or default) values
+  | { type: 'OPTICS_EDIT'; slot: number; key: string; edit: OpticsEdit } // a material by prim path, or a default row
+  | { type: 'OPTICS_RESET'; slot: number; key: string }; // back to the derived (or default) values
 
 const year = new Date().getFullYear();
 const solstice = `${year}-06-21`;
@@ -109,34 +124,75 @@ export const defaultSettings = (): Settings => ({
   viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
 });
 
+const IDLE: Run = { status: 'idle' };
+const model = (slot: number): Model => ({ slot, name: '', objects: [], selection: NO_SELECTION, selected: new Set(), run: IDLE, result: null, error: null, optics: {} });
+
 export const initialState = (settings = defaultSettings()): State => ({
-  objects: [], selection: NO_SELECTION, selected: new Set(), hovered: null, probe: null, bin: null, settings, stations: null, run: { status: 'idle' }, column: 0, colourBy: 'plain', result: null, error: null, errors: {}, optics: {},
+  models: [model(0)], active: 0, hovered: null, probe: null, bin: null, settings, stations: null, column: 0, colourBy: 'plain', errors: {},
 });
 
 // A job still on its way when the model or the roles change keeps its status (the button stays busy until it ends);
 // its result is then dropped at RUN done, because its receivers are gone.
-const inFlight = (r: Run) => r.status === 'queued' || r.status === 'running';
+export const inFlight = (r: Run) => r.status === 'queued' || r.status === 'running';
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((q) => b.includes(q as Quantity));
+/** f over the model in `slot`: the same state when there is none (a load or a job that outlived its model) or f keeps it. */
+const put = (s: State, slot: number, f: (m: Model) => Model): State => {
+  const models = s.models.map((m) => (m.slot === slot ? f(m) : m));
+  return models.every((m, i) => m === s.models[i]) ? s : { ...s, models };
+};
+/** A model still shows a result: the shared column (and colouring) stay; else they start over, as for one model. */
+const kept = (models: readonly Model[]) => models.some((m) => m.result);
+
+/**
+ * Models' jobs one after another (one in flight per tab; the server allows two per client): before each, a cancel or a
+ * model changed since the click (`ready` false: re-read, re-assigned or removed) ends it unrun; a failure is that model's
+ * alone, and ends idle when its model changed meanwhile. A success is the job's own dispatch.
+ */
+export async function runBatch(jobs: readonly { slot: number; ready: () => boolean; run: (signal: AbortSignal) => Promise<void> }[], signal: AbortSignal, settle: (slot: number, end: 'idle' | Error) => void): Promise<void> {
+  for (const j of jobs) {
+    if (signal.aborted || !j.ready()) { settle(j.slot, 'idle'); continue; }
+    try { await j.run(signal); } catch (e) { settle(j.slot, signal.aborted || !j.ready() ? 'idle' : (e as Error)); }
+  }
+}
 
 export function reducer(s: State, a: Action): State {
   switch (a.type) {
-    case 'LOAD':
-      return { ...s, objects: a.objects, selection: NO_SELECTION, selected: new Set(), hovered: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0, colourBy: 'plain', optics: {} };
+    case 'LOAD': {
+      const n = put(s, a.slot, (m) => ({ ...model(m.slot), name: a.name ?? '', objects: a.objects, run: inFlight(m.run) ? m.run : IDLE }));
+      return n === s ? s : { ...n, hovered: null, ...(kept(n.models) ? {} : { column: 0, colourBy: 'plain' as const }) };
+    }
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
-      const objects = s.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o));
-      if (objects.every((o, i) => o === s.objects[i])) return s; // nothing changed: keep the result
-      return { ...s, objects, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0 };
+      const n = put(s, a.slot, (m) => {
+        const objects = m.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o));
+        return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }; // nothing changed: keep the result
+      });
+      return n === s || kept(n.models) ? n : { ...n, column: 0 };
     }
-    case 'SELECT': {
-      if (!a.additive) return { ...s, selected: new Set(a.ids) };
-      const next = new Set(s.selected);
-      for (const id of a.ids) next.has(id) ? next.delete(id) : next.add(id);
-      return { ...s, selected: next };
+    case 'SELECT':
+      return put(s, a.slot, (m) => {
+        if (!a.additive) return { ...m, selected: new Set(a.ids) };
+        const next = new Set(m.selected);
+        for (const id of a.ids) next.has(id) ? next.delete(id) : next.add(id);
+        return { ...m, selected: next };
+      });
+    case 'RELOAD': {
+      const n = put(s, a.slot, (m) => ({ ...m, objects: a.objects, selected: new Set(idsUnder(m.selection.paths, a.objects)), run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }));
+      return n === s ? s : { ...n, hovered: null, probe: null, ...(kept(n.models) ? {} : { column: 0 }) };
     }
-    case 'RELOAD':
-      return { ...s, objects: a.objects, selected: new Set(idsUnder(s.selection.paths, a.objects)), hovered: null, probe: null, run: inFlight(s.run) ? s.run : { status: 'idle' }, result: null, error: null, column: 0 };
     case 'SELECTION':
-      return { ...s, selection: { paths: a.paths, active: a.active, source: a.source }, selected: new Set(idsUnder(a.paths, s.objects)) };
+      return put(s, a.slot, (m) => ({ ...m, selection: { paths: a.paths, active: a.active, source: a.source }, selected: new Set(idsUnder(a.paths, m.objects)) }));
+    case 'ADD': {
+      const slot = [0, 1, 2, 3].find((k) => !s.models.some((m) => m.slot === k));
+      return slot === undefined ? s : { ...s, models: [...s.models, model(slot)].sort((x, y) => x.slot - y.slot), active: slot };
+    }
+    case 'REMOVE': {
+      const i = s.models.findIndex((m) => m.slot === a.slot);
+      if (i < 0 || s.models.length === 1) return s;
+      const models = s.models.filter((m) => m.slot !== a.slot), active = s.active === a.slot ? (models[i] ?? models[i - 1]).slot : s.active; // the next tab, else the one before
+      return { ...s, models, active, hovered: null, probe: null, ...(kept(models) ? {} : { column: 0, colourBy: 'plain' as const }) };
+    }
+    case 'ACTIVE':
+      return s.active === a.slot || !s.models.some((m) => m.slot === a.slot) ? s : { ...s, active: a.slot };
     case 'HOVER':
       return s.hovered === a.id ? s : { ...s, hovered: a.id };
     case 'SITE': {
@@ -174,14 +230,13 @@ export function reducer(s: State, a: Action): State {
       const station = s.settings.weather.station ?? nearestStations(a.stations, lat, lon, 1)[0] ?? null;
       return { ...s, stations: a.stations, settings: { ...s.settings, weather: { ...s.settings.weather, station } } };
     }
-    case 'RUN': { // the last result stays until the next one lands; the first result after a load shows its values
-      const r = a.run, done = r.status === 'done';
-      if ((r.status === 'running' && s.run.status === 'running') || (r.status === 'queued' && s.run.status === 'queued' && r.position === s.run.position)) return s;
-      if (done && !r.result.receivers.every((id) => s.objects.some((o) => o.id === id && o.role === 'receiver'))) return { ...s, run: { status: 'idle' } }; // the model or the roles changed while it ran
+    case 'RUN': { // the last result stays until the next one lands; the first result of any model shows its values
+      const m = s.models.find((x) => x.slot === a.slot), r = a.run, done = r.status === 'done';
+      if (!m || (r.status === 'running' && m.run.status === 'running') || (r.status === 'queued' && m.run.status === 'queued' && r.position === m.run.position)) return s;
+      if (done && !r.result.receivers.every((id) => m.objects.some((o) => o.id === id && o.role === 'receiver'))) return put(s, a.slot, (x) => ({ ...x, run: IDLE })); // the model or the roles changed while it ran
       return {
-        ...s, run: r, result: done ? r.result : s.result, error: r.status === 'error' ? r.message : done || r.status === 'idle' ? null : s.error,
-        probe: done ? null : s.probe, bin: done ? null : s.bin,
-        column: done ? Math.min(s.column, r.result.columns.length - 1) : s.column, colourBy: done && !s.result ? 'value' : s.colourBy,
+        ...put(s, a.slot, (x) => ({ ...x, run: r, result: done ? r.result : x.result, error: r.status === 'error' ? r.message : done || r.status === 'idle' ? null : x.error })),
+        probe: done ? null : s.probe, bin: done ? null : s.bin, colourBy: done && !kept(s.models) ? 'value' : s.colourBy, // the column is clamped where it is read
         errors: (r.status === 'running' || r.status === 'queued') && Object.keys(s.errors).length ? {} : s.errors,
       };
     }
@@ -214,12 +269,13 @@ export function reducer(s: State, a: Action): State {
     case 'ERRORS': // a run clicks through here every time: no errors before and after = no re-render
       return !Object.keys(a.errors).length && !Object.keys(s.errors).length ? s : { ...s, errors: a.errors };
     case 'OPTICS_EDIT':
-      return { ...s, optics: { ...s.optics, [a.key]: a.edit } };
-    case 'OPTICS_RESET': {
-      if (!(a.key in s.optics)) return s;
-      const { [a.key]: _gone, ...optics } = s.optics;
-      return { ...s, optics };
-    }
+      return put(s, a.slot, (m) => ({ ...m, optics: { ...m.optics, [a.key]: a.edit } }));
+    case 'OPTICS_RESET':
+      return put(s, a.slot, (m) => {
+        if (!(a.key in m.optics)) return m;
+        const { [a.key]: _gone, ...optics } = m.optics;
+        return { ...m, optics };
+      });
   }
 }
 

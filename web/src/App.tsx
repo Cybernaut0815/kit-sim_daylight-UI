@@ -101,8 +101,9 @@ export default function App() {
 
   // Of the open stage: what a re-read needs, and the files as picked (a USD download packs them).
   const model = useRef({ mpu: 1, own: new Map<string, string>() as ReadonlyMap<string, string>, picked: null as PickedModel | null });
-  const rows = useRef(state.objects); // the rows now, for the stable onVariant
-  rows.current = state.objects;
+  const am = state.models[0];
+  const rows = useRef(am.objects); // the rows now, for the stable onVariant
+  rows.current = am.objects;
   const [stage, setStage] = useState(0); // bumped per opened model: the tree resets and the camera frames; a variant switch keeps both
   const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, across models, never in a file
 
@@ -169,7 +170,7 @@ export default function App() {
       held.current = false; // a click held for the old model's materials
       setMeshes(new Map());
       setNames(new Map());
-      dispatch({ type: 'LOAD', objects: [] });
+      dispatch({ type: 'LOAD', slot: 0, objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
       opened = true;
       model.current = { mpu: info.metersPerUnit, own, picked: { files: kept, root: info.url.replace(/^\/drop\/\d+\//, ''), info } };
@@ -184,7 +185,7 @@ export default function App() {
       setMeshes(map);
       setSunScale(1);
       setNames(own);
-      dispatch({ type: 'LOAD', objects });
+      dispatch({ type: 'LOAD', slot: 0, objects, name: info.url.replace(/^.*\//, '').replace(/\.\w+$/, '') });
       if (problems.length) setLoadError(problems.slice(0, 3).join(' '));
     } catch (e) {
       setLoadError((e as Error).message);
@@ -204,7 +205,7 @@ export default function App() {
       if (!rows.current.length) return; // no model yet: the level applies to the next one
       const { objects, map } = await readStage(new Map(rows.current.map((o) => [o.path, o.role])));
       setMeshes(map);
-      dispatch({ type: 'RELOAD', objects });
+      dispatch({ type: 'RELOAD', slot: 0, objects });
     } catch (e) {
       setLoadError((e as Error).message);
     } finally {
@@ -232,13 +233,13 @@ export default function App() {
   }, []);
 
   const s = state.settings;
-  const receivers = state.objects.filter((o) => o.role === 'receiver'), shades = state.objects.filter((o) => o.role === 'shade');
-  const running = state.run.status === 'running' || state.run.status === 'queued';
+  const receivers = am.objects.filter((o) => o.role === 'receiver'), shades = am.objects.filter((o) => o.role === 'shade');
+  const running = am.run.status === 'running' || am.run.status === 'queued';
   // Each run mesh's optics per face slot, and the textures its materials still wait for (the diffuse ones only while the
   // reflectance counts). `materials` changes only in a flush, and every flush that can change a binding is followed by a
   // re-read of the stage, so the rows key it.
   const physical = s.sim.mode === 'physical', reflect = physical && s.sim.bounces > 0;
-  const optics = useMemo(() => resolveOptics(state.objects, materials, texStats, state.optics, reflect), [state.objects, texStats, state.optics, reflect]);
+  const optics = useMemo(() => resolveOptics(am.objects, materials, texStats, am.optics, reflect), [am.objects, texStats, am.optics, reflect]);
   // The textures are read (decoded in a worker) only while their numbers count: physical mode with Transmission or
   // Reflections on; a default or Ladybug run never waits for them.
   const live = physical && (s.sim.transmission || reflect), materialsReady = !live || !optics.unread.length;
@@ -274,24 +275,24 @@ export default function App() {
     const t0 = performance.now(), ctrl = new AbortController(), mine = meshKey.current;
     const slowT = setTimeout(() => setSlow(true), 300); // an Auto run that takes a while says so in the Results
     abort.current = ctrl;
-    dispatch({ type: 'RUN', run: { status: 'queued', position: 0 } });
+    dispatch({ type: 'RUN', slot: 0, run: { status: 'queued', position: 0 } });
     try {
       const res = await runRemote('', {
         sensors: receivers.map((o) => objOf(conv.current.get(o.id)!)),
         context: shades.map((o) => objOf(conv.current.get(o.id)!)),
         epw, args, signal: ctrl.signal, clientId: CLIENT_ID,
-        onStatus: (job) => dispatch({ type: 'RUN', run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }),
+        onStatus: (job) => dispatch({ type: 'RUN', slot: 0, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }),
       });
       res.manifest.meshes.forEach((m, i) => {
         const o = receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
         if (!o || m.count !== want) throw new Error(`${o?.name ?? m.name}: the server returned ${m.count} rows, expected ${want}. Reload the model and run again.`);
       });
-      dispatch({ type: 'RUN', run: { status: 'done', result: { ...res, receivers: receivers.map((o) => o.id), on: s.sim.on, key: runKey, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
+      dispatch({ type: 'RUN', slot: 0, run: { status: 'done', result: { ...res, receivers: receivers.map((o) => o.id), on: s.sim.on, key: runKey, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
     } catch (e) {
       if (ctrl.signal.aborted) lastKey.current = null; // cancelled: the same inputs may run again (Auto included)
       // The server and the core name a mesh by its id: say the row's name (a job id matches no row and stays)
-      const message = (e as Error).message.replace(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g, (id) => state.objects.find((o) => o.id === id)?.name ?? id);
-      dispatch({ type: 'RUN', run: ctrl.signal.aborted || meshKey.current !== mine ? { status: 'idle' } : { status: 'error', message } });
+      const message = (e as Error).message.replace(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g, (id) => am.objects.find((o) => o.id === id)?.name ?? id);
+      dispatch({ type: 'RUN', slot: 0, run: ctrl.signal.aborted || meshKey.current !== mine ? { status: 'idle' } : { status: 'error', message } });
     } finally {
       busy.current = false;
       clearTimeout(slowT);
@@ -304,9 +305,9 @@ export default function App() {
   // a job on the server and trip the per-client limit, and an instant run is over in milliseconds anyway.
   // A cleared result (roles changed back, a model reloaded) re-arms it for the same inputs.
   useEffect(() => {
-    if (!state.result && state.run.status === 'idle') lastKey.current = null;
+    if (!am.result && am.run.status === 'idle') lastKey.current = null;
     if (autoOn && !busy.current && runKey !== lastKey.current) void onRun(true);
-  }, [autoOn, runKey, ended, state.result, state.run.status]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings runKey came from
+  }, [autoOn, runKey, ended, am.result, am.run.status]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings runKey came from
   // Nothing waits for the materials any more (read, or Transmission and Reflections off): Auto re-checks (ended), a click
   // held for them runs.
   useEffect(() => {
@@ -319,7 +320,7 @@ export default function App() {
   const tz = derivedTz(s), leap = weatherLeap(s);
   const sunSite = useMemo(() => ({ lat: s.site.lat, lon: s.site.lon, tz, leap }), [s.site.lat, s.site.lon, tz, leap]);
   const sunView = useMemo<SunView | null>(() => (ui.sunPath ? { site: sunSite, north: s.sim.north, time: s.time, scale: sunScale } : null), [ui.sunPath, sunSite, s.sim.north, s.time, sunScale]);
-  const result = state.result;
+  const result = am.result;
   const stale = !!result && !running && result.key !== runKey && !(autoOn && runKey !== lastKey.current); // unless Auto is about to run
   const selectedHref = s.weather.source === 'station' ? s.weather.station?.href ?? null : null;
   const column = result ? Math.min(state.column, result.columns.length - 1) : 0;
@@ -332,15 +333,15 @@ export default function App() {
     setExporting(true);
     setExportError(null);
     try {
-      await download(format, mode, { usd, result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
+      await download(format, mode, { usd, result, objects: am.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
     } catch (e) {
       setExportError((e as Error).message);
     } finally {
       setExporting(false);
     }
-  }, [result, state.objects, meshes, s.viz, column, weightsFor]);
+  }, [result, am.objects, meshes, s.viz, column, weightsFor]);
   const probeLabel = state.probe && result
-    ? `${state.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
+    ? `${am.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(result.columns[column]).value}`
     : null;
   const busyBar = running && !autoOn; // a click run: the button waits and Cancel shows; Auto runs do not flash them
 
@@ -367,8 +368,8 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel usd={usd} objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
-                <MaterialsPanel rows={optics.materials} fallback={optics.fallback} glass={optics.glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} reflections={reflect} dispatch={dispatch} />
+                <ModelPanel usd={usd} slot={0} objects={am.objects} selection={am.selection} selected={am.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
+                <MaterialsPanel slot={0} rows={optics.materials} fallback={optics.fallback} glass={optics.glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} reflections={reflect} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
                 <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
@@ -376,7 +377,7 @@ export default function App() {
               </aside>
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
-            <Viewer usd={usd} meshes={meshes} stage={stage} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
+            <Viewer usd={usd} slot={0} meshes={meshes} stage={stage} loading={loading} objects={am.objects} selected={am.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
               {/* left: the Views and Download USD menus; right-aligned, the button's label never changes and Cancel appears on
                   its left: the tickbox stays put; progress shows in the Results run line */}
               <div className="cluster cluster--between">
@@ -396,7 +397,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel result={result} run={state.run} error={state.error} stale={stale} auto={autoOn && !slow} objects={state.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={state.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} dispatch={dispatch} />
+              <ResultsPanel slot={0} result={result} run={am.run} error={am.error} stale={stale} auto={autoOn && !slow} objects={am.objects} column={column} colourBy={state.colourBy} hovered={state.hovered} selected={am.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} dispatch={dispatch} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

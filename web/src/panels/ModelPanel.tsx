@@ -11,14 +11,14 @@ const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none
 const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. Not saved to the model.';
 
 interface Props {
-  usd: UsdViewerElement; // the model's viewer
+  usd: UsdViewerElement; slot: number; // the model's viewer and slot
   objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
   loading: boolean; error: string | null; errors: Record<string, string>; stage: number; subdiv: number;
   onFiles: (files: File[]) => void; onVariant: (path: string, set: string, variant: string) => void;
   onSubdiv: (level: number) => void; onRefine: (paths: string[], level: number | null) => void; dispatch: Dispatch<Action>;
 }
 
-export const ModelPanel = memo(function ModelPanel({ usd, objects, selection, selected, names, loading, error, errors, stage, subdiv, onFiles, onVariant, onSubdiv, onRefine, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ usd, slot, objects, selection, selected, names, loading, error, errors, stage, subdiv, onFiles, onVariant, onSubdiv, onRefine, dispatch }: Props) {
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
   return (
     <Section id="model" title="Model">
@@ -59,7 +59,7 @@ export const ModelPanel = memo(function ModelPanel({ usd, objects, selection, se
         <div className="accordion__body stack stack--tight">
           <div className="toolbar" role="group" aria-label="Role of the meshes at or below the selected prims">
             {(['receiver', 'shade', 'none'] as Role[]).map((role) => (
-              <button key={role} className="btn btn--secondary" type="button" disabled={!selected.size} onClick={() => dispatch({ type: 'ROLE', ids: [...selected], role })}>
+              <button key={role} className="btn btn--secondary" type="button" disabled={!selected.size} onClick={() => dispatch({ type: 'ROLE', slot, ids: [...selected], role })}>
                 {LABEL[role]}
               </button>
             ))}

@@ -36,7 +36,7 @@ const release = (m: THREE.Mesh) => (m as unknown as THREE.EventDispatcher<{ disp
 const drop = (m: THREE.Mesh) => { m.removeFromParent(); m.geometry.dispose(); release(m); }; // a result overlay, for good
 
 interface Props {
-  usd: UsdViewerElement; // this view's viewer, one per model slot (./usd.ts)
+  usd: UsdViewerElement; slot: number; // this view's viewer (./usd.ts) and its model's slot
   meshes: ReadonlyMap<string, THREE.Object3D>; // row id -> the viewer's object for it
   stage: number; // bumped per opened model: framed then (a variant switch keeps the camera)
   loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
@@ -64,7 +64,7 @@ function SceneInfo({ objects, unit, stats }: { objects: ObjectRow[]; unit: numbe
   );
 }
 
-export function Viewer({ usd, meshes, stage, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+export function Viewer({ usd, slot, meshes, stage, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
   const [{ PAINT, TINT, EMPTY, tint }] = useState(look);
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
@@ -117,7 +117,7 @@ export function Viewer({ usd, meshes, stage, loading, objects, selected, hovered
     // mirrors its prims and the rows at or under them.
     const onSel = (e: Event) => {
       const { paths, source, active } = (e as UsdSessionEventMap['selectionchange']).detail;
-      dispatch({ type: 'SELECTION', paths: [...paths], active, source });
+      dispatch({ type: 'SELECTION', slot, paths: [...paths], active, source });
     };
     usd.addEventListener('selectionchange', onSel);
 
@@ -238,7 +238,7 @@ export function Viewer({ usd, meshes, stage, loading, objects, selected, hovered
       usd.three.invalidate();
       ctx.current = null;
     };
-  }, [dispatch, usd]);
+  }, [dispatch, usd, slot]);
 
   // A new model: the sun path's dome and the grid fit every mesh, whatever its role.
   useEffect(() => {

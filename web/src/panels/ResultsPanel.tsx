@@ -12,6 +12,7 @@ import type { Action, ObjectRow, Probe, Run, RunResult, Settings } from '../stor
 import { Alert, ColorQuad, Illustration, NumberField, ResetButton, Segmented, Swatch, pct, rowKeys } from '../ui';
 
 interface Props {
+  slot: number; // the model shown
   result: RunResult | null; run: Run; error: string | null; stale: boolean; auto: boolean; // result: the last finished run, kept while the next one runs
   objects: ObjectRow[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; selected: Set<string>;
   probe: Probe | null; bin: [number, number] | null; scale: Scale | null; viz: Settings['viz'];
@@ -29,7 +30,7 @@ type ChartRange = 'absolute' | 'relative';
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
 const RANGE_HELP = 'Absolute: the whole range of the data. Relative: the colour scale, Min to Max (the data range where they are blank).';
 
-export const ResultsPanel = memo(function ResultsPanel({ result, run, error, stale, auto, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ slot, result, run, error, stale, auto, objects, column, colourBy, hovered, selected, probe, bin, scale, viz, weightsFor, dispatch }: Props) {
   const data = useMemo(() => {
     if (!result) return null;
     const r = result, col = Math.min(column, r.columns.length - 1), [quantity, side] = r.columns[col].split('_');
@@ -87,7 +88,7 @@ export const ResultsPanel = memo(function ResultsPanel({ result, run, error, sta
         };
         const what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions, ${fmtNum(r.values.length)} ${r.on} on ${rows.length} ${rows.length === 1 ? 'mesh' : 'meshes'}.`;
         const timing = `${r.manifest.run_s !== undefined && r.cache?.response !== 'hit' ? `${r.manifest.run_s.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip`;
-        const select = (id: string, additive: boolean) => dispatch({ type: 'SELECT', ids: [id], additive });
+        const select = (id: string, additive: boolean) => dispatch({ type: 'SELECT', slot, ids: [id], additive });
         const inUnit = unit.value ? ` (${unit.value})` : ''; // the unit once per group: the labels stay one short word
         const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
         const readout = probe && probeRow
