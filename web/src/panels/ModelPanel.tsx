@@ -2,6 +2,7 @@
 // in the USD viewer, selected as there; a prim's role goes to every mesh below it). The tree sits in a fixed-height,
 // user-resizable box, so loading a model never moves the panels below it.
 import { memo, type Dispatch } from 'react';
+import type { UsdViewerElement } from 'usd-viewer';
 import type { Action, ObjectRow, Role, Selection } from '../store';
 import { Alert, Section } from '../ui';
 import { PrimTree } from './PrimTree';
@@ -10,13 +11,14 @@ const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none
 const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. Not saved to the model.';
 
 interface Props {
+  usd: UsdViewerElement; // the model's viewer
   objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
   loading: boolean; error: string | null; errors: Record<string, string>; stage: number; subdiv: number;
   onFiles: (files: File[]) => void; onVariant: (path: string, set: string, variant: string) => void;
   onSubdiv: (level: number) => void; onRefine: (paths: string[], level: number | null) => void; dispatch: Dispatch<Action>;
 }
 
-export const ModelPanel = memo(function ModelPanel({ objects, selection, selected, names, loading, error, errors, stage, subdiv, onFiles, onVariant, onSubdiv, onRefine, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ usd, objects, selection, selected, names, loading, error, errors, stage, subdiv, onFiles, onVariant, onSubdiv, onRefine, dispatch }: Props) {
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
   return (
     <Section id="model" title="Model">
@@ -72,7 +74,7 @@ export const ModelPanel = memo(function ModelPanel({ objects, selection, selecte
               {[1, 2, 3].map((l) => <option key={l} value={l}>Level {l}</option>)}
             </select>
           </div>
-          <PrimTree objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={onVariant} dispatch={dispatch} />
+          <PrimTree usd={usd} objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={onVariant} dispatch={dispatch} />
         </div>
       </details>
     </Section>

@@ -5,15 +5,15 @@
 // - Download: the result as USD, glTF or OBJ (download.ts).
 import { useEffect, useState } from 'react';
 import { Box3, Sphere } from 'three';
+import type { UsdViewerElement } from 'usd-viewer';
 import { cameraView, type SavedView, type StageCamera } from '../lib/views';
 import { Alert, Icon, MenuButton } from '../ui';
 import { FORMATS, isUsd, type ExportMode, type Format } from './download';
-import { usd } from './usd';
 
 /** The next free "View N" name. */
 const nextName = (views: SavedView[]) => `View ${Math.max(0, ...views.map((v) => Number(/^View (\d+)$/.exec(v.name)?.[1] ?? 0))) + 1}`;
 
-export function ViewsMenu({ disabled, views, onSave, onRemove }: { disabled: boolean; views: SavedView[]; onSave: (v: SavedView) => void; onRemove: (id: string) => void }) {
+export function ViewsMenu({ usd, disabled, views, onSave, onRemove }: { usd: UsdViewerElement; disabled: boolean; views: SavedView[]; onSave: (v: SavedView) => void; onRemove: (id: string) => void }) {
   const [cameras, setCameras] = useState<StageCamera[]>(() => usd.cameras);
   const [name, setName] = useState('');
   useEffect(() => {
@@ -21,7 +21,7 @@ export function ViewsMenu({ disabled, views, onSave, onRemove }: { disabled: boo
     update();
     usd.addEventListener('cameraschange', update);
     return () => usd.removeEventListener('cameraschange', update);
-  }, []);
+  }, [usd]);
   /** A camera of the model as the free view: the orbit target where the model's centre is along its view. */
   const jump = (c: StageCamera) => {
     usd.three.root.updateMatrixWorld();

@@ -29,7 +29,7 @@ import { download, type ExportMode, type Format, type PickedModel } from './view
 import { DownloadMenu, ViewsMenu } from './viewer/Views';
 import type { SavedView } from './lib/views';
 import type { SunView } from './viewer/sunpath';
-import { materials, readTexture, usd } from './viewer/usd';
+import { readTexture, viewer } from './viewer/usd';
 
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
 // One id per browser tab for the server's per-client job limit (sessionStorage: a new tab is a new client).
@@ -49,6 +49,7 @@ const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getIte
 
 interface Conv { obj?: ObjMesh; make?: () => ObjMesh; areas?: Float64Array; vareas?: Float64Array } // make: an instanced shade, built on first use
 const objOf = (c: Conv) => (c.obj ??= c.make!());
+const { el: usd, materials } = viewer(0);
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => {
@@ -245,7 +246,7 @@ export default function App() {
     const r = optics.unread[0];
     if (!live || !r || reading.current) return; // the read in flight lands first, then the next starts
     reading.current = true;
-    void readTexture(r).then((t) => { reading.current = false; setTexStats((m) => new Map(m).set(readKey(r), t)); });
+    void readTexture(usd, r).then((t) => { reading.current = false; setTexStats((m) => new Map(m).set(readKey(r), t)); });
   }, [optics.unread, live]);
   const args = [...buildArgs(s), ...opticsArgs(optics.meshes, optics.fallback, s.sim)], epw = epwRef(s);
   // Everything the server's response cache keys on: an equal key gives an equal result.
@@ -331,7 +332,7 @@ export default function App() {
     setExporting(true);
     setExportError(null);
     try {
-      await download(format, mode, { result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
+      await download(format, mode, { usd, result, objects: state.objects, meshes, viz: s.viz, column, model: model.current.picked, weightsFor });
     } catch (e) {
       setExportError((e as Error).message);
     } finally {
@@ -366,7 +367,7 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
+                <ModelPanel usd={usd} objects={state.objects} selection={state.selection} selected={state.selected} names={names} loading={loading} error={loadError} errors={state.errors} stage={stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} dispatch={dispatch} />
                 <MaterialsPanel rows={optics.materials} fallback={optics.fallback} glass={optics.glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} reflections={reflect} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
@@ -375,12 +376,12 @@ export default function App() {
               </aside>
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
-            <Viewer meshes={meshes} stage={stage} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
+            <Viewer usd={usd} meshes={meshes} stage={stage} loading={loading} objects={state.objects} selected={state.selected} hovered={state.hovered} colourBy={state.colourBy} result={result} column={column} scale={scale} bin={state.bin} probeLabel={probeLabel} theme={theme} dispatch={dispatch} sun={sunView}>
               {/* left: the Views and Download USD menus; right-aligned, the button's label never changes and Cancel appears on
                   its left: the tickbox stays put; progress shows in the Results run line */}
               <div className="cluster cluster--between">
                 <div className="cluster">
-                  <ViewsMenu disabled={!meshes.size} views={views} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} />
+                  <ViewsMenu usd={usd} disabled={!meshes.size} views={views} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} />
                   <DownloadMenu ready={!!result} exporting={exporting} error={exportError} onDownload={onDownload} />
                 </div>
                 <div className="cluster cluster--end">

@@ -1,4 +1,4 @@
-// The 3D view. The USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation and selection
+// A 3D view. Its USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation and selection
 // (kept in step with the store); on top of it: the result colours as overlays on the receivers, the hover tint, the
 // sun path and the ground grid in the viewer's overlay group, the probe readout and the scene info. Dragging the sun
 // path's suns, handles, arcs and compass ring edits the time settings and north.
@@ -6,32 +6,37 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, ty
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { applyToThree } from 'daylight-mesh';
-import type { UsdSessionEventMap } from 'usd-viewer';
+import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
 import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult } from '../store';
 import { Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
-import { usd } from './usd';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
 // Neutral tone mapping (the Plain view) lowers every colour by up to 0.04 (linear) before output; add it back so the grid
 // keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
 const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m < 0.04 ? 0.4 * Math.sqrt(m) - m : 0.04; return c.setRGB(c.r + off, c.g + off, c.b + off); };
-// Result colours: unlit, so with tone mapping off (the Value view) they are exactly the legend's
-const PAINT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-// The hover tint, over the paint (-1) and the viewer's selection fill (-2); it borrows the hovered object's geometry
-const TINT = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
-const EMPTY = new THREE.BufferGeometry();
-const tint = new THREE.Mesh(EMPTY, TINT); // never dispose its geometry: it is the viewer's
-tint.raycast = () => {}; // the viewer's pick walks its objects' children
+/** A view's paint material and hover tint, per view: a mesh has one parent, and each view's [meshes] cleanup resets
+ *  its tint. */
+function look() {
+  // Result colours: unlit, so with tone mapping off (the Value view) they are exactly the legend's
+  const PAINT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  // The hover tint, over the paint (-1) and the viewer's selection fill (-2); it borrows the hovered object's geometry
+  const TINT = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+  const EMPTY = new THREE.BufferGeometry();
+  const tint = new THREE.Mesh(EMPTY, TINT); // never dispose its geometry: it is the viewer's
+  tint.raycast = () => {}; // the viewer's pick walks its objects' children
+  return { PAINT, TINT, EMPTY, tint };
+}
 /** Lets the renderer forget a mesh: it keeps a render object (holding the geometry) per mesh until the mesh fires 'dispose'. */
 const release = (m: THREE.Mesh) => (m as unknown as THREE.EventDispatcher<{ dispose: object }>).dispatchEvent({ type: 'dispose' });
 const drop = (m: THREE.Mesh) => { m.removeFromParent(); m.geometry.dispose(); release(m); }; // a result overlay, for good
 
 interface Props {
+  usd: UsdViewerElement; // this view's viewer, one per model slot (./usd.ts)
   meshes: ReadonlyMap<string, THREE.Object3D>; // row id -> the viewer's object for it
   stage: number; // bumped per opened model: framed then (a variant switch keeps the camera)
   loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
@@ -47,9 +52,9 @@ interface Ctx {
 }
 
 /** The scene info at the top right of the view: meshes by role, faces and vertices, units, and the frame line. */
-function SceneInfo({ objects, stats }: { objects: ObjectRow[]; stats: RefObject<HTMLSpanElement | null> }) {
+function SceneInfo({ objects, unit, stats }: { objects: ObjectRow[]; unit: number; stats: RefObject<HTMLSpanElement | null> }) {
   const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
-  const ignored = n('none'), unit = usd.stage?.metersPerUnit ?? 1;
+  const ignored = n('none');
   return (
     <div className="viewport__info" aria-hidden="true">
       <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {f(n('shade'))} shading{ignored ? `, ${f(ignored)} ignored` : ''}</span>
@@ -59,7 +64,8 @@ function SceneInfo({ objects, stats }: { objects: ObjectRow[]; stats: RefObject<
   );
 }
 
-export function Viewer({ meshes, stage, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+export function Viewer({ usd, meshes, stage, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+  const [{ PAINT, TINT, EMPTY, tint }] = useState(look);
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
   const labelsEl = useRef<HTMLDivElement>(null);
@@ -73,7 +79,7 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
   const byValue = result && scale && colourBy === 'value' ? result : null;
   const hasModel = meshes.size > 0, site = sun?.site ?? null, shown = !!sun && hasModel;
 
-  useEffect(() => { usd.ready.then(() => setReady(true), () => {}); }, []); // a failed start: the viewer shows why
+  useEffect(() => { usd.ready.then(() => setReady(true), () => {}); }, [usd]); // a failed start: the viewer shows why
 
   useEffect(() => {
     const el = host.current!, canvas = usd.three.renderer.domElement;
@@ -232,7 +238,7 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
       usd.three.invalidate();
       ctx.current = null;
     };
-  }, [dispatch]);
+  }, [dispatch, usd]);
 
   // A new model: the sun path's dome and the grid fit every mesh, whatever its role.
   useEffect(() => {
@@ -354,7 +360,7 @@ export function Viewer({ meshes, stage, loading, objects, selected, hovered, col
     <div ref={host} className="viewport">
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
-      {hasModel && <SceneInfo objects={objects} stats={stats} />}
+      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} stats={stats} />}
       {ready && !hasModel && !loading && (
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="model" /></div>

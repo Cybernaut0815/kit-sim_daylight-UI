@@ -7,11 +7,10 @@
 // is selected; F frames, H hides, Shift+H isolates, Alt+H shows all; a prim's variant sets switch here (App re-reads
 // the meshes). Hiding and variants go to the session layer: never saved.
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type MouseEvent } from 'react';
-import { modifySelect, selectUpWithSubtree, type PrimInfo, type PrimSummary, type UsdSessionEventMap } from 'usd-viewer';
+import { modifySelect, selectUpWithSubtree, type PrimInfo, type PrimSummary, type UsdSessionEventMap, type UsdViewerElement } from 'usd-viewer';
 import { meshAt, underIndex } from '../lib/tree';
 import type { Action, ObjectRow, Role, Selection } from '../store';
 import { Icon } from '../ui';
-import { usd } from '../viewer/usd';
 
 type Shown = Role | 'mixed';
 const LABEL: Record<Shown, string> = { receiver: 'Receiver', shade: 'Shade', none: 'Ignored', mixed: 'Mixed' };
@@ -24,11 +23,12 @@ const ancestors = (path: string) => path.split('/').slice(1, -1).map((_, i, segs
 
 interface Row { path: string; name: string; type: string; depth: number; children: boolean; open: boolean; dim: boolean; visible: boolean; variants: boolean; hit?: true }
 interface Props {
+  usd: UsdViewerElement; // the model's viewer
   objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
   stage: number; loading: boolean; onVariant: (path: string, set: string, variant: string) => void; dispatch: Dispatch<Action>;
 }
 
-export const PrimTree = memo(function PrimTree({ objects, selection, selected, names, stage, loading, onVariant, dispatch }: Props) {
+export const PrimTree = memo(function PrimTree({ usd, objects, selection, selected, names, stage, loading, onVariant, dispatch }: Props) {
   const [kids, setKids] = useState<ReadonlyMap<string, PrimSummary[]>>(new Map()); // loaded children per prim ('/' = the roots)
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
@@ -72,7 +72,7 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
       if (total <= AUTO_OPEN) for (const o of objects) for (const a of ancestors(o.path)) paths.add(a);
       await openAll([...paths]);
     })().catch(() => {});
-  }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps -- once per model
+  }, [stage, usd]); // eslint-disable-line react-hooks/exhaustive-deps -- once per model (two models may share a stage number)
 
   // An edit (a variant, the eye, H): every loaded level again, as it is open; the summaries carry the new visibility.
   useEffect(() => {
@@ -89,7 +89,7 @@ export const PrimTree = memo(function PrimTree({ objects, selection, selected, n
     usd.addEventListener('primschange', onPrims);
     usd.addEventListener('lockchange', onLock);
     return () => { usd.removeEventListener('primschange', onPrims); usd.removeEventListener('lockchange', onLock); };
-  }, []);
+  }, [usd]);
 
   // A pick in the view: open the tree down to it and bring it into view.
   useEffect(() => {
