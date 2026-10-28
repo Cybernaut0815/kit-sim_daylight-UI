@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, shareAbove, shareBelow, unitFor, vertexAreas } from './result';
+import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, shareAbove, shareBelow, unionRange, unitFor, vertexAreas } from './result';
 
 // unit square in the XY plane as two triangles
 const pos = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -70,5 +70,16 @@ describe('units and formatting', () => {
     expect(fmtNum(1234.5)).toBe('1,235');
     expect(fmtNum(0.123456)).toBe('0.123');
     expect(fmtNum(NaN)).toBe('–');
+  });
+});
+
+describe('several models', () => {
+  it('unionRange: the named column over every result that has it, wherever it sits', () => {
+    const a = { columns: ['radiation_front', 'direct_front'], values: [Float64Array.of(10, 1), Float64Array.of(40, NaN)] };
+    const b = { columns: ['direct_front', 'radiation_front'], values: [Float64Array.of(2, -5), Float64Array.of(3, 20)] };
+    const c = { columns: ['sunhours_front'], values: [Float64Array.of(1000)] };
+    expect(unionRange([a, b, c], 'radiation_front')).toEqual([-5, 40]);
+    expect(unionRange([a, b, c], 'direct_front')).toEqual([1, 3]);
+    expect(unionRange([c], 'radiation_front')).toEqual([Infinity, -Infinity]);
   });
 });

@@ -1,5 +1,6 @@
 // Views: the USD's own cameras and the views saved in the app (this session only, never written to a file), as free
-// views of the 3D view. The viewer's world is the stage in its own units under `three.root` (rotated for Z-up stages).
+// views of a 3D view, and linked cameras across views. The viewer's world is the stage in its own units under
+// `three.root` (rotated for Z-up stages).
 // Lens conventions: Hydra hands camera lenses over at 0.1 × the authored value (scene units); only ratios matter for a
 // perspective field of view.
 import { Matrix4, Vector3 } from 'three';
@@ -29,4 +30,26 @@ export function cameraView(camera: StageCamera, root: Matrix4, centre: Vector3, 
     projection: ortho ? 'orthographic' : 'perspective',
     height: ortho ? p.verticalAperture / 2 : depth * (lens ? ratio : 0.4),
   };
+}
+
+/** A view as link() sees it: a <usd-viewer>'s free view and its per-frame hooks. */
+export interface Linked { view: ViewState; three: { beforeRender: Set<() => void> } }
+
+/**
+ * Linked cameras, without a camera event in the viewer: each frame a view draws, its view (as JSON) is compared with
+ * the one last seen or written there; a change (orbit, wheel, F, a menu jump, a frame) goes to the other views, whose
+ * read-back is kept (the orbit rounds what it is given), so their next frames never echo it back. `lead` hands its view
+ * to the others at once; the others trail by one frame. Returns the unlink.
+ */
+export function link(views: Linked[], lead = views[0]): () => void {
+  const seen = new Map<Linked, string>();
+  const push = (from: Linked) => {
+    const v = from.view;
+    seen.set(from, JSON.stringify(v));
+    for (const p of views) if (p !== from) { p.view = v; seen.set(p, JSON.stringify(p.view)); }
+  };
+  const hooks = views.map((p) => [p, () => { if (JSON.stringify(p.view) !== seen.get(p)) push(p); }] as const);
+  if (lead) push(lead);
+  for (const [p, h] of hooks) p.three.beforeRender.add(h);
+  return () => { for (const [p, h] of hooks) p.three.beforeRender.delete(h); };
 }

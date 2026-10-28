@@ -31,6 +31,23 @@
 /* the USD viewer (its canvas inherits the cursor through its shadow root) */
 .viewport > usd-viewer.viewport__grab { cursor: grab; }
 .viewport > usd-viewer.viewport__grabbing { cursor: grabbing; }
+/* the models' views, equal cells with 1 px hairlines between them: side by side (the default for two or three), stacked,
+   or 2 x 2 (four); the shared run bar (.viewport__bar) spans them at the bottom */
+.viewports { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); gap: 1px;
+  block-size: 100%; min-block-size: 24rem; overflow: hidden; border: 1px solid var(--border-subtle); background: var(--border-strong); }
+.viewports--stacked { grid-auto-flow: row; }
+.viewports--grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; }
+/* a view: the grid has the border; isolated, so its scene info (z-index 1) stays under the shared bar */
+.viewports > .viewport { min-block-size: 0; border: 0; isolation: isolate; container-type: inline-size; }
+/* the view's model (two or more) at the top left: its chip, pressed for the active model, and a load problem */
+.viewport__name { position: absolute; inset-block-start: var(--space-2); inset-inline-start: var(--space-2); z-index: 1;
+  display: flex; align-items: center; gap: var(--space-2); max-inline-size: 40%; }
+.viewport__name > .chip { min-inline-size: 0; line-height: 1.3; } /* 1.3: the clipped .line keeps its descenders */
+.viewport__name .line { min-inline-size: 0; }
+.chip[aria-pressed="true"] .swatch__outline { stroke: var(--accent-on); } /* the model's colour on the accent fill */
+@container (max-width: 30rem) { .viewport__name ~ .viewport__info { display: none; } } /* a narrow view: the name, not the scene info */
+/* the model tabs and their remove buttons: compact, wrapping in a narrow panel */
+.model-tabs { --control-h: 24px; flex-wrap: wrap; align-items: center; }
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
 /* fixed-size regions: text and data that load or change never move what is below them */
@@ -92,6 +109,8 @@
   .panel { overflow: visible; }
   .splitter { display: none; }
   .viewport { block-size: 24rem; }
+  .viewports { block-size: auto; grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); } /* always stacked, 24rem each */
+  .viewports__split { display: none; } /* so the split has nothing to switch */
 }
 
 /* the run bar: compact controls (it covers less of the model), the two menus kept together when it wraps */

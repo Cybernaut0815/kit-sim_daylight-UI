@@ -1,8 +1,8 @@
-// The run bar's two menus.
-// - Views: the model's own cameras and the views saved here. Picking one moves the 3D view there, and orbiting goes on
-//   from it. The current view can be saved under a name, and a saved one removed again (the model's cameras cannot).
-//   Saved views last this session and never go into a file.
-// - Download: the result as USD, glTF or OBJ (download.ts).
+// The run bar's two menus, acting on the active model's view.
+// - Views: the model's own cameras and the views saved here. Picking one moves the 3D view there (linked cameras: every
+//   view), and orbiting goes on from it. The current view can be saved under a name, and a saved one removed again (the
+//   model's cameras cannot). Saved views serve every view, last this session and never go into a file.
+// - Download: the active model's result as USD, glTF or OBJ (download.ts).
 import { useEffect, useState } from 'react';
 import { Box3, Sphere } from 'three';
 import type { UsdViewerElement } from 'usd-viewer';
@@ -13,7 +13,7 @@ import { FORMATS, isUsd, type ExportMode, type Format } from './download';
 /** The next free "View N" name. */
 const nextName = (views: SavedView[]) => `View ${Math.max(0, ...views.map((v) => Number(/^View (\d+)$/.exec(v.name)?.[1] ?? 0))) + 1}`;
 
-export function ViewsMenu({ usd, disabled, views, onSave, onRemove }: { usd: UsdViewerElement; disabled: boolean; views: SavedView[]; onSave: (v: SavedView) => void; onRemove: (id: string) => void }) {
+export function ViewsMenu({ usd, model, disabled, views, onSave, onRemove }: { usd: UsdViewerElement; model?: string; disabled: boolean; views: SavedView[]; onSave: (v: SavedView) => void; onRemove: (id: string) => void }) {
   const [cameras, setCameras] = useState<StageCamera[]>(() => usd.cameras);
   const [name, setName] = useState('');
   useEffect(() => {
@@ -33,7 +33,7 @@ export function ViewsMenu({ usd, disabled, views, onSave, onRemove }: { usd: Usd
     setName('');
   };
   return (
-    <MenuButton id="views-menu" label="Views" disabled={disabled} title="Jump to a camera of the model or a saved view; save the current view">
+    <MenuButton id="views-menu" label="Views" disabled={disabled} title={`${model ? `Model ${model}, the pressed view: ` : ''}jump to a camera of the model or a saved view; save the current view. Saved views serve every view for this session, never a download`}>
       {(close) => (
         <>
           <button className="menu__item" type="button" onClick={() => { usd.frame(); close(); }}><span>Whole model</span></button>
@@ -80,11 +80,11 @@ const help = (format: Format, mode: ExportMode) => ({
   obj: 'The model as drawn, in metres, receivers coloured as shown (vertex colours). OBJ holds no values.',
 })[format === 'usdc' || format === 'usd' ? 'usda' : format];
 
-export function DownloadMenu({ ready, exporting, error, onDownload }: { ready: boolean; exporting: boolean; error: string | null; onDownload: (format: Format, mode: ExportMode) => void }) {
+export function DownloadMenu({ model, ready, exporting, error, onDownload }: { model?: string; ready: boolean; exporting: boolean; error: string | null; onDownload: (format: Format, mode: ExportMode) => void }) {
   const [format, setFormat] = useState<Format>('usdz'), [mode, setMode] = useState<ExportMode>('replace');
   const usdFormat = isUsd(format);
   return (
-    <MenuButton id="download-menu" label="Download" disabled={!ready} busy={exporting} title={ready ? 'The result as USD, glTF or OBJ' : 'Run the simulation first'}>
+    <MenuButton id="download-menu" label="Download" disabled={!ready} busy={exporting} title={ready ? `${model ? `Model ${model}'s result` : 'The result'} as USD, glTF or OBJ` : 'Run the simulation first'}>
       {() => (
         <>
           <div className="views__format">

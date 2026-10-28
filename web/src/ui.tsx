@@ -13,6 +13,7 @@ const ICONS = {
   chevronRight: <path d="m9 6 6 6-6 6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
+  plus: <path d="M12 5v14M5 12h14" />,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {
@@ -81,6 +82,13 @@ export function Swatch({ color, outline }: { color?: string; outline?: boolean }
     </svg>
   );
 }
+
+/** The models' letters by slot. */
+export const LETTERS = 'ABCD';
+/** A model's series colour: the chart category token of its slot, fixed for its life. */
+export const cat = (slot: number) => `var(--chart-cat-${slot + 1})`;
+/** A model's mark: its colour always beside its letter (never colour alone), its name after it when given. */
+export const Tag = ({ slot, name }: { slot: number; name?: string }) => <><Swatch color={cat(slot)} outline /> <span className="line">{LETTERS[slot]}{name ? ` ${name}` : ''}</span></>;
 
 /** Small reset-to-default icon button, placed beside the setting it resets; `label` when "Reset <what> to default" is not
  *  what it does. */

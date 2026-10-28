@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Matrix4, Vector3 } from 'three';
-import { cameraView } from './views';
+import type { ViewState } from 'usd-viewer';
+import { cameraView, link } from './views';
 
 const Y_UP = new Matrix4(), Z_UP = new Matrix4().makeRotationX(-Math.PI / 2); // three.root of a Y-up / a Z-up stage
 const near = (a: ArrayLike<number>, b: ArrayLike<number>, eps = 1e-6) => Array.from(a).every((x, i) => Math.abs(x - b[i]) < eps);
@@ -20,5 +21,41 @@ describe('cameraView', () => {
     expect(near(v.eye, new Vector3(0, -10, 2).applyMatrix4(Z_UP).toArray())).toBe(true); // world = root x stage
     expect(near(new Vector3(...v.target).sub(new Vector3(...v.eye)).normalize().toArray(), [0, 0, -1])).toBe(true); // stage +Y is world -Z
     expect([v.projection, v.height]).toEqual(['orthographic', 3]);
+  });
+});
+
+describe('link', () => {
+  /** A view as the viewer has it: setting it nudges the eye (OrbitControls rounds what it is given); draw() runs its hooks. */
+  const view = (x: number) => {
+    let v: ViewState = { eye: [x, 0, 10], target: [0, 0, 0], fov: 45, projection: 'perspective', height: 1 };
+    const p = {
+      writes: 0,
+      get view() { return v; },
+      set view(s: ViewState) { p.writes++; v = { ...s, eye: [s.eye[0] + 1e-9, s.eye[1], s.eye[2]] }; },
+      three: { beforeRender: new Set<() => void>() },
+      draw: () => { for (const h of p.three.beforeRender) h(); },
+      orbit: (x2: number) => { v = { ...v, eye: [x2, 0, 10] }; },
+    };
+    return p;
+  };
+  it('the lead hands its view over; an orbit in one view reaches the others, never echoed back; unlink stops it', () => {
+    const [a, b, c] = [view(1), view(2), view(3)];
+    const unlink = link([a, b, c], b);
+    expect([a.view.eye[0], c.view.eye[0]].map((x) => Math.round(x))).toEqual([2, 2]);
+    const writes = () => [a.writes, b.writes, c.writes];
+    const before = writes();
+    for (const p of [a, b, c]) p.draw();
+    expect(writes()).toEqual(before); // nothing moved: nothing written
+    a.orbit(7);
+    a.draw();
+    expect([b.view.eye[0], c.view.eye[0]].map((x) => Math.round(x))).toEqual([7, 7]);
+    const after = writes();
+    for (const p of [b, c, a]) p.draw();
+    expect(writes()).toEqual(after); // the others' read-back is no change of theirs
+    unlink();
+    c.orbit(9);
+    c.draw();
+    expect(Math.round(a.view.eye[0])).toBe(7);
+    expect([a, b, c].every((p) => p.three.beforeRender.size === 0)).toBe(true);
   });
 });

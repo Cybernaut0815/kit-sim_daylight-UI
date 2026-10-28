@@ -44,6 +44,20 @@ export function globalRange(values: Float64Array[], col: number): [number, numbe
   return [lo, hi];
 }
 
+/** Finite [min, max] of the column named `name` over several results (one without it adds nothing): one colour scale
+ *  for every model. */
+export function unionRange(results: readonly { values: Float64Array[]; columns: readonly string[] }[], name: string): [number, number] {
+  let lo = Infinity, hi = -Infinity;
+  for (const r of results) {
+    const c = r.columns.indexOf(name);
+    if (c < 0) continue;
+    const [a, b] = globalRange(r.values, c);
+    lo = Math.min(lo, a);
+    hi = Math.max(hi, b);
+  }
+  return [lo, hi];
+}
+
 /**
  * Fixed bins over `range` (default the column's global range); `shares[bin]` = share of the total weight (area),
  * `counts[bin]` = elements; every finite row inside the range lands in exactly one bin, `below` / `above` = the shares

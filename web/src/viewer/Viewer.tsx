@@ -1,7 +1,8 @@
-// A 3D view. Its USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation and selection
-// (kept in step with the store); on top of it: the result colours as overlays on the receivers, the hover tint, the
-// sun path and the ground grid in the viewer's overlay group, the probe readout and the scene info. Dragging the sun
-// path's suns, handles, arcs and compass ring edits the time settings and north.
+// A 3D view, one per model. Its USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation
+// and selection (kept in step with the store); on top of it: the result colours as overlays on the receivers, the hover
+// tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
+// several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
+// and north. A click or focus in the view makes its model the active one.
 import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -11,7 +12,7 @@ import { cssVar } from '../lib/cssVar';
 import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult } from '../store';
-import { Illustration } from '../ui';
+import { Alert, Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
@@ -39,9 +40,10 @@ interface Props {
   usd: UsdViewerElement; slot: number; // this view's viewer (./usd.ts) and its model's slot
   meshes: ReadonlyMap<string, THREE.Object3D>; // row id -> the viewer's object for it
   stage: number; // bumped per opened model: framed then (a variant switch keeps the camera)
-  loading: boolean; objects: ObjectRow[]; selected: Set<string>; hovered: string | null;
+  follow: UsdViewerElement | null; // linked cameras: a view that shows a model, whose camera a new model takes instead of its own framing
+  loading: boolean; error?: string | null; objects: ObjectRow[]; selected: Set<string>; hovered: string | null; // error: shown here (several models)
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
-  probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the run bar under the model
+  probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
 }
 
@@ -64,7 +66,7 @@ function SceneInfo({ objects, unit, stats }: { objects: ObjectRow[]; unit: numbe
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, loading, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
   const [{ PAINT, TINT, EMPTY, tint }] = useState(look);
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
@@ -273,8 +275,13 @@ export function Viewer({ usd, slot, meshes, stage, loading, objects, selected, h
     usd.three.invalidate();
   }, [meshes, sun?.site, sun?.time, theme, shown]); // eslint-disable-line react-hooks/exhaustive-deps -- not north or size
 
-  // The model and the dome in view, once the sun path is placed (the grid opts out of framing: it is a floor).
-  useEffect(() => { if (meshes.size) usd.frame(); }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps -- per model, not per variant
+  // A new model, once the sun path is placed: next to a linked view, that view's camera; else the model and the dome in
+  // view (the grid opts out of framing: it is a floor).
+  useEffect(() => {
+    if (!meshes.size) return;
+    if (follow) usd.view = follow.view;
+    else usd.frame();
+  }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps -- per model, not per variant
 
   // The ground grid under the model, in the theme's hairline colours: a new geometry on the one grid object (a new
   // material would compile its shaders again).
@@ -356,19 +363,29 @@ export function Viewer({ usd, slot, meshes, stage, loading, objects, selected, h
     usd.select(objects.filter((o) => selected.has(o.id)).flatMap((o) => o.paths ?? [o.path])); // every copy of a natively instanced row
   }, [selected, objects]);
 
+  // A click or focus anywhere in the view (not pointerdown: a value typed in the Materials table commits on blur, which
+  // comes first, to the model it was typed for).
+  const activate = () => dispatch({ type: 'ACTIVE', slot });
   return (
-    <div ref={host} className="viewport">
+    <div ref={host} className="viewport" onClick={activate} onFocus={activate}>
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
-      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} stats={stats} />}
-      {ready && !hasModel && !loading && (
-        <div className="empty-state">
-          <div className="empty-state__icon"><Illustration kind="model" /></div>
-          <h3>Open a model</h3>
-          <p>Pick a .usd, .usda, .usdc, .usdz, .glb, .gltf or .obj in the Model panel. Click a mesh to select it; Shift adds, Ctrl removes, Shift+drag selects a box.</p>
+      {children && (
+        <div className="viewport__name">
+          {children}
+          {error && hasModel && <span className="badge badge--warning" title={error}><span className="dot" />Problems</span>}
         </div>
       )}
-      {children && <div className="viewport__bar">{children}</div>}
+      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} stats={stats} />}
+      {ready && !hasModel && !loading && (error
+        ? <div className="empty-state"><Alert title="Problems loading the model">{error}</Alert></div>
+        : (
+          <div className="empty-state">
+            <div className="empty-state__icon"><Illustration kind="model" /></div>
+            <h3>Open a model</h3>
+            <p>Pick a .usd, .usda, .usdc, .usdz, .glb, .gltf or .obj in the Model panel. Click a mesh to select it; Shift adds, Ctrl removes, Shift+drag selects a box.</p>
+          </div>
+        ))}
     </div>
   );
 }

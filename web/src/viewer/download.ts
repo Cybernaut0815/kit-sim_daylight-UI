@@ -10,11 +10,11 @@
 import type { BufferAttribute, InterleavedBufferAttribute, Mesh, Object3D } from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import type { StageInfo, UsdViewerElement } from 'usd-viewer';
-import { lin, rgbFor, scaleFor } from '../lib/gradients';
+import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { exportMatrices, gltfScene, objText, type Drawn } from '../lib/sceneexport';
 import { freeName, overlay, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
 import { usdz } from '../lib/usdz';
-import type { ObjectRow, RunResult, Settings } from '../store';
+import type { ObjectRow, RunResult } from '../store';
 
 export type ExportMode = 'replace' | 'variants';
 export type Format = 'usdz' | 'usda' | 'usdc' | 'usd' | 'glb' | 'gltf' | 'obj';
@@ -24,7 +24,8 @@ export const isUsd = (f: Format) => f.startsWith('usd');
 export interface PickedModel { files: [path: string, file: File][]; root: string; info: StageInfo }
 export interface DownloadOptions {
   usd: UsdViewerElement; // the model's viewer
-  result: RunResult; objects: ObjectRow[]; meshes: ReadonlyMap<string, Object3D>; viz: Settings['viz']; column: number; model: PickedModel;
+  result: RunResult; objects: ObjectRow[]; meshes: ReadonlyMap<string, Object3D>; column: number; model: PickedModel;
+  scales: Scale[]; // per result column, the scale shown (one over every model's values)
   weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
 }
 
@@ -49,7 +50,6 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
   const { usd } = o, stem = o.model.root.replace(/^.*\//, '').replace(/\.\w+$/, '');
   if (!isUsd(format)) return drawnFile(format, o, stem);
   const r = o.result, perFace = r.on === 'faces', items = usd.three.items();
-  const scales = r.columns.map((_, c) => scaleFor(r.values, r.columns, c, o.viz));
   const meshes: ResultMesh[] = await Promise.all(r.receivers.map(async (id, k) => {
     const row = o.objects.find((x) => x.id === id), g = r.manifest.meshes[k], object = o.meshes.get(id) as Mesh | undefined;
     if (!row || !object) throw new Error('The model changed since this run: run it again, then download.');
@@ -63,7 +63,7 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
       const raw = new Float64Array(g.count);
       for (let i = 0; i < g.count; i++) raw[i] = r.values[g.first + i][c];
       const data = perFace ? toPolygons(raw, poly.polygonOf, poly.counts.length, areas ?? new Float64Array(g.count).fill(1)) : toCorners(raw, poly.corners);
-      return { name, data, rgb: rgbFor(scales[c], data, null).map(lin) };
+      return { name, data, rgb: rgbFor(o.scales[c], data, null).map(lin) };
     });
     return {
       path: row.path, interp: perFace ? 'uniform' : 'faceVarying',
@@ -120,7 +120,7 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
 /** glTF / GLB / OBJ: every visible mesh as drawn, in metres; receivers with the shown result and every value. */
 async function drawnFile(format: Format, o: DownloadOptions, stem: string): Promise<void> {
   const { usd } = o, r = o.result, perFace = r.on === 'faces', scale = o.model.info.metersPerUnit;
-  const shown = scaleFor(r.values, r.columns, o.column, o.viz), receivers = new Map(r.receivers.map((id, k) => [o.meshes.get(id), k]));
+  const shown = o.scales[o.column], receivers = new Map(r.receivers.map((id, k) => [o.meshes.get(id), k]));
   usd.three.root.updateMatrixWorld(true);
   const drawn: Drawn[] = [];
   for (const item of usd.three.items()) {

@@ -1,6 +1,5 @@
 // Result colour scales: evenly spaced hex stops (matplotlib / Ladybug data colormaps, data not UI chrome), the
 // per-quantity defaults, and the "problem range" that paints values outside [lo, hi] in two user-chosen colours.
-import { globalRange } from './result';
 import type { Settings } from '../store';
 
 export interface Gradient { key: string; label: string; stops: string[] }
@@ -52,9 +51,10 @@ export const hexAt = (g: Gradient, t: number): string => '#' + colorAt(g, t).map
 
 export interface Scale { gradient: Gradient; vmin: number; vmax: number; lo: number | null; hi: number | null; below: string; above: string }
 
-/** A result column's scale: its quantity's gradient, legend domain (the data range unless set), problem range, colours. */
-export function scaleFor(values: Float64Array[], columns: string[], column: number, viz: Settings['viz']): Scale {
-  const q = columns[column].split('_')[0], { gradients, scales, ranges, colors } = viz, [dmin, dmax] = globalRange(values, column);
+/** A result column's scale: its quantity's gradient, legend domain (`range`, the data's: every shown model's, unless
+ *  Min or Max is set), problem range, colours. */
+export function scaleFor(column: string, [dmin, dmax]: [number, number], viz: Settings['viz']): Scale {
+  const q = column.split('_')[0], { gradients, scales, ranges, colors } = viz;
   return { gradient: gradientFor(q, gradients[q]), vmin: scales[q]?.min ?? dmin, vmax: scales[q]?.max ?? dmax, lo: ranges[q]?.lo ?? null, hi: ranges[q]?.hi ?? null, below: colors.below, above: colors.above };
 }
 
