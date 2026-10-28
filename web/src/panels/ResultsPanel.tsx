@@ -140,7 +140,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
           const d = datas[k], v = d ? get(d, k) : NaN;
           return (
             <td key={models[k].slot} className="num">
-              {fmt(v)}<br /><span className="text-muted">{k > 0 && d && A ? fmtDiff(v - get(A, 0), diff) || '–' : '–'}</span>
+              {d ? fmt(v) : '–'}<br /><span className="text-muted">{k > 0 && d && A ? fmtDiff(v - get(A, 0), diff) || '–' : '–'}</span>
             </td>
           );
         };

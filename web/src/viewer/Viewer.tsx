@@ -2,8 +2,9 @@
 // and selection (kept in step with the store); on top of it: the result colours as overlays on the receivers, the hover
 // tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
 // several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
-// and north. A click or focus in the view makes its model the active one.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type RefObject } from 'react';
+// and north. A click or a key pressed in the view makes its model the active one (focus alone does not: Tab passes
+// the views without changing the model the panels and the run bar act on).
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { applyToThree } from 'daylight-mesh';
@@ -370,11 +371,12 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.select(objects.filter((o) => selected.has(o.id)).flatMap((o) => o.paths ?? [o.path])); // every copy of a natively instanced row
   }, [selected, objects]);
 
-  // A click or focus anywhere in the view (not pointerdown: a value typed in the Materials table commits on blur, which
-  // comes first, to the model it was typed for).
+  // A click or a key anywhere in the view (not pointerdown: a value typed in the Materials table commits on blur, which
+  // comes first, to the model it was typed for); Tab and a lone modifier only pass through (Shift+Tab presses Shift here).
   const activate = () => dispatch({ type: 'ACTIVE', slot });
+  const onKey = (e: KeyboardEvent) => { if (!/^(Tab|Shift|Control|Alt|Meta)$/.test(e.key)) activate(); };
   return (
-    <div ref={host} className="viewport" onClick={activate} onFocus={activate}>
+    <div ref={host} className="viewport" onClick={activate} onKeyDown={onKey}>
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
       {children && (

@@ -33,7 +33,7 @@ export function ViewsMenu({ usd, model, disabled, views, onSave, onRemove }: { u
     setName('');
   };
   return (
-    <MenuButton id="views-menu" label="Views" disabled={disabled} title={`${model ? `Model ${model}, the pressed view: ` : ''}jump to a camera of the model or a saved view; save the current view. Saved views serve every view for this session, never a download`}>
+    <MenuButton id="views-menu" label="Views" disabled={disabled} title={`${model ? `Model ${model}, the pressed view: jump` : 'Jump'} to a camera of the model or a saved view; save the current view. Saved views serve every view for this session, never a download`}>
       {(close) => (
         <>
           <button className="menu__item" type="button" onClick={() => { usd.frame(); close(); }}><span>Whole model</span></button>

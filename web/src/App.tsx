@@ -78,6 +78,7 @@ export default function App() {
   const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh (+ areas on demand): converted once, uploaded once, referenced by id
   const dropConv = (slot: number) => { for (const [id, c] of conv.current) if (c.slot === slot) conv.current.delete(id); };
   const abort = useRef<AbortController | null>(null);
+  const jobs = useRef<Record<number, AbortController>>({}); // per slot, its job on its way: removing the model ends it
   const busy = useRef(false), held = useRef(false); // one batch of runs per tab; a click waiting for the materials
   const lastKey = useRef<Record<number, string | null>>({}); // per slot: the key of the last run started
   const [ended, setEnded] = useState(0); // bumped when a batch ends, so Auto re-checks with the settings of that moment
@@ -243,9 +244,11 @@ export default function App() {
       el.ready.then(() => { if (el.session.refineLevel !== subdiv.current) void el.usd.setComplexity(subdiv.current); }, () => {});
     }
   }, [slots]);
-  /** A model goes: its view and its results; its element and core stay for the next model in its slot (dispose() is final). */
+  /** A model goes: its view, its results and its job on its way (deleted on the server; the batch goes on); its element and
+   *  core stay for the next model in its slot (dispose() is final). */
   const onRemove = useCallback((slot: number) => {
     dropConv(slot);
+    jobs.current[slot]?.abort();
     delete model.current[slot];
     delete lastKey.current[slot];
     setPanes(({ [slot]: _gone, ...rest }) => rest);
@@ -328,18 +331,26 @@ export default function App() {
           ready: () => mine() && [...p.receivers, ...p.shades].every((o) => conv.current.has(o.id)),
           run: async (signal: AbortSignal) => {
             const t0 = performance.now(); // its own round trip, not the models' before it
-            const res = await runRemote('', {
-              sensors: p.receivers.map((o) => objOf(conv.current.get(o.id)!)),
-              context: p.shades.map((o) => objOf(conv.current.get(o.id)!)),
-              epw, args: p.args, signal, clientId: CLIENT_ID,
-              onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }); },
-            });
-            res.manifest.meshes.forEach((g, i) => {
-              const o = p.receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
-              if (!o || g.count !== want) throw new Error(`${o?.name ?? g.name}: the server returned ${g.count} rows, expected ${want}. Reload the model and run again.`);
-            });
-            const { values_b64: _decoded, ...manifest } = res.manifest as RemoteManifest & { values_b64?: string }; // decoded into values already: not kept twice
-            if (mine()) dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, manifest, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
+            const own = (jobs.current[slot] = new AbortController()), off = () => own.abort(); // the batch's cancel, or its model removed
+            signal.addEventListener('abort', off);
+            try {
+              const res = await runRemote('', {
+                sensors: p.receivers.map((o) => objOf(conv.current.get(o.id)!)),
+                context: p.shades.map((o) => objOf(conv.current.get(o.id)!)),
+                epw, args: p.args, signal: own.signal, clientId: CLIENT_ID,
+                onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }); },
+              });
+              res.manifest.meshes.forEach((g, i) => {
+                const o = p.receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
+                if (!o || g.count !== want) throw new Error(`${o?.name ?? g.name}: the server returned ${g.count} rows, expected ${want}. Reload the model and run again.`);
+              });
+              if (!mine()) throw new Error('changed'); // its model changed during the job: runBatch ends it idle, never a new model's result
+              const { values_b64: _decoded, ...manifest } = res.manifest as RemoteManifest & { values_b64?: string }; // decoded into values already: not kept twice
+              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, manifest, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
+            } finally {
+              signal.removeEventListener('abort', off);
+              if (jobs.current[slot] === own) delete jobs.current[slot];
+            }
           },
         };
       }), ctrl.signal, (slot, end) => {
@@ -399,19 +410,19 @@ export default function App() {
   const staleKey = stale.map(Number).join('');
   const compared = useMemo<Compared[]>(() => state.models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [state.models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves
   const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = state.models[ai], ap = panes[am.slot] ?? NO_PANE;
-  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ result: RunResult; message: string } | null>(null); // one download at a time; its error is its result's
   const onDownload = useCallback(async (format: Format, mode: ExportMode) => {
-    const picked = model.current[am.slot]?.picked, col = cols[ai];
-    if (!am.result || col < 0 || !picked) return;
+    const picked = model.current[am.slot]?.picked, col = cols[ai], result = am.result;
+    if (!result || col < 0 || !picked) return;
     setExporting(true);
     setExportError(null);
     try {
       await download(format, mode, {
-        usd: viewer(am.slot).el, result: am.result, objects: am.objects, meshes: ap.meshes, column: col, model: picked, weightsFor,
-        scales: am.result.columns.map((c) => scaleFor(c, unionRange(results, c), s.viz)), // the colours on screen: one scale over every model
+        usd: viewer(am.slot).el, result, objects: am.objects, meshes: ap.meshes, column: col, model: picked, weightsFor,
+        scales: result.columns.map((c) => scaleFor(c, unionRange(results, c), s.viz)), // the colours on screen: one scale over every model
       });
     } catch (e) {
-      setExportError((e as Error).message);
+      setExportError({ result, message: (e as Error).message });
     } finally {
       setExporting(false);
     }
@@ -454,24 +465,28 @@ export default function App() {
               </aside>
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
-            {/* one view per model, in fixed cells from the moment its tab is added: loads never move them; the run bar spans them */}
-            <div className={`viewports${n === 4 ? ' viewports--grid' : n > 1 && ui.split === 'stacked' ? ' viewports--stacked' : ''}`}>
-              {state.models.map((m, i) => {
-                const p = panes[m.slot] ?? NO_PANE, f = ui.link ? loaded.find((k) => k !== m.slot) : undefined;
-                return (
-                  <Viewer
-                    key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
-                    objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={state.colourBy} result={cols[i] >= 0 ? m.result : null} column={Math.max(cols[i], 0)}
-                    scale={scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={sunView}
-                  >
-                    {n > 1 && (
-                      <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
-                        <Tag slot={m.slot} name={m.name} />
-                      </button>
-                    )}
-                  </Viewer>
-                );
-              })}
+            {/* the views, then the run bar: with one model it lies over the bottom of the view, with several it is a row under
+                them and never covers a model */}
+            <div className={`viewports${n > 1 ? ' viewports--many' : ''}`}>
+              {/* one view per model, in fixed cells from the moment its tab is added: loads never move them */}
+              <div className={`viewports__grid${n === 4 ? ' viewports__grid--four' : n > 1 && ui.split === 'stacked' ? ' viewports__grid--stacked' : ''}`}>
+                {state.models.map((m, i) => {
+                  const p = panes[m.slot] ?? NO_PANE, f = ui.link ? loaded.find((k) => k !== m.slot) : undefined;
+                  return (
+                    <Viewer
+                      key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
+                      objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={state.colourBy} result={cols[i] >= 0 ? m.result : null} column={Math.max(cols[i], 0)}
+                      scale={scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={sunView}
+                    >
+                      {n > 1 && (
+                        <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
+                          <Tag slot={m.slot} name={m.name} />
+                        </button>
+                      )}
+                    </Viewer>
+                  );
+                })}
+              </div>
               {/* left: the Views and Download menus (the active view's); middle: how the views share the space and the camera;
                   right-aligned, the button's label never changes and Cancel appears on its left: the tickbox stays put;
                   progress shows in the Results run lines */}
@@ -479,7 +494,7 @@ export default function App() {
                 <div className="cluster cluster--between">
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} />
-                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError} onDownload={onDownload} />
+                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
                   </div>
                   {n > 1 && (
                     <div className="cluster">
@@ -492,7 +507,8 @@ export default function App() {
                     </div>
                   )}
                   <div className="cluster cluster--end">
-                    {busyBar && <button className="btn btn--ghost" type="button" onClick={() => abort.current?.abort()}>Cancel</button>}
+                    {/* with several models kept, hidden while idle: the bar under the views never changes its height */}
+                    {(busyBar || n > 1) && <button className={`btn btn--ghost${busyBar ? '' : ' viewport__idle'}`} type="button" disabled={!busyBar} onClick={() => abort.current?.abort()}>Cancel</button>}
                     <label title="Runs the simulation whenever the location, the date, the time or a setting changes">
                       <input type="checkbox" id="auto-run" checked={ui.auto} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
                     </label>

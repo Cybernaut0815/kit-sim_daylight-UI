@@ -2,7 +2,7 @@
 // and folder inputs, the roles of the selected meshes, and the stage's prim tree (PrimTree: the hierarchy as in the USD
 // viewer, selected as there; a prim's role goes to every mesh below it). The tree sits in a fixed-height,
 // user-resizable box, so loading a model never moves the panels below it.
-import { Fragment, memo, useCallback, type Dispatch } from 'react';
+import { memo, useCallback, type Dispatch } from 'react';
 import type { UsdViewerElement } from 'usd-viewer';
 import type { Action, Model, Role } from '../store';
 import { Alert, Icon, LETTERS, Section, Tag } from '../ui';
@@ -32,30 +32,29 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
     <Section id="model" title="Model">
       <div className="tabs model-tabs" role="group" aria-label="Models to compare">
         {models.map((m) => (
-          <Fragment key={m.slot}>
+          <span key={m.slot} className="model-tabs__item">
             <button className="tabs__tab" type="button" aria-current={m.slot === active ? 'page' : undefined} aria-label={about(m)} title={about(m)} onClick={() => dispatch({ type: 'ACTIVE', slot: m.slot })}>
               <Tag slot={m.slot} />
             </button>
             {models.length > 1 && (
               <button
                 className="icon-btn icon-btn--ghost" type="button" disabled={busy} aria-label={`Remove model ${LETTERS[m.slot]}`}
-                title={`Remove model ${LETTERS[m.slot]}: its view and its results go; the other models keep their letters and colours`}
+                title={`Remove model ${LETTERS[m.slot]}: its view, its results and its run go; the other models keep their letters and colours`}
                 onClick={() => { onRemove(m.slot); focusTab(); }}
               >
                 <Icon name="close" />
               </button>
             )}
-          </Fragment>
+          </span>
         ))}
-        {models.length < 4 && (
-          <button
-            className="tabs__tab" type="button" aria-label="Add a model to compare"
-            title="Add a model to compare (up to four): its own 3D view and its own results, run with the same site, weather, time and settings"
-            onClick={() => { dispatch({ type: 'ADD' }); focusTab(); }}
-          >
-            <Icon name="plus" />
-          </button>
-        )}
+        {/* kept at four, disabled: the row never changes its height */}
+        <button
+          className="tabs__tab" type="button" disabled={models.length >= 4} aria-label="Add a model to compare"
+          title={models.length < 4 ? 'Add a model to compare (up to four): its own 3D view and its own results, run with the same site, weather, time and settings' : 'Four models at most: remove one to add another'}
+          onClick={() => { dispatch({ type: 'ADD' }); focusTab(); }}
+        >
+          <Icon name="plus" />
+        </button>
       </div>
       <div className="field">
         <label className="field__label" htmlFor="model-files">Model files</label>

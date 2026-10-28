@@ -10,14 +10,15 @@ import type { TextureRead, TextureStats } from '../lib/optics';
  *  are per core). Listening from before the first open(): a flush sends a material ahead of the meshes bound to it, so
  *  once open() or an edit has resolved, a bound rid without an entry has none. */
 export interface Slot { el: UsdViewerElement; materials: Map<number, { path: string; network?: MaterialNetwork }> }
-const pool: Slot[] = [];
+
+// A Vite hot update re-runs this module: the pool outlives it, so every slot keeps its element (worker, core, stage, its
+// listeners and materials), attached or not; never a second core under it.
+const pool: Slot[] = import.meta.hot ? (import.meta.hot.data.pool ??= []) : [];
 
 /** Slot k's viewer (model A..D), made on first use with the app's look. */
 export function viewer(slot: number): Slot {
   if (pool[slot]) return pool[slot];
-  // A Vite hot update re-runs this module: reuse the live element (worker, core, stage), never boot a second one under it.
-  const el = document.querySelector<UsdViewerElement>(`usd-viewer[data-slot="${slot}"]`) ?? document.createElement('usd-viewer');
-  el.dataset.slot = String(slot);
+  const el = document.createElement('usd-viewer');
   el.setAttribute('panels', 'none'); // a bare viewport: the app has its own panels
   el.setAttribute('readonly', ''); // no edits from the view: the meshes are converted once per load
   el.purposes = ['default', 'render']; // what the core's own USD readers keep
