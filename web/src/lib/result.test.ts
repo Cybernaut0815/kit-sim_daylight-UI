@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, shareAbove, shareBelow, unionRange, unitFor, vertexAreas } from './result';
+import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, shareAbove, shareBelow, fmtDiff, unionRange, unitFor, vertexAreas } from './result';
 
 // unit square in the XY plane as two triangles
 const pos = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -81,5 +81,9 @@ describe('several models', () => {
     expect(unionRange([a, b, c], 'radiation_front')).toEqual([-5, 40]);
     expect(unionRange([a, b, c], 'direct_front')).toEqual([1, 3]);
     expect(unionRange([c], 'radiation_front')).toEqual([Infinity, -Infinity]);
+  });
+  it('fmtDiff: signed, in the value\'s format, nothing without a number', () => {
+    expect([fmtDiff(12.34), fmtDiff(-1500), fmtDiff(0), fmtDiff(NaN), fmtDiff(Infinity)]).toEqual(['+12.3', '−1,500', '±0', '', '']);
+    expect(fmtDiff(-0.05, (v) => `${fmtNum(100 * v)} pts`)).toBe('−5 pts');
   });
 });

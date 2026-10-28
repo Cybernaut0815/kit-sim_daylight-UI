@@ -149,3 +149,6 @@ export function fmtNum(v: number): string {
   if (Math.abs(v) >= 1000) return Math.round(v).toLocaleString('en-GB');
   return Number(v.toPrecision(3)).toString();
 }
+
+/** A difference to the reference model, signed, in the value's format; '' when either side has none. */
+export const fmtDiff = (d: number, fmt: (v: number) => string = fmtNum): string => (Number.isFinite(d) ? `${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d))}` : '');

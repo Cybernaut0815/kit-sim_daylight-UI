@@ -1,6 +1,7 @@
 // Cumulative area curve: the share of area at or below each value ("x % of the area gets less than v"), with the
 // problem range tinted, P10 / P50 / P90 marked and the cursor value's percentile. It spans the colour scale: the curve
-// starts at the share below the range and ends at the share up to its top.
+// starts at the share below the range and ends at the share up to its top. Several models (`curves`): one line each in
+// its colour, the cursor's share on each.
 import { type Scale } from '../lib/gradients';
 import { fmtNum, percentile, shareBelow, type Cumulative } from '../lib/result';
 import { pct } from '../ui';
@@ -8,29 +9,37 @@ import { AXIS, FONT, GRID, STRONG, TEXT, fmtTick, niceTicks } from './axes';
 
 const W = 320, H = 170, L = 34, R = 8, TOP = 10, BOTTOM = 30;
 
-export function AreaCurve({ cum, domain, scale, unit, probe }: { cum: Cumulative; domain: [number, number]; scale: Scale; unit: string; probe: number | null }) {
+export function AreaCurve({ cum, domain, scale, unit, probe, curves }: {
+  cum: Cumulative; domain: [number, number]; scale: Scale; unit: string; probe: number | null;
+  curves?: { color: string; cum: Cumulative }[]; // several models: one line each
+}) {
   const [dmin, dmax] = domain, plotW = W - L - R, plotH = H - TOP - BOTTOM, base = TOP + plotH;
   const x = (v: number) => L + Math.min(Math.max((v - dmin) / (dmax - dmin || 1), 0), 1) * plotW;
   const y = (share: number) => base - share * plotH;
-  const n = cum.v.length, inside = (v: number) => Number.isFinite(v) && v >= dmin && v <= dmax;
-  let i0 = 0, i1 = n; // the elements inside the range
-  while (i0 < n && cum.v[i0] < dmin) i0++;
-  while (i1 > i0 && cum.v[i1 - 1] > dmax) i1--;
-  const step = Math.max(1, Math.floor((i1 - i0) / 200));
-  const pts: string[] = [`${x(dmin)},${y(i0 ? cum.cw[i0 - 1] : 0)}`];
-  for (let i = i0; i < i1; i += step) pts.push(`${x(cum.v[i])},${y(cum.cw[i])}`);
-  if (i1 > i0) pts.push(`${x(cum.v[i1 - 1])},${y(cum.cw[i1 - 1])}`);
-  pts.push(`${x(dmax)},${y(i1 ? cum.cw[i1 - 1] : 0)}`);
+  const inside = (v: number) => Number.isFinite(v) && v >= dmin && v <= dmax;
+  /** The curve's points over the range, at most ~200. */
+  const line = (c: Cumulative) => {
+    const n = c.v.length;
+    let i0 = 0, i1 = n; // the elements inside the range
+    while (i0 < n && c.v[i0] < dmin) i0++;
+    while (i1 > i0 && c.v[i1 - 1] > dmax) i1--;
+    const step = Math.max(1, Math.floor((i1 - i0) / 200));
+    const pts: string[] = [`${x(dmin)},${y(i0 ? c.cw[i0 - 1] : 0)}`];
+    for (let i = i0; i < i1; i += step) pts.push(`${x(c.v[i])},${y(c.cw[i])}`);
+    if (i1 > i0) pts.push(`${x(c.v[i1 - 1])},${y(c.cw[i1 - 1])}`);
+    pts.push(`${x(dmax)},${y(i1 ? c.cw[i1 - 1] : 0)}`);
+    return pts.join(' ');
+  };
   const p = probe !== null && inside(probe) ? { x: x(probe), share: shareBelow(cum, probe) } : null;
   const xTicks = niceTicks(dmin, dmax, 6);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={`Cumulative share of area by ${unit} value; P10 ${fmtNum(percentile(cum, 0.1))}, median ${fmtNum(percentile(cum, 0.5))}, P90 ${fmtNum(percentile(cum, 0.9))}`}>
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={curves ? `Cumulative share of area by ${unit} value, one line per model` : `Cumulative share of area by ${unit} value; P10 ${fmtNum(percentile(cum, 0.1))}, median ${fmtNum(percentile(cum, 0.5))}, P90 ${fmtNum(percentile(cum, 0.9))}`}>
       {scale.lo !== null && scale.lo > dmin && <rect x={L} y={TOP} width={x(scale.lo) - L} height={plotH} fill={scale.below} opacity={0.12} />}
       {scale.hi !== null && scale.hi < dmax && <rect x={x(scale.hi)} y={TOP} width={L + plotW - x(scale.hi)} height={plotH} fill={scale.above} opacity={0.12} />}
       {[0.25, 0.5, 0.75, 1].map((s) => <line key={s} x1={L} x2={L + plotW} y1={y(s)} y2={y(s)} stroke={GRID} />)}
       {[0, 0.25, 0.5, 0.75, 1].map((s) => <text key={s} x={L - 4} y={y(s) + 3} fontSize={FONT} textAnchor="end" fill={TEXT}>{`${100 * s} %`}</text>)}
-      <polyline points={pts.join(' ')} fill="none" stroke={STRONG} strokeWidth={1.5} />
-      {[0.1, 0.5, 0.9].map((q) => {
+      {(curves ?? [{ color: STRONG, cum }]).map((c, k) => <polyline key={k} points={line(c.cum)} fill="none" stroke={c.color} strokeWidth={curves ? 2 : 1.5} />)}
+      {!curves && [0.1, 0.5, 0.9].map((q) => {
         const v = percentile(cum, q), right = x(v) > L + plotW * 0.7; // labels near the right edge turn inwards
         return inside(v) && (
           <g key={q}>
@@ -39,7 +48,13 @@ export function AreaCurve({ cum, domain, scale, unit, probe }: { cum: Cumulative
           </g>
         );
       })}
-      {p && (
+      {p && curves && (
+        <g aria-label={`cursor: ${fmtNum(probe!)} ${unit}`}>
+          <line x1={p.x} x2={p.x} y1={TOP} y2={base} stroke={STRONG} strokeWidth={2} strokeDasharray="4 2" />
+          {curves.map((c, k) => <circle key={k} cx={p.x} cy={y(shareBelow(c.cum, probe!))} r={3.5} fill={c.color} />)}
+        </g>
+      )}
+      {p && !curves && (
         <g aria-label={`cursor: ${pct(p.share)} of the area below ${fmtNum(probe!)} ${unit}`}>
           <line x1={p.x} x2={p.x} y1={TOP} y2={base} stroke={STRONG} strokeWidth={2} strokeDasharray="4 2" />
           <line x1={L} x2={p.x} y1={y(p.share)} y2={y(p.share)} stroke={STRONG} strokeDasharray="4 2" />

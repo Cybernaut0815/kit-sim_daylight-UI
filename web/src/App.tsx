@@ -20,7 +20,7 @@ import { link, type SavedView } from './lib/views';
 import { LocationPanel } from './panels/LocationPanel';
 import { MaterialsPanel } from './panels/MaterialsPanel';
 import { ModelPanel } from './panels/ModelPanel';
-import { ResultsPanel } from './panels/ResultsPanel';
+import { ResultsPanel, type Compared } from './panels/ResultsPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TimePanel } from './panels/TimePanel';
 import { WeatherPanel } from './panels/WeatherPanel';
@@ -396,6 +396,8 @@ export default function App() {
   const domain = useMemo<[number, number]>(() => (shown ? unionRange(results, shown) : [NaN, NaN]), [results, shown]); // ponytail: O(rows) per new result; cache per result if it shows
   const scale = useMemo<Scale | null>(() => (shown ? scaleFor(shown, domain, s.viz) : null), [shown, domain[0], domain[1], s.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- by value: an equal range repaints nothing
   const stale = per.map((p) => !!p.m.result && !inFlight(p.m.run) && p.m.result.key !== p.key && !(autoOn && p.key !== lastKey.current[p.m.slot])); // unless Auto is about to run it
+  const staleKey = stale.map(Number).join('');
+  const compared = useMemo<Compared[]>(() => state.models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [state.models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves
   const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = state.models[ai], ap = panes[am.slot] ?? NO_PANE;
   const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<string | null>(null);
   const onDownload = useCallback(async (format: Format, mode: ExportMode) => {
@@ -502,7 +504,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel slot={am.slot} result={cols[ai] >= 0 ? am.result : null} run={am.run} error={am.error} stale={stale[ai]} auto={autoOn && !slow} objects={am.objects} column={Math.max(cols[ai], 0)} colourBy={state.colourBy} hovered={state.hovered} selected={am.selected} probe={state.probe} bin={state.bin} scale={scale} viz={s.viz} weightsFor={weightsFor} dispatch={dispatch} />
+              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

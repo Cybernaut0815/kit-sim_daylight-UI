@@ -12,8 +12,12 @@ around the model, and every CLI option; run on the GPU box (or tick "Run on ever
 meshes (per-quantity gradients, a problem range painted blue / red) and in charts (legend, area-weighted histogram,
 cumulative area curve, each over the colour scale or the whole data range, range split, per-mesh table); the cursor's
 element is read out on every chart. Set the 3D view to one of the model's cameras or to a view saved in the app (kept
-for the session, never written to a file, removed again from the same menu). Download the result from the bar under the 3D view as `.usdz`,
-`.usda`, `.usdc`, `.usd`, `.glb`, `.gltf` or `.obj`. In USD either the result colours replace the receivers' materials,
+for the session, never written to a file, removed again from the same menu). Compare up to four models: "+" in the
+Model panel adds one (tabs A to D; the Model and Materials panels show the active one, a click in a view makes its model
+active), each in its own 3D view (side by side, stacked or 2 x 2; cameras linked or independent); Run runs every model
+with a receiver, one after another, and the Results show every model on one colour scale, with its difference to the
+first. Download the active model's result from the bar under the 3D views as `.usdz`, `.usda`, `.usdc`, `.usd`,
+`.glb`, `.gltf` or `.obj`. In USD either the result colours replace the receivers' materials,
 or the flattened stage gets a variant set `daylight` on each receiver (`original` plus one variant per result); both
 keep every result column as a value primvar (`primvars:daylight_<result>`) on the polygons the run simulated: a mesh's
 own faces, or the subdivided faces when the run used subdivision, never the triangulation. A `.usdz` packs the model
