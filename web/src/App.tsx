@@ -3,10 +3,12 @@
 // the models one after another), the comparison (one colour scale over every model), the theme mode and the view
 // preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type { Object3D } from 'three';
 import { runRemote, type ObjMesh, type RemoteManifest } from 'daylight-mesh';
-import type { LocalFile } from 'usd-viewer';
+import type { LocalFile, ViewState } from 'usd-viewer';
 import { Splitter } from './Splitter';
+import type { ChartEdit } from './charts/ChartSettings';
 import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args';
 import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
@@ -15,10 +17,10 @@ import { loadFiles, png } from './lib/loaders';
 import { opticsArgs, readKey, resolveOptics, runSwitches, type TextureStats } from './lib/optics';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
-import { faceAreas, fmtNum, unionRange, unitFor, vertexAreas } from './lib/result';
+import { faceAreas, fmtNum, roundNum, unionRange, unitFor, vertexAreas } from './lib/result';
 import { link, type SavedView } from './lib/views';
-import { settled } from './mcp/bridge';
-import { UUID, connect, type Ctl } from './mcp/tools';
+import { exclusive, settled } from './mcp/bridge';
+import { UUID, appView, connect, isStaging, putReport, storedReport, type Ctl } from './mcp/tools';
 import { InfoButton } from './panels/InfoPanel';
 import { LocationPanel } from './panels/LocationPanel';
 import { MaterialsPanel } from './panels/MaterialsPanel';
@@ -27,11 +29,13 @@ import { ResultsPanel, type Compared } from './panels/ResultsPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TimePanel } from './panels/TimePanel';
 import { WeatherPanel } from './panels/WeatherPanel';
+import { changed, generate, generation } from './report/generate';
+import { editChart, parseReports, type AppModel, type Report, type Stored } from './report/spec';
 import { inFlight, initialState, parseSettings, reducer, runBatch, serializeSettings, type Model, type ObjectRow, type Role, type RunResult } from './store';
 import { Icon, LETTERS, Segmented, Tag, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
-import { DownloadMenu, ViewsMenu } from './viewer/Views';
+import { DownloadMenu, ReportsMenu, ViewsMenu } from './viewer/Views';
 import type { SunView } from './viewer/sunpath';
 import { readTexture, viewer } from './viewer/usd';
 
@@ -91,10 +95,13 @@ export default function App() {
   const reading = useRef(false); // one texture at a time: one decoded image in memory
   const onSunPath = useCallback((on: boolean) => setUi((u) => ({ ...u, sunPath: on })), []);
 
+  // not while a shot's look is staged (a report's pinned scale, the sun path off): its restore stores the user's again
   useEffect(() => {
+    if (isStaging()) return;
     try { localStorage.setItem(KEY, serializeSettings(state.settings)); } catch { /* private mode or quota: settings just do not persist */ }
   }, [state.settings]);
   useEffect(() => {
+    if (isStaging()) return;
     try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch { /* same */ }
   }, [ui]);
   // The browser / OS setting drives the theme while the mode is "auto" (index.html applies it before the first paint).
@@ -122,6 +129,61 @@ export default function App() {
   const subdiv = useRef(ui.subdiv);
   subdiv.current = ui.subdiv;
   const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, every view, never in a file
+  const choices = useRef<Record<number, AppModel['choices']>>({}); // per slot, the variant choices made since its file opened: [the file's own, chosen]
+  const [reports, setReports] = useState<Stored[] | null>(null); // the stored reports (null: none here: no agent routes, a LAN tab, mock mode)
+  const listed = useRef(''); // GET /reports' last answer
+  /** The reports fetched again and set (`always`: also when unchanged, for a generation's state to show). */
+  const refreshReports = useCallback(async (always = true) => {
+    const r = await fetch('/reports').catch(() => null);
+    if (!r?.ok || !r.headers.get('Content-Type')?.startsWith('application/json')) return;
+    const text = await r.text();
+    if (!always && text === listed.current) return;
+    listed.current = text;
+    const list = parseReports(JSON.parse(text));
+    flushSync(() => setReports(list)); // committed when this resolves: a tool reads the new list right after
+  }, []);
+  useEffect(() => {
+    const onFocus = () => void refreshReports(false);
+    onFocus();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshReports]);
+  const variants = useCallback((slot: number) => choices.current[slot] ?? {}, []);
+  // A report changed here (a chart's settings in Results, a view's Update in Views): one change at a time with the tool
+  // calls, on the report as stored now, saved with a later updated, so that a save_report made before it is refused.
+  const [reportError, setReportError] = useState<{ title: string; message: string } | null>(null); // the last change or delete that failed
+  const editReport = useCallback((id: string, edit: (r: Report) => Report | null) => exclusive(async () => {
+    setReportError(null);
+    try {
+      const old = (await storedReport(id)).spec, next = edit(old);
+      if (next) await putReport(next, old);
+    } catch (e) {
+      setReportError({ title: 'Report not changed', message: (e as Error).message.replace(/^(id|spec): /, '') });
+    }
+    await refreshReports();
+  }), [refreshReports]);
+  const onReportChart = useCallback((id: string, e: ChartEdit) => {
+    if ('remove' in e && !confirm('Remove this chart from the report, with its caption? This cannot be undone.')) return;
+    void editReport(id, (r) => editChart(r, e));
+  }, [editReport]);
+  // a view block takes the camera `view` (stage units, `mpu` m each); its cutaway moves with it, keeping its distance in
+  // front of the target (a camera moved closer cuts less), and goes once the camera is nearer than that, or looks from
+  // another side (more than 2° off: the cut, set for the old side, would slice into what it shows; the live view has none)
+  const onReportView = useCallback((id: string, i: number, name: string, view: ViewState, mpu: number) => void editReport(id, (r) => {
+    const b = r.blocks[i]; // the block the menu showed, unless the report changed since
+    if (b?.type !== 'view' || b.name !== name) return null;
+    const dir = (v: ViewState) => v.eye.map((e, k) => e - v.target[k]), reach = (v: ViewState) => Math.hypot(...dir(v)) * mpu, { near: was, ...rest } = b;
+    const [p, q] = [dir(view), dir(b.view)], turned = p[0] * q[0] + p[1] * q[1] + p[2] * q[2] < Math.cos(Math.PI / 90) * Math.hypot(...p) * Math.hypot(...q);
+    const near = was === undefined || turned ? 0 : roundNum(was + reach(view) - reach(b.view));
+    return { ...r, blocks: r.blocks.with(i, { ...rest, view, ...(near > 0 ? { near } : {}) }) };
+  }), [editReport]);
+  const onReportDelete = useCallback(async (id: string) => {
+    setReportError(null);
+    const r = await fetch(`/reports/${id}`, { method: 'DELETE' }).catch(() => null); // 404: gone already
+    if (r?.ok || r?.status === 404) changed(id);
+    else setReportError({ title: 'Report not deleted', message: r?.status === 409 ? 'The PDF is open in another program: close it and delete again.' : r ? (await r.text()).replace(/^error: /, '') : 'The server cannot be reached.' });
+    await refreshReports();
+  }, [refreshReports]);
 
   // A model's drawn meshes -> rows, their conversions and the viewer's objects: after open(), and after a variant switch.
   // roles: the old rows' roles by path (a new mesh is 'none'; a row hidden with the eye or H stays); without them a lone
@@ -189,6 +251,7 @@ export default function App() {
       dispatch({ type: 'LOAD', slot, objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
       opened = true;
+      delete choices.current[slot];
       model.current[slot] = { mpu: info.metersPerUnit, own, picked: { files: kept, root: info.url.replace(/^\/drop\/\d+\//, ''), info } };
       // Eye toggles, H / Shift+H and variant choices go to the session layer: never saved, nothing to save.
       const session = (await usd.usd.layers()).find((l) => l.session);
@@ -226,7 +289,12 @@ export default function App() {
       pane(slot, { loading: false });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- readStage reads refs only
-  const onVariant = useCallback((slot: number, path: string, set: string, variant: string) => void reread(slot, () => viewer(slot).el.usd.setVariant(path, set, variant)), [reread]);
+  const onVariant = useCallback((slot: number, path: string, set: string, variant: string) => void reread(slot, async () => {
+    const { usd } = viewer(slot).el, sets = ((choices.current[slot] ??= {})[path] ??= {});
+    const own = sets[set]?.[0] ?? (await usd.prim(path)).variantSets.find((v) => v.name === set)?.selection ?? '';
+    await usd.setVariant(path, set, variant);
+    sets[set] = [own, variant];
+  }), [reread]);
   // The viewers' refinement, one level for every model so they are drawn and run alike: catmullClark / loop meshes drawn
   // (and so simulated) as their smooth surface, creases included.
   const onSubdiv = useCallback((level: number) => {
@@ -254,6 +322,7 @@ export default function App() {
     jobs.current[slot]?.abort();
     delete model.current[slot];
     delete lastKey.current[slot];
+    delete choices.current[slot];
     setPanes(({ [slot]: _gone, ...rest }) => rest);
     dispatch({ type: 'REMOVE', slot });
     void viewer(slot).el.close().catch(() => {});
@@ -436,6 +505,9 @@ export default function App() {
     ? `${probed.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(shown).value}`
     : null;
   const busyBar = state.models.some((m) => inFlight(m.run)) && !autoOn; // a click batch: the button waits and Cancel shows; Auto runs do not flash them
+  // the app as the Reports menu checks a report against it, while there are reports: per change of the models, roles,
+  // results, column or problem ranges, never per hover
+  const reportApp = useMemo(() => (reports?.length ? appView({ shown, state, panes, per, variants }) : null), [reports, shown, state.models, s.viz.ranges, panes, keys]); // eslint-disable-line react-hooks/exhaustive-deps -- state and per by the parts appView reads
 
   // The app as the tools in mcp/tools.ts drive it, rewritten on every commit, which also wakes the tools waiting for one;
   // the bridge polls the server for their calls while the page lives, after picking up a hidden session.
@@ -445,6 +517,7 @@ export default function App() {
       state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, views, setViews, optics, materialsReady, per, shown, scale, domain,
       exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, weightsFor, meshOf,
       busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
+      variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
     };
     settled();
   });
@@ -509,8 +582,10 @@ export default function App() {
               <div className="viewport__bar">
                 <div className="cluster cluster--between">
                   <div className="cluster">
-                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} />
+                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} />
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
+                    {/* only while there are reports; a generation's failure shows as its lastError */}
+                    {reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}
                   </div>
                   {n > 1 && (
                     <div className="cluster">
@@ -536,7 +611,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} />
+              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} reports={reports} onReportChart={onReportChart} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

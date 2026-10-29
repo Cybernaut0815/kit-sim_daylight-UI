@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import mcp from '../../../server/mcp.json';
+import { glyphs } from '../report/spec';
 import { defaultSettings, initialState, reducer, type Action, type State, type Station } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
+import reportGuide from './report.md?raw';
 import { HANDLERS, TOOLS, bySide, check, connect, publicSettings, settingsActions, shotSize } from './tools';
 
 const schema = (name: string) => TOOLS.find((t) => t.name === name)!.inputSchema;
 
 describe('the tool list', () => {
-  it('every handler is a tool of mcp.json; these tools have none yet', () => {
+  it('every tool of mcp.json has its handler, and only those', () => {
     const names = mcp.tools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(Object.keys(HANDLERS).filter((n) => !names.includes(n))).toEqual([]);
-    expect(names.filter((n) => !(n in HANDLERS))).toEqual(['get_report', 'save_report', 'delete_report', 'generate_report']);
+    expect(Object.keys(HANDLERS).sort()).toEqual([...names].sort());
   });
   it('each inputSchema is a closed object whose fields say what they take', () => {
     const fields = (s: Record<string, unknown>, at: string): string[] => {
@@ -33,13 +34,14 @@ describe('the tool list', () => {
   });
 });
 
-describe('the daylight guide', () => {
-  it('names only tools and update_settings fields that exist, in glyphs the report fonts have', () => {
+describe('the guides', () => {
+  it('name only tools and update_settings fields that exist, in glyphs the report fonts have', () => {
     const names = new Set(mcp.tools.map((t) => t.name)), us = schema('update_settings').properties as Record<string, { properties?: Record<string, unknown> }>;
-    expect((guide.match(/\b(?:app_state|site_info|model_tree|(?:update|open|remove|set|get|edit|find|save|delete|generate|download)_[a-z_]+)\b/g) ?? []).filter((w) => !names.has(w))).toEqual([]);
-    expect((guide.match(/\b(?:sim|time|weather|viz|site)\.[a-zA-Z]+\b/g) ?? []).filter((d) => { const [g, k] = d.split('.'); return !us[g]?.properties?.[k]; })).toEqual([]);
-    // kit-ui's faces: Latin-1, Latin Extended, general punctuation, the minus sign
-    expect([...guide].filter((ch) => { const c = ch.codePointAt(0)!; return !(c <= 0x2ba || (c >= 0x2000 && c <= 0x206f) || c === 0x2212); })).toEqual([]);
+    for (const text of [guide, reportGuide]) {
+      expect((text.match(/\b(?:app_state|site_info|model_tree|(?:update|open|remove|set|get|edit|find|save|delete|generate|download)_[a-z_]+)\b/g) ?? []).filter((w) => !names.has(w))).toEqual([]);
+      expect((text.match(/\b(?:sim|time|weather|viz|site)\.[a-zA-Z]+\b/g) ?? []).filter((d) => { const [g, k] = d.split('.'); return !us[g]?.properties?.[k]; })).toEqual([]);
+      expect([...new Set(text)].filter(glyphs)).toEqual([]); // what the report's fonts draw: agents copy it
+    }
   });
 });
 

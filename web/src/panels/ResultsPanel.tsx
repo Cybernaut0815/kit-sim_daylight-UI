@@ -1,9 +1,9 @@
 // Results: what the column means, run summary, colour scale and problem range (with resets), legend, the charts in the
 // result colours (Distribution, Cumulative area, then one's own; each with its settings menu), the cursor readout, the
-// range split, and the per-mesh table. With several models every output compares them: a run line, a column and a group
-// of rows per model, a series per model in its colour, and each value's difference to the first model. Every region
-// keeps its size whatever the data or the hover state, and a model keeps its place before its result lands, so the
-// panel does not jump.
+// range split, the per-mesh table, then each report's charts (drawn from its models' results now; their settings change
+// the stored report). With several models every output compares them: a run line, a column and a group of rows per
+// model, a series per model in its colour, and each value's difference to the first model. Every region keeps its size
+// whatever the data or the hover state, and a model keeps its place before its result lands, so the panel does not jump.
 import { Fragment, memo, useMemo, type Dispatch } from 'react';
 import { Chart, chartTitle } from '../charts/Chart';
 import { ChartSettings, RANGE_HELP, ScaleFields, type ChartEdit } from '../charts/ChartSettings';
@@ -12,6 +12,7 @@ import { Legend } from '../charts/Legend';
 import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row, type WeightsFor } from '../lib/charts';
 import { hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, fmtDiff, fmtNum, rangeShares, shareBelow, unitFor } from '../lib/result';
+import { chartSpec, type Stored } from '../report/spec';
 import { inFlight, type Action, type Model, type Probe, type RunResult, type Settings } from '../store';
 import { Alert, Illustration, LETTERS, Segmented, Swatch, Tag, pct, rowKeys } from '../ui';
 
@@ -23,6 +24,7 @@ interface Props {
   models: Compared[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; probe: Probe | null; bin: [number, number] | null;
   scale: Scale | null; domain: [number, number]; viz: Settings['viz']; charts: Settings['charts']; auto: boolean; // domain: the data range, every model's
   weightsFor: WeightsFor; dispatch: Dispatch<Action>;
+  reports: Stored[] | null; onReportChart: (id: string, e: ChartEdit) => void; // the stored reports; a report chart's settings changed
 }
 
 const cacheLine = (c: Record<string, string> | undefined) =>
@@ -34,7 +36,7 @@ const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of share
 
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
 
-export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, weightsFor, dispatch }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, weightsFor, dispatch, reports, onReportChart }: Props) {
   // what the tables and charts read of each model, kept across a selection or a run's status (each makes new models)
   const inputs = [0, 1, 2, 3].flatMap((k) => { const m = models.find((x) => x.slot === k); return [m?.objects, m?.result, m?.col]; }); // fixed length: memo deps
   const runs = useMemo(() => models.map(({ slot, objects, result, col }) => ({ slot, objects, result, col })), inputs); // eslint-disable-line react-hooks/exhaustive-deps
@@ -49,8 +51,18 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
   })), [datas, lo, hi]);
   const k0 = datas.findIndex(Boolean), ref = k0 < 0 ? null : datas[k0]!; // the first result: the column list, quantity and unit
   const shown = ref ? ref.r.columns[ref.col] : null;
+  // the reports with chart blocks, their charts as drawn (models as slots), each on the colour scale of its models' data,
+  // with its figure number in the PDF (charts and views count)
+  const groups = useMemo(() => (reports ?? []).flatMap(({ id, spec: r }) => {
+    const specs: ChartSpec[] = [], fig = new Map<string, number>(), slots = r.models.map((m) => LETTERS.indexOf(m.model));
+    r.blocks.filter((b) => b.type === 'chart' || b.type === 'view').forEach((b, k) => { if (b.type === 'chart') { specs.push(chartSpec(b.chart, r)); fig.set(b.chart.id, k + 1); } });
+    return specs.length ? [{ id, title: r.title, specs, slots, fig }] : [];
+  }), [reports]);
   // every chart's numbers, once per result, column, colour scale or chart: never per hover or cursor move
-  const drawn = useMemo(() => new Map(shown ? charts.map((c) => [c, chartData(c, { models: runs, column: shown, viz, weightsFor })] as const) : []), [charts, runs, shown, viz, weightsFor]);
+  const drawn = useMemo(() => new Map(shown ? [
+    ...charts.map((c) => [c, chartData(c, { models: runs, column: shown, viz, weightsFor })] as const),
+    ...groups.flatMap((g) => g.specs.map((c) => [c, chartData(c, { models: runs.filter((m) => g.slots.includes(m.slot)), column: shown, viz, weightsFor })] as const)),
+  ] : []), [charts, groups, runs, shown, viz, weightsFor]);
   const running = models.some((m) => inFlight(m.run)), failed = models.filter((m) => m.error);
   const one = models[0];
   /** A model's run line: a job on its way (an Auto run refreshes silently, unless other users' jobs are ahead), else what it holds. */
@@ -120,17 +132,17 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
         /** A comparison chart's key: its models that are open, with a result or not. */
         const keyOf = (c: ChartSpec) => <div className="cluster text-muted">{models.filter((m) => !c.models || c.models.includes(m.slot)).map((m) => <span key={m.slot} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`}><Tag slot={m.slot} /></span>)}</div>;
         /**
-         * Charts, each under its heading with its settings menu (ids `${idp}:${id}`, ':' being in no chart id): the panel's
-         * own (CHART), and so each report's group later, headed "Report: TITLE" with its own `onChart` (its specs drawn into
-         * `drawn` too). A chart of the shown column takes the cursor and bin hover as the views do; the built-ins keep their
-         * Absolute / Relative switch.
+         * Charts, each under its heading (`H`) with its settings menu (ids `${idp}:${id}`, ':' being in no chart id): the
+         * panel's own (CHART), and each report's group, headed "Report: TITLE" with its own `onChart` and each chart's
+         * figure number (`fig`). A chart of the shown column takes the cursor and bin hover as the views do; the built-ins
+         * keep their Absolute / Relative switch.
          */
-        const group = (specs: readonly ChartSpec[], onChart: (e: ChartEdit) => void, idp = 'chart') => specs.map((c) => {
-          const d = drawn.get(c)!, at = c.column ?? shown, live = at === shown, title = chartTitle(c, at);
+        const group = (specs: readonly ChartSpec[], onChart: (e: ChartEdit) => void, idp = 'chart', H: 'h3' | 'h4' = 'h3', fig?: ReadonlyMap<string, number>) => specs.map((c) => {
+          const d = drawn.get(c)!, at = c.column ?? shown, live = at === shown, title = `${fig ? `Figure ${fig.get(c.id)}. ` : ''}${chartTitle(c, at)}`;
           return (
             <Fragment key={c.id}>
               <div className="cluster cluster--between">
-                <h3>{title}</h3>
+                <H>{title}</H>
                 <div className="cluster">
                   {BUILT_IN.some((b) => b.id === c.id) && <Segmented name={`${c.id}-range`} label={`${title} range`} title={RANGE_HELP} value={Array.isArray(c.range) ? null : c.range ?? 'relative'} options={RANGE_OPTIONS} onChange={(range) => onChart({ spec: { ...c, range } })} />}
                   <ChartSettings id={`${idp}:${c.id}`} title={title} spec={c} d={d} column={at} viz={viz} many={many} dispatch={dispatch} onChart={onChart} />
@@ -291,6 +303,12 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
                 )}
               </table>
             </div>
+            {groups.map((g) => (
+              <section key={g.id} className="stack" aria-labelledby={`h-report-${g.id}`}>
+                <h3 id={`h-report-${g.id}`}>Report: {g.title}</h3>
+                {group(g.specs, (e) => onReportChart(g.id, e), `report-${g.id}`, 'h4', g.fig)}
+              </section>
+            ))}
           </div>
         );
       })()}

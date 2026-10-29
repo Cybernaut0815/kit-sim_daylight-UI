@@ -1,18 +1,26 @@
-// The run bar's two menus, acting on the active model's view.
-// - Views: the model's own cameras and the views saved here. Picking one moves the 3D view there (linked cameras: every
-//   view), and orbiting goes on from it. The current view can be saved under a name, and a saved one removed again (the
-//   model's cameras cannot). Saved views serve every view, last this session and never go into a file.
+// The run bar's menus, acting on the active model's view.
+// - Views: the model's own cameras, the reports' views and the views saved here. Picking one moves the 3D view there
+//   (linked cameras: every view), and orbiting goes on from it. The current view can be saved under a name, and a saved
+//   one removed again (the model's cameras cannot); a report's view takes the current view with Update. Saved views
+//   serve every view, last this session and never go into a file.
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
-import { useEffect, useState } from 'react';
-import type { UsdViewerElement } from 'usd-viewer';
+// - Reports (only while there are any): a report's PDF generated from the current results, opened, or the report deleted.
+import { Fragment, useEffect, useState } from 'react';
+import type { UsdViewerElement, ViewState } from 'usd-viewer';
 import { stageView, type SavedView, type StageCamera } from '../lib/views';
+import { generation } from '../report/generate';
+import { inApp, readiness, type AppView, type Stored } from '../report/spec';
 import { Alert, Icon, MenuButton } from '../ui';
 import { FORMATS, isUsd, type ExportMode, type Format } from './download';
 
 /** The next free "View N" name. */
 const nextName = (views: SavedView[]) => `View ${Math.max(0, ...views.map((v) => Number(/^View (\d+)$/.exec(v.name)?.[1] ?? 0))) + 1}`;
 
-export function ViewsMenu({ usd, model, disabled, views, onSave, onRemove }: { usd: UsdViewerElement; model?: string; disabled: boolean; views: SavedView[]; onSave: (v: SavedView) => void; onRemove: (id: string) => void }) {
+/** onReportView: report `id`'s view block `block` (named `name`) takes the camera `view`, in stage units of `mpu` m. */
+export function ViewsMenu({ usd, model, disabled, views, reports, onSave, onRemove, onReportView }: {
+  usd: UsdViewerElement; model?: string; disabled: boolean; views: SavedView[]; reports: Stored[] | null; onSave: (v: SavedView) => void; onRemove: (id: string) => void;
+  onReportView: (id: string, block: number, name: string, view: ViewState, mpu: number) => void;
+}) {
   const [cameras, setCameras] = useState<StageCamera[]>(() => usd.cameras);
   const [name, setName] = useState('');
   useEffect(() => {
@@ -35,6 +43,21 @@ export function ViewsMenu({ usd, model, disabled, views, onSave, onRemove }: { u
           {cameras.length
             ? cameras.map((c) => <button key={c.path} className="menu__item" type="button" title={c.path} onClick={() => { usd.view = stageView(usd.three.root, c); close(); }}><span>{c.path.slice(c.path.lastIndexOf('/') + 1)}</span></button>)
             : <p className="views__note text-muted">No cameras</p>}
+          {reports?.map((r) => {
+            const vs = r.spec.blocks.flatMap((b, i) => (b.type === 'view' ? [{ b, i }] : []));
+            return vs.length > 0 && (
+              <Fragment key={r.id}>
+                <div className="menu__separator" />
+                <div className="menu__section">Report: {r.spec.title}</div>
+                {vs.map(({ b, i }) => (
+                  <div key={i} className="views__row">
+                    <button className="menu__item" type="button" title={b.caption} onClick={() => { usd.view = b.view; close(); }}><span>{b.name}</span></button>
+                    <button className="btn btn--ghost" type="button" aria-label={`Update ${b.name} of ${r.spec.title}`} title={`${b.name} of this report takes the current view, from its next PDF on`} onClick={() => { onReportView(r.id, i, b.name, usd.view, usd.stage?.metersPerUnit ?? 1); close(); }}>Update</button>
+                  </div>
+                ))}
+              </Fragment>
+            );
+          })}
           <div className="menu__separator" />
           <div className="menu__section">Saved</div>
           {views.length
@@ -97,6 +120,48 @@ export function DownloadMenu({ model, ready, exporting, error, onDownload }: { m
           <div className="menu__footer views__download">
             <span className="text-muted">{exporting ? <><span className="spinner" aria-hidden="true" /> {usdFormat ? `Packing${mode === 'variants' || format !== 'usdz' ? ', flattening first' : ''}` : 'Writing'}</> : null}</span>
             <button className="btn btn--primary" type="button" disabled={exporting} aria-busy={exporting} onClick={() => onDownload(format, mode)}>Download</button>
+          </div>
+        </>
+      )}
+    </MenuButton>
+  );
+}
+
+/**
+ * The stored reports (the last changed first): the one picked, whether it can be generated now or what to restore first
+ * (`app`: the app as a report sees it), its last error (`error`: a change or delete of one, else its last generation's),
+ * Delete, Open PDF and Generate PDF. A generation shows the same whether it started here or not. `onOpen`: on every open.
+ */
+export function ReportsMenu({ reports, app, error, onOpen, onGenerate, onDelete }: {
+  reports: Stored[]; app: AppView; error: { title: string; message: string } | null; onOpen: () => void; onGenerate: (id: string) => void; onDelete: (id: string) => void;
+}) {
+  const [pick, setPick] = useState<string | null>(null);
+  const list = [...reports].sort((a, b) => b.spec.updated.localeCompare(a.spec.updated)), r = list.find((x) => x.id === pick) ?? list[0];
+  const { generating, lastError } = generation(r.id), no = [...new Set(readiness(r.spec, app).map(inApp))], failed = error ?? (lastError ? { title: 'PDF not generated', message: inApp(lastError) } : null);
+  useEffect(() => { // the popover's own toggle: MenuButton keeps its element
+    const m = document.getElementById('reports-menu'), on = (e: Event) => { if ((e as ToggleEvent).newState === 'open') onOpen(); };
+    m?.addEventListener('toggle', on);
+    return () => m?.removeEventListener('toggle', on);
+  }, [onOpen]);
+  return (
+    <MenuButton id="reports-menu" label="Reports" busy={reports.some((x) => generation(x.id).generating)} title="The reports kept here: a report's PDF, generated from the current results; open it, or delete the report">
+      {() => (
+        <>
+          <div className="views__format">
+            <select className="select" aria-label="Report" value={r.id} onChange={(e) => setPick(e.target.value)}>
+              {list.map((x) => <option key={x.id} value={x.id}>{x.spec.title}</option>)}
+            </select>
+          </div>
+          <div className="views__note text-muted" role="status">
+            {generating ? <><span className="spinner" aria-hidden="true" /> Generating the PDF</> : no.length ? no.map((p) => <p key={p}>{p[0].toUpperCase() + p.slice(1)}</p>) : 'Ready'}
+          </div>
+          {failed && <Alert title={failed.title}>{failed.message}</Alert>}
+          <div className="menu__footer views__download">
+            <button className="btn btn--danger" type="button" disabled={generating} onClick={() => { if (confirm(`Delete the report "${r.spec.title}" and its PDF? This cannot be undone.`)) onDelete(r.id); }}>Delete</button>
+            <div className="cluster">
+              <button className="btn btn--secondary" type="button" disabled={!r.pdf} title={r.pdf ? undefined : 'Generate it first'} onClick={() => window.open(`/reports/${r.id}/pdf`)}>Open PDF</button>
+              <button className="btn btn--primary" type="button" disabled={generating || no.length > 0} aria-busy={generating} onClick={() => onGenerate(r.id)}>Generate PDF</button>
+            </div>
           </div>
         </>
       )}

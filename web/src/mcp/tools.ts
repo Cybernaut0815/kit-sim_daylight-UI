@@ -23,13 +23,20 @@ import { fmtClock, fmtTime, yearOf } from '../lib/time';
 import { idsUnder, primQuery, underIndex } from '../lib/tree';
 import { stageView, type SavedView } from '../lib/views';
 import { zoneAt } from '../lib/zone';
+import { changed, outcome, type Pdf } from '../report/generate';
+import { parseReports, readiness, validateSpec, type AppModel, type AppView, type Draft, type Report, type Stored } from '../report/spec';
 import { QUANTITIES, inFlight, parseSettings, reducer, serializeSettings, type Action, type Model, type ObjectRow, type RunResult, type Settings, type State, type Station, type TimePoint } from '../store';
+import { selectionFill } from '../viewer/Viewer';
 import { capture } from '../viewer/capture';
 import type { ExportMode, Format } from '../viewer/download';
 import type { Slot } from '../viewer/usd';
 import mcp from '../../../server/mcp.json';
 import guide from './guide.md?raw';
+import reportGuide from './report.md?raw';
 import { HEADLESS, exclusive, fail, startBridge, until, type CallToolResult } from './bridge';
+// kit-ui's skills as its package ships them (from v0.2.1; none in an older one): the 'report' and 'kit-ui' topics
+const SKILLS = import.meta.glob<string>('/node_modules/kit-ui/skills/*/*.md', { query: '?raw', import: 'default', eager: true, exhaustive: true });
+const skill = (file: string) => Object.entries(SKILLS).find(([k]) => k.endsWith(`/skills/${file}`))?.[1];
 
 type Theme = 'auto' | 'light' | 'dark';
 /** App as the tools drive it: App rewrites it on every commit. */
@@ -51,6 +58,10 @@ export interface Ctl {
   weightsFor: WeightsFor; meshOf: (id: string) => ObjMesh | undefined; // a mesh's element areas; its ObjMesh (model metres, Z up)
   busy: () => boolean; held: () => boolean; cancel: () => void; // a batch on its way; a click waiting for the materials; Cancel
   viewer: (slot: number) => Slot;
+  variants: (slot: number) => AppModel['choices']; // the variant choices made in the app since the slot's file opened
+  fileOf: (slot: number) => string | undefined; // the file the slot opened (within a picked folder: its path there)
+  reports: Stored[] | null; refreshReports: () => Promise<void>; // GET /reports (null: no report routes here); fetch it again
+  generate: (id: string) => Promise<Pdf>; generation: (id: string) => { generating: boolean; lastError: string | null }; // report/generate.ts
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- checked against the tool's inputSchema before a handler runs
@@ -113,7 +124,9 @@ export const TOOLS = mcp.tools as unknown as { name: string; inputSchema: Schema
 const is = (t: string, v: unknown) =>
   t === 'integer' ? Number.isInteger(v) : t === 'number' ? Number.isFinite(v) : t === 'array' ? Array.isArray(v)
     : t === 'object' ? !!v && typeof v === 'object' && !Array.isArray(v) : t === 'null' ? v === null : typeof v === t;
-const WORDS: Record<string, string> = { '^\\d{4}-\\d{2}-\\d{2}$': 'a date, YYYY-MM-DD', '^\\d{2}:\\d{2}$': "a time, 'HH:MM'", '^/': 'a prim path, starting with /' };
+const WORDS: Record<string, string> = {
+  '^\\d{4}-\\d{2}-\\d{2}$': 'a date, YYYY-MM-DD', '^\\d{2}:\\d{2}$': "a time, 'HH:MM'", '^/': 'a prim path, starting with /', '^[a-z0-9-]{1,64}$': '1 to 64 lowercase letters, digits or -',
+};
 const span = (lo?: number, hi?: number) => (lo === hi ? `${lo}` : lo !== undefined && hi !== undefined ? `${lo} to ${hi}` : lo !== undefined ? `at least ${lo}` : `at most ${hi}`);
 
 /** What is wrong with `v` under a tool's inputSchema (the parts mcp.json uses), by its path, e.g. 'time.step: one of
@@ -174,12 +187,29 @@ export const UUID = /[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g;
 /** A run key with its mesh ids (new per page load and per re-read) as the rows' prim paths: equal inputs, equal key. */
 export const stableKey = (key: string, rows: readonly ObjectRow[]) => { const path = new Map(rows.map((o) => [o.id, o.path])); return key.replace(UUID, (id) => path.get(id) ?? id); };
 /** Model i's result against the inputs now: running (a job on its way), fresh or stale; null without one. */
-function freshness(x: Ctl, i: number): 'running' | 'fresh' | 'stale' | null {
+function freshness(x: Pick<Ctl, 'per'>, i: number): 'running' | 'fresh' | 'stale' | null {
   const { m, key } = x.per[i];
   return inFlight(m.run) ? 'running' : !m.result ? null : stableKey(m.result.key, m.objects) === stableKey(key, m.objects) ? 'fresh' : 'stale';
 }
+/** A stable run key's settings: its arguments and weather (the receivers and shades apart). */
+const runOf = (key: string) => JSON.stringify((JSON.parse(key) as unknown[]).slice(0, 2));
+// per slot, open_model's paths, the open counter that open gave its pane and the model's name once loaded
+const opened = new Map<number, { paths: string[]; stage: number; name?: string }>();
+/** The app as a report sees it (report/spec.ts): the models' files (and paths, opened by open_model), variant choices,
+ *  roles and results; the column shown, the problem ranges. From the controller, or from App's render (its Reports menu). */
+export const appView = (x: Pick<Ctl, 'shown' | 'state' | 'panes' | 'variants' | 'per'>): AppView => ({
+  shown: x.shown, ranges: x.state.settings.viz.ranges,
+  models: x.state.models.map((m, i) => {
+    const o = opened.get(m.slot), mine = o && o.stage === x.panes[m.slot]?.stage && (o.name ?? m.name) === m.name; // not a file opened in the app since
+    return {
+      model: letter(m.slot), file: m.objects.length ? m.name : '', ...(mine ? { open: o.paths } : {}), loading: !!x.panes[m.slot]?.loading, choices: x.variants(m.slot),
+      receivers: x.per[i].receivers.map((r) => r.path), shades: x.per[i].shades.map((r) => r.path),
+      result: freshness(x, i), key: m.result && runOf(stableKey(m.result.key, m.objects)), inputs: runOf(stableKey(x.per[i].key, m.objects)), columns: m.result?.columns ?? [],
+    };
+  }),
+});
 /** A result's element areas per receiver, m² (1 each where the mesh is gone). */
-export const weightsOf = (x: Ctl, r: RunResult) => r.receivers.map((id, k) => x.weightsFor(id, r.on) ?? new Float64Array(r.manifest.meshes[k].count).fill(1));
+export const weightsOf = (x: Pick<Ctl, 'weightsFor'>, r: RunResult) => r.receivers.map((id, k) => x.weightsFor(id, r.on) ?? new Float64Array(r.manifest.meshes[k].count).fill(1));
 /** Per model: its run status, timing and the shown column's mean, P10 and P90. */
 function runLines(x: Ctl) {
   return x.state.models.map((m, i) => {
@@ -226,7 +256,7 @@ function difference(u: Summary, v: Summary, th: readonly number[], ranged: boole
 const northOf = (r: RunResult) => { const [args] = JSON.parse(r.key) as [string[]]; return Number(args[args.indexOf('--north') + 1]); };
 /** A result's run as results quotes it: period, hours and sun directions evaluated, weather, the core's arguments (mesh ids
  *  as prim paths), timing, the server cache. */
-function provenance(r: RunResult, rows: readonly ObjectRow[]) {
+export function provenance(r: RunResult, rows: readonly ObjectRow[]) {
   const [args, weather] = JSON.parse(stableKey(r.key, rows)) as [string[], unknown], arg = (k: string) => args[args.indexOf(k) + 1];
   return {
     period: args.includes('--time') ? `instant ${arg('--time')}` : args.includes('--from') ? `${arg('--from')} to ${arg('--to')} every ${arg('--step')} min${args.includes('--hours') ? `, ${arg('--hours')} each day` : ''}` : 'annual',
@@ -262,6 +292,22 @@ export function bySide(values: readonly Float64Array[], meshes: readonly { first
     }
   }
   return SIDES.flatMap((facing) => { const g = out.get(facing); return g ? [{ facing, ...g }] : []; });
+}
+
+/**
+ * A model's result in one column as results gives it, the problem range [lo, hi] and the thresholds applied: over every
+ * receiver (`whole`) and per row: per prim path of `paths` ('parts'), per receiver mesh, the largest area first ('mesh'),
+ * or per side faced ('facing'), the last two over the receivers under `paths` (every one without).
+ */
+export function summaries(x: Pick<Ctl, 'weightsFor' | 'meshOf'>, m: Pick<Model, 'objects' | 'result'>, column: string, by: 'parts' | 'mesh' | 'facing', paths: readonly string[] | undefined, lo: number | null, hi: number | null, th: readonly number[] = []) {
+  const r = m.result!, col = r.columns.indexOf(column), w = weightsOf(x, r), g = r.manifest.meshes;
+  const sum = (ks: number[]) => summarize(r.values, col, ks.map((k) => g[k]), ks.map((k) => w[k]), lo, hi, th), under = (ps: readonly string[]) => { const ids = new Set(idsUnder(ps, m.objects)); return r.receivers.flatMap((id, k) => (ids.has(id) ? [k] : [])); };
+  const ks = paths ? under(paths) : r.receivers.map((_, k) => k), pathOf = new Map(m.objects.map((o) => [o.id, o.path])); // mesh and facing rows: the receivers under paths
+  const rows: { key: string; head: object; u: Summary }[] = by === 'parts' ? paths!.map((p) => ({ key: p, head: { path: p }, u: sum(under([p])) }))
+    : by === 'mesh' ? ks.map((k) => { const p = pathOf.get(r.receivers[k]) ?? g[k].name; return { key: p, head: { mesh: p }, u: sum([k]) }; }).sort((p, o) => o.u.area - p.u.area)
+      : bySide(r.values, ks.flatMap((k) => { const o = x.meshOf(r.receivers[k]); return o ? [{ first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }] : []; }), r.on, northOf(r), column.endsWith('_back'))
+        .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.rows, col, [{ first: 0, count: f.rows.length }], [f.w], lo, hi, th) }));
+  return { whole: sum(r.receivers.map((_, k) => k)), rows };
 }
 
 // ---------------------------------------------------------------------------------------------- framing and shots
@@ -323,7 +369,53 @@ export function shotSize(width: number, height: number): { width: number; height
 }
 /** One MessageChannel task (not throttled in a hidden tab, unlike timers). */
 const tick = () => new Promise<void>((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(null); });
-async function b64(blob: Blob): Promise<string> {
+
+/** How the views look for shots: the column by name, the colouring, the sun path, the ground grid (the overlay frame()
+ *  skips), a quantity's colour scale Min and Max (`pin`), no bin highlight and no selection fill (`clean`). */
+export interface Look { column?: string; colourBy?: 'plain' | 'value'; sunPath?: boolean; grid?: boolean; pin?: { quantity: string; min: number; max: number }; clean?: boolean }
+let staging = 0; // looks staged now
+/** A look is staged for shots: App keeps it out of the stored settings and view preferences (the restore stores them). */
+export const isStaging = () => staging > 0;
+/** fn with the views of `slots` showing `look` (each part only when given) and no pointer hover or probe (a bin highlight
+ *  and the selection stay, unless clean); all of it put back after fn, also when it throws. */
+export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Look, fn: () => Promise<T>): Promise<T> {
+  const x = c(), ref = x.state.models.find((m) => m.result)?.result, col = look.column === undefined ? -1 : ref?.columns.indexOf(look.column) ?? -1;
+  if (look.column !== undefined && col < 0) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the views show; run again`);
+  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity] };
+  const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
+  const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
+  staging++;
+  try {
+    flushSync(() => {
+      x.dispatch({ type: 'HOVER', id: null });
+      x.dispatch({ type: 'PROBE', probe: null }); // the pointer's, not the shot's
+      if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: col });
+      if (look.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
+      if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
+      if (look.pin) x.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: look.pin.min, max: look.pin.max } });
+      if (look.clean) x.dispatch({ type: 'BIN', bin: null });
+    });
+    if (fill) fill.highlight = { color: '#000000', opacity: 0 }; // after the commit: a colouring change sets it again
+    for (const [o] of grids) o.visible = look.grid!;
+    // ponytail: one MessageChannel task lets Viewer.tsx's paint (it awaits a dynamic import before colouring a receiver
+    // the first time) land; wait for a paint-done signal from the Viewer if a shot ever shows a receiver uncoloured
+    await tick();
+    return await fn();
+  } finally {
+    staging--;
+    for (const [o, v] of grids) o.visible = v;
+    flushSync(() => {
+      const z = c();
+      if (look.column !== undefined) z.dispatch({ type: 'COLUMN', column: was.column });
+      if (look.colourBy) z.dispatch({ type: 'COLOUR_BY', colourBy: was.colourBy });
+      if (look.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
+      if (look.pin) z.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: was.scale?.min ?? null, max: was.scale?.max ?? null } });
+      if (look.clean) z.dispatch({ type: 'BIN', bin: was.bin });
+    });
+    if (fill) fill.highlight = selectionFill(c().state.colourBy === 'value' && !!c().scale);
+  }
+}
+export async function b64(blob: Blob): Promise<string> {
   const u = new Uint8Array(await blob.arrayBuffer());
   let s = '';
   for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
@@ -362,7 +454,10 @@ async function epwFile(path: string): Promise<File> {
   if (!/\.epw$/i.test(path)) throw new Error('weather.file: the absolute path of an .epw file');
   const r = await local(path, 'weather.file');
   if (isJson(r)) throw new Error('weather.file: a folder; give the .epw file');
-  const f = new File([await r.blob()], base(path));
+  // stamped by its bytes, not by this fetch: App's run key holds the file's name, size and lastModified, so the same file
+  // opened again (a later call, a pickup) keeps its key, and a report on it stays ready
+  const bytes = await r.arrayBuffer(), h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const f = new File([bytes], base(path), { lastModified: h.subarray(0, 6).reduce((n, b) => n * 256 + b, 0) });
   pathOf.set(f, path);
   return f;
 }
@@ -474,6 +569,32 @@ export function settingsActions(a: Args, s: State, shown: string | null, file?: 
   return out;
 }
 
+// ---------------------------------------------------------------------------------------------- reports
+const said = async (r: Response) => (await r.text()).replace(/^error: /, '').trim();
+/** The stored reports (GET /reports), each spec parsed. */
+export async function storedReports(): Promise<Stored[]> {
+  const r = await fetch('/reports').catch(() => null);
+  if (!r?.ok || !isJson(r)) throw new Error(`reports: ${r ? await said(r) : 'the server cannot be reached'}`);
+  return parseReports(await r.json());
+}
+/** Stored report `id`; its refusal names the ids there are. */
+export async function storedReport(id: string): Promise<Stored> {
+  const all = await storedReports(), e = all.find((s) => s.id === id);
+  if (!e) throw new Error(`id: no report ${id}${all.length ? ` (${all.map((s) => s.id).join(', ')})` : ''}`);
+  return e;
+}
+/** A report stored (PUT /reports/{id}), created kept from the one it replaces (`old`), updated now and after old's: every
+ *  save of a report, also an edit in the app (`d` the edited report: its own stamps give way), goes through here. */
+export async function putReport(d: Draft & Partial<Pick<Report, 'created' | 'updated'>>, old?: Report): Promise<Report> {
+  const now = new Date(Math.max(Date.now(), (Date.parse(old?.updated ?? '') || 0) + 1)).toISOString();
+  const { id, title, created: _c, updated: _u, ...rest } = d, r: Report = { id, title, created: old?.created ?? now, updated: now, ...rest };
+  const res = await fetch(`/reports/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) }).catch(() => null);
+  if (!res?.ok) throw new Error(`spec: not stored (${res ? await said(res) : 'the server cannot be reached'})`);
+  changed(id);
+  return r;
+}
+const waiting = new Set<string>(); // the reports generate_report answered 'generating' for: the next call gets that generation
+
 // ---------------------------------------------------------------------------------------------- the tools
 // Read-only tools run at once; the others change state under exclusive(), and wait for App outside it.
 export const HANDLERS: Record<string, Handler> = {
@@ -487,11 +608,16 @@ export const HANDLERS: Record<string, Handler> = {
         ...(x.panes[m.slot]?.meshes.size ? { view: x.viewer(m.slot).el.view } : {}), // its camera now, exact
       })),
       display: display(x), subdivision: x.ui.subdiv, settings: publicSettings(s.settings), problems: problems(x), views: x.views.map(({ name, view }) => ({ name, view })),
+      reports: (x.reports ?? []).map((e) => ({ id: e.id, title: e.spec.title, models: e.spec.models.map((m) => m.model), updated: e.spec.updated, pdf: e.pdf, ...x.generation(e.id) })),
     });
   },
 
   async guide(a) {
-    return a.topic === 'daylight' ? { content: [{ type: 'text', text: guide }] } : fail(`topic: '${a.topic}' is not available in this build yet; read 'daylight'`);
+    const ui = [skill('kit-ui/SKILL.md'), skill('kit-ui/reference.md')].filter(Boolean).join('\n\n---\n\n'), kr = skill('kit-report/SKILL.md');
+    const text = a.topic === 'daylight' ? guide : a.topic === 'kit-ui' ? ui : kr
+      ? `${reportGuide}\n\n---\n\nThe kit-ui kit-report skill, for reference: the app lays the report out and prints it (its sections 1, 3 and 4); its data rules (2) and read-back (5) apply to what you write.\n\n${kr}`
+      : reportGuide;
+    return text ? { content: [{ type: 'text', text }] } : fail("topic: 'kit-ui' is not in this build (its kit-ui package ships no skills); read 'daylight' or 'report'");
   },
 
   async site_info(a, c, end) {
@@ -554,11 +680,13 @@ export const HANDLERS: Record<string, Handler> = {
         if (k !== free) throw new Error(`model: slot ${letter(k)} is not open; replace ${s.models.map((m) => letter(m.slot)).join(', ')}, or add ${letter(free!)} (or leave model out)`);
         flushSync(() => x.dispatch({ type: 'ADD' }));
       }
+      opened.set(k, { paths: a.paths, stage: (x.panes[k]?.stage ?? 0) + 1 }); // the counter once this open has loaded
       flushSync(() => void c().onFiles(k, files));
       return k;
     });
     if (!(await done(() => !c().panes[slot]?.loading, end, 'the model to load'))) return ok({ model: letter(slot), status: 'running', note: 'still loading: call app_state until it has loaded (do not open it again)' });
-    const x = c(), m = modelOf(x, letter(slot)), p = x.panes[slot], { el } = x.viewer(slot);
+    const x = c(), m = modelOf(x, letter(slot)), p = x.panes[slot], { el } = x.viewer(slot), o = opened.get(slot);
+    if (o && o.stage === p?.stage) o.name = m.name;
     if (!m.objects.length) return fail(`paths: ${p?.loadError ?? 'no meshes in this model'}`);
     const top = await el.usd.children('/');
     return ok({
@@ -573,6 +701,7 @@ export const HANDLERS: Record<string, Handler> = {
       if (x.state.models.length === 1) throw new Error('model: the last model cannot be removed; open another model into it with open_model');
       if (Object.values(x.panes).some((p) => p.loading)) throw new Error('model: a model is loading; try again once it has loaded (app_state)');
       flushSync(() => x.onRemove(m.slot));
+      opened.delete(m.slot);
       return ok({ removed: a.model, models: c().state.models.map((k) => letter(k.slot)), active: letter(c().state.active) });
     });
   },
@@ -737,16 +866,7 @@ export const HANDLERS: Record<string, Handler> = {
     const paths: string[] | undefined = a.paths, by: 'mesh' | 'parts' | 'facing' = a.by ?? (paths ? 'parts' : 'mesh'), th: number[] = a.thresholds ?? [], limit: number = a.limit ?? 50;
     if (by === 'parts' && !paths) throw new Error("paths: by 'parts' takes the prim paths (model_tree)");
     const { lo = null, hi = null } = s.settings.viz.ranges[q] ?? {}, ranged = lo !== null || hi !== null;
-    const each = ms.map((m) => {
-      const r = m.result!, col = r.columns.indexOf(column), w = weightsOf(x, r), g = r.manifest.meshes;
-      const sum = (ks: number[]) => summarize(r.values, col, ks.map((k) => g[k]), ks.map((k) => w[k]), lo, hi, th), under = (ps: string[]) => { const ids = new Set(idsUnder(ps, m.objects)); return r.receivers.flatMap((id, k) => (ids.has(id) ? [k] : [])); };
-      const ks = paths ? under(paths) : r.receivers.map((_, k) => k), pathOf = new Map(m.objects.map((o) => [o.id, o.path])); // mesh and facing rows: the receivers under paths
-      const rows: { key: string; head: object; u: Summary }[] = by === 'parts' ? paths!.map((p) => ({ key: p, head: { path: p }, u: sum(under([p])) }))
-        : by === 'mesh' ? ks.map((k) => { const p = pathOf.get(r.receivers[k]) ?? g[k].name; return { key: p, head: { mesh: p }, u: sum([k]) }; }).sort((p, o) => o.u.area - p.u.area)
-          : bySide(r.values, ks.flatMap((k) => { const o = x.meshOf(r.receivers[k]); return o ? [{ first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }] : []; }), r.on, northOf(r), side === 'back')
-            .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.rows, col, [{ first: 0, count: f.rows.length }], [f.w], lo, hi, th) }));
-      return { m, whole: sum(r.receivers.map((_, k) => k)), rows };
-    });
+    const each = ms.map((m) => ({ m, ...summaries(x, m, column, by, paths, lo, hi, th) }));
     const [ref] = each, refRows = new Map(ref.rows.map((row) => [row.key, row.u])); // the differences: to the first model, row by row
     return ok({
       column, unit: unitFor(column).value, totalUnit: unitFor(column).total, meaning: `${QUANTITY_HELP[q]} ${SIDE_HELP[side]}`, problemRange: { below: lo, above: hi }, by,
@@ -847,21 +967,8 @@ export const HANDLERS: Record<string, Handler> = {
     return exclusive(async () => {
       const x = c(), ms = ((a.models ?? [letter(x.state.active)]) as string[]).map((l, i) => loadedOf(x, l, a.models ? `models[${i}]` : 'models')), ref = x.state.models.find((m) => m.result)?.result;
       if (a.column && !ref?.columns.includes(a.column)) throw new Error(`column: ${ref ? `not in the results (${ref.columns.join(', ')})` : 'no result yet; run first'}`);
-      // the shot's own column, colouring, sun path and grid, restored after it; the ground grid is the overlay frame() skips
-      const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath };
-      const grids = a.grid === undefined ? [] : ms.flatMap((m) => x.viewer(m.slot).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
-      try {
-        flushSync(() => {
-          x.dispatch({ type: 'HOVER', id: null });
-          x.dispatch({ type: 'PROBE', probe: null }); // the pointer's, not the shot's; a bin highlight stays
-          if (a.column) x.dispatch({ type: 'COLUMN', column: ref!.columns.indexOf(a.column) });
-          if (a.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: a.colourBy });
-          if (a.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: a.sunPath }));
-        });
-        for (const [o] of grids) o.visible = a.grid;
-        // ponytail: one MessageChannel task lets Viewer.tsx's paint (it awaits a dynamic import before colouring a receiver
-        // the first time) land; wait for a paint-done signal from the Viewer if a shot ever shows a receiver uncoloured
-        await tick();
+      // the shot's own column, colouring, sun path and grid, restored after it
+      return staged(c, ms.map((m) => m.slot), { column: a.column, colourBy: a.colourBy, sunPath: a.sunPath, grid: a.grid }, async () => {
         const y = c(), sc = y.scale, north = y.state.settings.sim.north, out: CallToolResult['content'] = [];
         for (const m of ms) {
           const { el } = y.viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1, L = letter(m.slot);
@@ -888,15 +995,7 @@ export const HANDLERS: Record<string, Handler> = {
           });
         }
         return { content: out };
-      } finally {
-        for (const [o, v] of grids) o.visible = v;
-        flushSync(() => {
-          const z = c();
-          if (a.column) z.dispatch({ type: 'COLUMN', column: was.column });
-          if (a.colourBy) z.dispatch({ type: 'COLOUR_BY', colourBy: was.colourBy });
-          if (a.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
-        });
-      }
+      });
     });
   },
 
@@ -915,6 +1014,56 @@ export const HANDLERS: Record<string, Handler> = {
         note: "several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them",
       });
     });
+  },
+
+  async get_report(a, c) {
+    const e = await storedReport(a.id), problems = readiness(e.spec, appView(c()), c().generation(a.id).generating);
+    const { ranges: _r, blocks, ...spec } = e.spec; // the spec as save_report takes it: what the save adds left out
+    return ok({ spec: { ...spec, blocks: blocks.map((b) => (b.type === 'chart' ? { type: b.type, chart: b.chart, caption: b.caption } : b)) }, pdf: e.pdf, ready: !problems.length, problems });
+  },
+
+  async save_report(a, c) {
+    return exclusive(async () => {
+      const d = validateSpec(a.spec, appView(c()));
+      if (Array.isArray(d)) return fail(`spec: ${d.length} problem${d.length > 1 ? 's' : ''}; fix ${d.length > 1 ? 'them' : 'it'} and save again:\n${d.join('\n')}`);
+      const old = (await storedReports()).find((e) => e.id === d.id)?.spec, since: unknown = a.updated ?? a.spec.updated; // get_report's spec carries its updated
+      if (old && since !== old.updated) {
+        throw new Error(since === undefined ? `updated: report ${d.id} exists (updated ${old.updated}); to replace it, call get_report, merge, and save with its updated, or save under another id`
+          : `updated: report ${d.id} changed in the app since (${since}), last at ${old.updated}: call get_report, merge, and save again`);
+      }
+      if (!old && a.updated !== undefined) throw new Error(`updated: there is no report ${d.id} to replace; leave updated out to create it`);
+      const r = await putReport(d, old);
+      await c().refreshReports();
+      const problems = readiness(r, appView(c()), c().generation(r.id).generating);
+      return ok({ id: r.id, updated: r.updated, ready: !problems.length, problems });
+    });
+  },
+
+  async delete_report(a, c) {
+    if (c().generation(a.id).generating) return fail(`id: a PDF of ${a.id} is being generated; call generate_report until it answers, then delete`);
+    const r = await fetch(`/reports/${a.id}`, { method: 'DELETE' }).catch(() => null);
+    if (r?.status === 404) return fail(`id: no report ${a.id}`);
+    if (r?.status === 409) return fail('the PDF is open in another program: close it and delete again');
+    if (!r?.ok) return fail(`id: not deleted (${r ? await said(r) : 'the server cannot be reached'})`);
+    changed(a.id);
+    await c().refreshReports();
+    return ok({ deleted: a.id, reports: (c().reports ?? []).map((e) => e.id) });
+  },
+
+  async generate_report(a, c, end) {
+    // a call after 'generating': that generation's PDF or error once it has ended (unless the report was saved since)
+    const kept = waiting.delete(a.id) && !c().generation(a.id).generating ? outcome(a.id) : undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pdf = kept ? Promise.resolve('pdf' in kept ? { p: kept.pdf } : { e: new Error(kept.error) })
+      : c().generate(a.id).then((p) => ({ p }), (e: Error) => ({ e })); // a second call meanwhile gets the same generation
+    const r = await Promise.race([pdf, new Promise<null>((done) => { timer = setTimeout(done, Math.max(0, Math.min(40e3, end - Date.now())), null); })]);
+    clearTimeout(timer);
+    if (!r) {
+      waiting.add(a.id);
+      return ok({ id: a.id, status: 'generating', note: 'call generate_report again for the result' });
+    }
+    if ('e' in r) return fail(/^(?:id|blocks\[\d+\]): /.test(r.e.message) ? r.e.message : `${a.id}: ${r.e.message}`); // a field it names, else the report
+    return ok({ id: a.id, ...r.p });
   },
 };
 

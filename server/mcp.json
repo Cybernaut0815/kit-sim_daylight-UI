@@ -11,7 +11,7 @@
     {
       "name": "guide",
       "title": "Read a guide",
-      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions: read it before interpreting results. 'report': the kit-ui kit-report skill, how reports work here and the ReportSpec reference with two examples (one option, a comparison): read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow.",
+      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions: read it before interpreting results. 'report': how reports work here and the ReportSpec reference with two examples (one option, a comparison), followed by the kit-ui kit-report skill when the app's kit-ui package ships it: read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow (from the same package).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -526,7 +526,7 @@
     {
       "name": "delete_report",
       "title": "Delete a report",
-      "description": "Delete a stored report with its PDF; it leaves the app's Reports menu. This cannot be undone.",
+      "description": "Delete a stored report with its PDF; it leaves the app's Reports menu. This cannot be undone. Refused while a PDF of it is being generated, and while its PDF is open in another program (the user closes it first).",
       "inputSchema": {
         "type": "object",
         "properties": {

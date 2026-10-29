@@ -7,6 +7,11 @@ import { defineConfig } from 'vitest/config';
 import { mock } from './mock/run.ts';
 
 const API = process.env.DAYLIGHT_API ?? 'http://127.0.0.1:8080'; // the server listens on IPv4 only; 'localhost' would try ::1 first
+const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+const version = (pkg: string): string => { try { return JSON.parse(readFileSync(here(pkg), 'utf8')).version; } catch { return 'unknown'; } };
+const rev = (repo: string) => { try { return execFileSync('git', ['-C', here(repo), 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return 'unknown'; } };
+// what a report's provenance names: this app, kit-ui, the core and the USD viewer (the submodules' revisions)
+const VERSIONS = { app: version('./package.json'), kitUi: version('./node_modules/kit-ui/package.json'), core: rev('../kit-sim_daylight'), viewer: rev('../USD_WebViewer') };
 const agent = new Agent({ keepAlive: true }); // without it the dev proxy opens a new TCP connection for every request
 // The USD viewer's wasm core runs threads (SharedArrayBuffer), so pages must be cross-origin isolated; preview inherits it.
 const isolation = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
@@ -29,6 +34,7 @@ export default defineConfig(({ command, mode }) => {
   }
   return {
     plugins: [react(), ...(MOCK ? [mock()] : [])],
+    define: { __VERSIONS__: JSON.stringify(VERSIONS) },
     // The viewer's public/ (core/, skies/, samples/, mock-core/): served in dev, copied into dist. web/public is empty.
     publicDir: '../USD_WebViewer/web/public',
     // Two pages, one app: index.html in kit-ui (the default), zha.html in zha-ui; each loads only its design system.
@@ -52,6 +58,7 @@ export default defineConfig(({ command, mode }) => {
       // the agent routes too (daylight_server --mcp): the Host stays localhost:5173, which the server's local-only gate accepts
       proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt', '/mcp', '/bridge', '/files', '/reports', '/session'].map((p) => [p, { target: API, agent }])),
     },
-    test: { environment: 'node', include: ['src/**/*.test.ts'] },
+    // kit-ui's stylesheets as the report inlines them (?raw): vitest blanks every other CSS import
+    test: { environment: 'node', include: ['src/**/*.test.ts'], css: { include: [/kit-ui[\\/]css[\\/]/] } },
   };
 });

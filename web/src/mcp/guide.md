@@ -310,9 +310,9 @@ Each is an approximation: say so, and what it leaves out.
 ## 10. Writing rules (chat and reports)
 
 - Latin script only, as the report fonts cover: accented letters are fine (é, ü, ł; place names as site_info gives
-  them); symbols only the degree sign, ², ×, ·, ±, dashes and the minus sign. No comparison, arrow or check-mark
-  symbols, no Greek letters or sum signs: write >=, <=, ->, "at least", "about", "tau" or "transmittance", "rho" or
-  "reflectance".
+  them); symbols only the degree sign, ², ×, ·, ±, the dashes – and — and the minus sign (no other hyphen, dash or
+  space character). No comparison, arrow or check-mark symbols, no Greek letters or sum signs: write >=, <=, ->, "at
+  least", "about", "tau" or "transmittance", "rho" or "reflectance".
 - A unit with every number: kWh/m², kWh, W/m², lx, h, m², %; differences of shares in percentage points.
 - Numbers as the tools give them (3 significant digits, whole numbers from 1000; shares in whole percent, one decimal
   under 10 %); never more digits.

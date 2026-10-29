@@ -17,6 +17,8 @@ import { Alert, Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
+/** The viewers' selection fill (one material for all of them): the accent, fainter over result colours. */
+export const selectionFill = (byValue: boolean) => ({ color: `#${new THREE.Color(solid('--accent')).getHexString()}`, opacity: byValue ? 0.12 : 0.14 });
 // Neutral tone mapping (the Plain view) lowers every colour by up to 0.04 (linear) before output; add it back so the grid
 // keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
@@ -311,7 +313,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   useEffect(() => {
     usd.displayMode = byValue ? 'plain' : 'shaded';
     usd.toneMapping = byValue ? 'none' : 'neutral';
-    usd.highlight = { color: `#${new THREE.Color(solid('--accent')).getHexString()}`, opacity: byValue ? 0.12 : 0.14 };
+    usd.highlight = selectionFill(!!byValue);
   }, [!!byValue, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
   // Paint: each receiver gets a result overlay (its geometry copied, coloured per element, a child of the viewer's
