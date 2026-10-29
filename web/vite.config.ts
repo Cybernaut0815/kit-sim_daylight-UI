@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 import { mock } from './mock/run.ts';
 
-const API = 'http://127.0.0.1:8080'; // the server listens on IPv4 only; 'localhost' would try ::1 first
+const API = process.env.DAYLIGHT_API ?? 'http://127.0.0.1:8080'; // the server listens on IPv4 only; 'localhost' would try ::1 first
 const agent = new Agent({ keepAlive: true }); // without it the dev proxy opens a new TCP connection for every request
 // The USD viewer's wasm core runs threads (SharedArrayBuffer), so pages must be cross-origin isolated; preview inherits it.
 const isolation = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
@@ -49,7 +49,8 @@ export default defineConfig(({ command, mode }) => {
     server: {
       headers: isolation,
       fs: { allow: ['..'] },
-      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt'].map((p) => [p, { target: API, agent }])),
+      // the agent routes too (daylight_server --mcp): the Host stays localhost:5173, which the server's local-only gate accepts
+      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt', '/mcp', '/bridge', '/files', '/reports', '/session'].map((p) => [p, { target: API, agent }])),
     },
     test: { environment: 'node', include: ['src/**/*.test.ts'] },
   };
