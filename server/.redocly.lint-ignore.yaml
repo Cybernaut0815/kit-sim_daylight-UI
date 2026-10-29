@@ -1,0 +1,6 @@
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+openapi.json:
+  operation-2xx-response:
+    # GET /mcp only answers 405: MCP over HTTP lets a server decline the GET event stream, and this one opens none
+    - '#/paths/~1mcp/get/responses'
