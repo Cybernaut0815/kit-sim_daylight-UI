@@ -83,7 +83,7 @@ export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta,
         </div>
       )}
       {weather.source === 'station' && indexError && <Alert title="No station index">{indexError} <button className="btn btn--ghost" type="button" onClick={() => setRetry((n) => n + 1)}>Retry</button></Alert>}
-      {weather.source === 'pvgis' && <p className="text-muted lines-2">Typical meteorological year from PVGIS (ERA5, modelled rather than measured), limited to 30 requests per second.</p>}
+      {weather.source === 'pvgis' && <p className="text-muted lines-2">Typical meteorological year from PVGIS (satellite or reanalysis data, modelled rather than measured), limited to 30 requests per second.</p>}
       {weather.source === 'upload' && (
         <div className="field">
           <label className="field__label" htmlFor="epw-file">EPW file</label>
