@@ -42,4 +42,27 @@ describe('result visualisation state', () => {
     expect(s.settings.viz.ranges).toEqual({});
     expect(s.settings.viz.colors).toEqual(defaults);
   });
+  it('CHART puts a checked spec in place, removes an extra (never a built-in), resets a look; storage keeps it, junk loads the defaults', () => {
+    const builtIns = [{ id: 'hist', kind: 'histogram' }, { id: 'curve', kind: 'curve' }];
+    let s = initialState();
+    expect(s.settings.charts).toEqual(builtIns);
+    expect(reducer(s, { type: 'CHART', spec: { id: 'hist', kind: 'histogram', bins: 16, title: 'x', parts: ['/W'] } })).toBe(s); // a built-in takes its look only
+    s = reducer(s, { type: 'CHART', spec: { id: 'hist', kind: 'histogram', bins: 16, range: [0, 8] } });
+    s = reducer(s, { type: 'CHART', spec: { id: 'per-part', kind: 'parts', title: 'Per part', parts: ['/W'], metric: 'p10' } });
+    expect(reducer(s, { type: 'CHART', spec: { id: 'curve', kind: 'histogram' } })).toBe(s); // a built-in keeps its kind
+    expect(reducer(s, { type: 'CHART', spec: { id: 'bad id', kind: 'curve' } })).toBe(s);
+    expect(reducer(s, { type: 'CHART', id: 'hist', remove: true })).toBe(s);
+    const set = [{ id: 'hist', kind: 'histogram', range: [0, 8], bins: 16 }, builtIns[1], { id: 'per-part', kind: 'parts', title: 'Per part', parts: ['/W'], metric: 'p10' }];
+    expect(s.settings.charts).toEqual(set);
+    expect(parseSettings(serializeSettings(s.settings)).charts).toEqual(set);
+    s = reducer(s, { type: 'CHART', spec: { id: 'per-part', kind: 'parts', metric: 'max' } }); // the whole spec is replaced
+    s = reducer(s, { type: 'CHART', id: 'hist', reset: true });
+    expect(s.settings.charts).toEqual([...builtIns, { id: 'per-part', kind: 'parts', metric: 'max' }]);
+    expect(reducer(s, { type: 'CHART', id: 'per-part', reset: true }).settings.charts[2]).toEqual({ id: 'per-part', kind: 'parts' });
+    expect(reducer(s, { type: 'CHART', id: 'per-part', remove: true }).settings.charts).toEqual(builtIns);
+    expect(parseSettings('{"sim":{}}').charts).toEqual(builtIns); // an older record
+    expect(parseSettings('{"charts":{"hist":{"bins":5}}}').charts).toEqual(builtIns);
+    expect(parseSettings('{"charts":[{"id":"hist","kind":"curve"},{"id":"x","kind":"pie"},7,{"id":"e","kind":"curve","grid":false},{"id":"curve","kind":"curve","height":120}]}').charts)
+      .toEqual([builtIns[0], { id: 'curve', kind: 'curve', height: 120 }, { id: 'e', kind: 'curve', grid: false }]);
+  });
 });

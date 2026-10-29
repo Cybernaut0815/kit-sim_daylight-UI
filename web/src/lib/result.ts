@@ -1,4 +1,5 @@
-// Result maths: element weights (areas), per-mesh statistics, histogram bins, units and number formatting.
+// Result maths: element weights (areas), per-mesh statistics, histogram bins, the summary every quoted number comes
+// from, units and number formatting.
 export interface Group { first: number; count: number }
 
 /** Triangle areas 0.5 * |(b - a) x (c - a)|, one per face. */
@@ -118,6 +119,24 @@ export function rangeShares(c: Cumulative, lo: number | null, hi: number | null)
   return { below, above, within: Math.max(0, 1 - below - above) };
 }
 
+export interface Summary { elements: number; area: number; min: number; p10: number; median: number; mean: number; p90: number; max: number; total: number; below: number; within: number; above: number; atLeast: number[] }
+
+/**
+ * One column over groups of rows (`weights[k]` belongs to `groups[k]`), area-weighted: the one source of the numbers the
+ * tools, the charts and the reports quote. below / within / above: the shares of the problem range [lo, hi] (null =
+ * open); atLeast[i]: the share at or above thresholds[i]. Values and shares are NaN where no element has a value.
+ */
+export function summarize(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[], lo: number | null = null, hi: number | null = null, thresholds: readonly number[] = []): Summary {
+  const s = groups.map((g, k) => columnStats(values, col, g, weights[k])), c = cumulative(values, col, groups, weights), n = c.v.length;
+  const sum = (f: (x: Stats) => number) => s.reduce((a, x) => a + f(x), 0), area = sum((x) => x.area), total = sum((x) => x.total);
+  const share = (v: number) => (n ? v : NaN), r = rangeShares(c, lo, hi); // the shares of nothing would read as "all above"
+  return {
+    elements: sum((x) => x.count), area, min: n ? c.v[0] : NaN, p10: percentile(c, 0.1), median: percentile(c, 0.5), mean: area ? total / area : NaN,
+    p90: percentile(c, 0.9), max: n ? c.v[n - 1] : NaN, total, below: share(r.below), within: share(r.within), above: share(r.above),
+    atLeast: thresholds.map((x) => share(1 - shareBelow(c, x))),
+  };
+}
+
 const UNITS: Record<string, [string, string]> = {
   radiation: ['kWh/m²', 'kWh'], direct: ['kWh/m²', 'kWh'], diffuse: ['kWh/m²', 'kWh'],
   irradiance: ['W/m²', 'W'], illuminance: ['lx', 'lm'], sunhours: ['h', 'h·m²'],
@@ -143,11 +162,15 @@ export function unitFor(column: string): { value: string; total: string } {
 /** 'radiation_front' -> 'Radiation, front'. */
 export const columnLabel = (column: string): string => { const [q, side] = column.split('_'); return `${q[0].toUpperCase()}${q.slice(1)}${side ? `, ${side}` : ''}`; };
 
+/** The number fmtNum shows: 3 significant digits below 1000, whole above (the tools quote what the app and the PDF show). */
+export const roundNum = (v: number): number => (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toPrecision(3)));
+/** A share (0..1) as the percent ui.tsx pct shows: whole, one decimal under 10 %. */
+export const roundPct = (x: number): number => Number((100 * x).toFixed(x > 0 && x < 0.1 ? 1 : 0));
+
 /** Compact tabular number: 3 significant digits below 1000, thousands grouped above. */
 export function fmtNum(v: number): string {
   if (!Number.isFinite(v)) return '–';
-  if (Math.abs(v) >= 1000) return Math.round(v).toLocaleString('en-GB');
-  return Number(v.toPrecision(3)).toString();
+  return Math.abs(v) >= 1000 ? roundNum(v).toLocaleString('en-GB') : roundNum(v).toString();
 }
 
 /** A difference to the reference model, signed, in the value's format; '' when either side has none. */

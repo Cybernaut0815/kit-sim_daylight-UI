@@ -1,6 +1,7 @@
 // App state: types, reducer (the models by slot, the shared settings), the run batch, settings persistence (pure; the
 // App does the localStorage I/O).
 import type { RemoteManifest } from 'daylight-mesh';
+import { BUILT_IN, FIELDS, putChart, type ChartSpec } from './lib/charts';
 import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
 import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
@@ -42,6 +43,7 @@ export interface Settings {
     gradients: Record<string, string>; scales: Record<string, { min: number | null; max: number | null }>; ranges: Record<string, { lo: number | null; hi: number | null }>;
     colors: { below: string; above: string };
   };
+  charts: ChartSpec[]; // the Results charts in drawing order: the two built-ins (their look), then extras
 }
 
 /** The element under the cursor: object id, element index within the mesh's rows, its value in the current column. */
@@ -109,6 +111,7 @@ export type Action =
   | { type: 'BIN'; bin: [number, number] | null }
   | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
   | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
+  | ({ type: 'CHART' } & ({ spec: ChartSpec } | { id: string; remove: true } | { id: string; reset: true })) // put in place by id, removed (an extra), its look back to the kind's
   | { type: 'ERRORS'; errors: Record<string, string> }
   | { type: 'OPTICS_EDIT'; slot: number; key: string; edit: OpticsEdit } // a material by prim path, or a default row
   | { type: 'OPTICS_RESET'; slot: number; key: string }; // back to the derived (or default) values
@@ -122,6 +125,7 @@ export const defaultSettings = (): Settings => ({
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
   sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true, bounces: 0, bounceSamples: 1024 },
   viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
+  charts: BUILT_IN.map((c) => ({ ...c })),
 });
 
 const IDLE: Run = { status: 'idle' };
@@ -142,6 +146,10 @@ const put = (s: State, slot: number, f: (m: Model) => Model): State => {
 };
 /** A model still shows a result: the shared column (and colouring) stay; else they start over, as for one model. */
 const kept = (models: readonly Model[]) => models.some((m) => m.result);
+const only = (c: ChartSpec, keep: (k: string) => boolean) => Object.fromEntries(Object.entries(c).filter(([k]) => keep(k))) as ChartSpec;
+const lookOf = (c: ChartSpec): readonly string[] => FIELDS[c.kind];
+/** putChart, where a refusal leaves the list as it is (the agent's tool reports it; stored junk is dropped). */
+const put1 = (charts: ChartSpec[], raw: unknown): ChartSpec[] => { const r = putChart(charts, raw); return typeof r === 'string' ? charts : r; };
 
 /**
  * Models' jobs one after another (one in flight per tab; the server allows two per client): before each, a cancel or a
@@ -266,6 +274,14 @@ export function reducer(s: State, a: Action): State {
         : { ...s.settings.viz, ranges: drop(ranges), colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } };
       return { ...s, settings: { ...s.settings, viz } };
     }
+    case 'CHART': { // a built-in is never removed
+      const cs = s.settings.charts, old = 'spec' in a ? undefined : cs.find((c) => c.id === a.id);
+      let charts = cs;
+      if ('spec' in a) charts = put1(cs, a.spec);
+      else if (old && 'reset' in a) charts = put1(cs, only(old, (k) => !lookOf(old).includes(k)));
+      else if (old && !BUILT_IN.some((b) => b.id === old.id)) charts = cs.filter((c) => c !== old);
+      return charts === cs ? s : { ...s, settings: { ...s.settings, charts } };
+    }
     case 'ERRORS': // a run clicks through here every time: no errors before and after = no re-render
       return !Object.keys(a.errors).length && !Object.keys(s.errors).length ? s : { ...s, errors: a.errors };
     case 'OPTICS_EDIT':
@@ -295,6 +311,7 @@ export function parseSettings(raw: string | null): Settings {
       site: { lat: num(site.lat, d.site.lat), lon: num(site.lon, d.site.lon), place: typeof site.place === 'string' ? site.place : d.site.place }, weather: { ...d.weather, ...p.weather, file: null },
       epwMeta: (p.epwMeta as EpwMeta | null | undefined) ?? null, time: { ...d.time, ...p.time }, sim: { ...d.sim, ...p.sim },
       viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges }, colors: { ...d.viz.colors, ...viz.colors } },
+      charts: (Array.isArray(p.charts) ? p.charts : []).reduce<ChartSpec[]>(put1, d.charts), // over the built-ins; junk is dropped
     };
   } catch {
     return d;

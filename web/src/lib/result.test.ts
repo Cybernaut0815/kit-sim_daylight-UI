@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, shareAbove, shareBelow, fmtDiff, unionRange, unitFor, vertexAreas } from './result';
+import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, roundNum, shareAbove, shareBelow, fmtDiff, summarize, unionRange, unitFor, vertexAreas } from './result';
 
 // unit square in the XY plane as two triangles
 const pos = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -58,6 +58,16 @@ describe('stats, histogram and cumulative area', () => {
     expect(rangeShares(c, null, null)).toEqual({ below: 0, above: 0, within: 1 });
     expect(Number.isNaN(percentile(cumulative([], 0, [], []), 0.5))).toBe(true);
   });
+  it('summarize: two groups, unequal weights, the problem range and thresholds in one area-weighted summary', () => {
+    const s = summarize(rows, 0, groups, weights, 15, 35, [20, 45]);
+    expect(s).toEqual({
+      elements: 5, area: 6, min: 10, p10: 10, median: 30, mean: 30, p90: 40, max: 40, total: 180, // 40 weighs 3: the mean is not 25
+      below: 1 / 6, within: 1 - 1 / 6 - 0.5, above: 0.5, atLeast: [1 - 1 / 6, 0],
+    });
+    expect(summarize(rows, 0, groups, weights).within).toBe(1); // no problem range
+    const none = summarize(rows, 0, [{ first: 4, count: 1 }], [[1]], 15, 35, [20]); // only the NaN row
+    expect([none.elements, none.area, none.min, none.mean, none.above, none.atLeast[0]]).toEqual([1, 0, NaN, NaN, NaN, NaN]);
+  });
 });
 
 describe('units and formatting', () => {
@@ -70,6 +80,10 @@ describe('units and formatting', () => {
     expect(fmtNum(1234.5)).toBe('1,235');
     expect(fmtNum(0.123456)).toBe('0.123');
     expect(fmtNum(NaN)).toBe('–');
+  });
+  it('roundNum is the number fmtNum shows', () => {
+    for (const v of [0.123456, 0.000123456, 1.23456e-7, 5, -12.345, 999.6, 1234.5, -1500.4, 1e7 / 3]) expect(roundNum(v)).toBe(Number(fmtNum(v).replace(/,/g, '')));
+    expect(roundNum(NaN)).toBeNaN();
   });
 });
 

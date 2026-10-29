@@ -8,7 +8,8 @@ export function niceStep(span: number, n: number): number {
 export function niceTicks(min: number, max: number, n = 5): number[] {
   if (!(max > min) || !Number.isFinite(min) || !Number.isFinite(max)) return [min];
   const step = niceStep(max - min, n), out: number[] = [];
-  for (let v = Math.ceil(min / step - 1e-9) * step; v <= max + step * 1e-9; v += step) out.push(Number(v.toFixed(10)));
+  // the length cap: a span below float resolution (5 .. 5 + 1e-15) never steps v forward
+  for (let v = Math.ceil(min / step - 1e-9) * step; v <= max + step * 1e-9 && out.length <= 2 * n; v += step) out.push(Number(v.toFixed(10)));
   return out;
 }
 

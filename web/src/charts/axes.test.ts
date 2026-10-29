@@ -14,6 +14,7 @@ describe('axes', () => {
     expect(niceTicks(0, 1, 6)).toEqual([0, 0.2, 0.4, 0.6, 0.8, 1]);
     expect(niceTicks(0, 0)).toEqual([0]);
     expect(niceTicks(0.146, 0.592, 5)).toEqual([0.2, 0.3, 0.4, 0.5]);
+    expect(niceTicks(5, 5.000000000000001).length).toBeLessThanOrEqual(11); // a span below float resolution: capped, not endless
   });
   it('formats ticks', () => {
     expect(fmtTick(1004)).toBe('1,004');
