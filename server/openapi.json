@@ -4,7 +4,7 @@
     "title": "daylight_server",
     "version": "1.0.0",
     "summary": "GPU annual daylight and solar simulation on meshes, over HTTP.",
-    "description": "Runs the [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) core (OptiX ray tracing, Radiance-derived Perez sky, validated against Ladybug Tools, Radiance and pvlib) for several users at once. One GPU worker runs queued jobs one after another; uploads, validation, cached answers and status polls never wait for it.\n\n## Workflow\n\n1. **Upload each mesh once** as a `.dmesh` image: `PUT /mesh/{id}` with an id you choose (a UUID). Meshes stay cached in server RAM, so later runs only name them.\n2. **Submit a job**: `POST /jobs` (multipart) with the receiving meshes in `sensors`, the shading-only meshes in `context`, CLI flags in `args`, and weather as an `epw` file, an `epw_url`, or `--clear-sky`. A `404` with `{\"missing\": [...]}` lists ids the server does not have: upload those and submit again.\n3. **Wait**: `GET /jobs/{id}?wait=25` returns as soon as the state or the queue position changes (long poll). Repeat while `state` is `queued` or `running`.\n4. **Read the result** when `state` is `done`: `values_b64` is base64 of float64 little-endian values, row-major `[rows x columns.length]`, rows = sum of `meshes[].count`. Rows of mesh *k* are `first .. first + count - 1`, one per face (or per vertex with `--on vertices`) in the uploaded order.\n5. **Cancel** with `DELETE /jobs/{id}` when the result is no longer needed; the GPU moves on to the next job.\n\n`POST /run` does steps 2 to 4 in one blocking call and answers the result object directly.\n\n## Example\n\n```sh\ncurl -T box.dmesh \"http://localhost:8080/mesh/3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11?name=roof\"\ncurl -F sensors=3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11 -F args=--lat -F args=52.52 -F args=--lon -F args=13.41 -F args=--tz -F args=1 \\\n     -F args=--quantity -F args=radiation,sunhours -F args=--clear-sky http://localhost:8080/jobs\ncurl \"http://localhost:8080/jobs/<id from the answer>?wait=25\"\n```\n\nDecoding in Python: `numpy.frombuffer(base64.b64decode(r['values_b64']), '<f8').reshape(-1, len(r['columns']))`. In JavaScript: `new Float64Array(Uint8Array.from(atob(r.values_b64), c => c.charCodeAt(0)).buffer)`.\n\n## Units and conventions\n\nCoordinates in `.dmesh` are metres, Z up, right-handed winding (the face normal points to the front side). `radiation`, `direct`, `diffuse`: kWh/m² over the evaluated period; `irradiance`: W/m² mean; `illuminance`: lux mean; `sunhours`: hours (equivalent full-sun hours with `--transmission on`). Columns are named `<quantity>_<side>` (`radiation_front`, `sunhours_back`).\n\nSurfaces are opaque and black by default (the only reflection is the `--ground` plane beyond the model). The server takes numbers, no materials: a `.dmesh` may give each face an optics slot, `--optics` gives a mesh or a slot its reflectance and transmittance, `--transmission on` lets light through glass and porous slots, `--fresnel` picks angle-dependent or flat glass, and `--bounces N` adds the light the model reflects, up to N diffuse reflections traced with `--bounce-samples` paths per sensor (see `args`).\n\n## Errors and limits\n\nErrors are `text/plain`, first line `error: <cause>`; usage errors are `400` and include the CLI usage text. `--optics` rows are checked twice: grammar and ranges at submission (`400`, as are `--bounces` and `--bounce-samples` out of range and the switches ladybug mode refuses), names and slots against the run's meshes when the job runs (the job ends in `error`, status 500). `429`: this client already has `--client-jobs` (default 2) jobs queued or running; identify a client with the `X-Client-Id` header (else the network address). `503`: the queue holds `--max-queue` (default 32) jobs. Both carry `Retry-After`. Finished jobs are kept 15 minutes. There is no authentication; job ids are random UUIDs that only their submitter knows.",
+    "description": "Runs the [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) core (OptiX ray tracing, Radiance-derived Perez sky, validated against Ladybug Tools, Radiance and pvlib) for several users at once. One GPU worker runs queued jobs one after another; uploads, validation, cached answers and status polls never wait for it.\n\n## Workflow\n\n1. **Upload each mesh once** as a `.dmesh` image: `PUT /mesh/{id}` with an id you choose (a UUID). Meshes stay cached in server RAM, so later runs only name them.\n2. **Submit a job**: `POST /jobs` (multipart) with the receiving meshes in `sensors`, the shading-only meshes in `context`, CLI flags in `args`, and weather as an `epw` file, an `epw_url`, or `--clear-sky`. A `404` with `{\"missing\": [...]}` lists ids the server does not have: upload those and submit again.\n3. **Wait**: `GET /jobs/{id}?wait=25` returns as soon as the state or the queue position changes (long poll). Repeat while `state` is `queued` or `running`.\n4. **Read the result** when `state` is `done`: `values_b64` is base64 of float64 little-endian values, row-major `[rows x columns.length]`, rows = sum of `meshes[].count`. Rows of mesh *k* are `first .. first + count - 1`, one per face (or per vertex with `--on vertices`) in the uploaded order.\n5. **Cancel** with `DELETE /jobs/{id}` when the result is no longer needed; the GPU moves on to the next job.\n\n`POST /run` does steps 2 to 4 in one blocking call and answers the result object directly.\n\n## Example\n\n```sh\ncurl -T box.dmesh \"http://localhost:8080/mesh/3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11?name=roof\"\ncurl -F sensors=3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11 -F args=--lat -F args=52.52 -F args=--lon -F args=13.41 -F args=--tz -F args=1 \\\n     -F args=--quantity -F args=radiation,sunhours -F args=--clear-sky http://localhost:8080/jobs\ncurl \"http://localhost:8080/jobs/<id from the answer>?wait=25\"\n```\n\nDecoding in Python: `numpy.frombuffer(base64.b64decode(r['values_b64']), '<f8').reshape(-1, len(r['columns']))`. In JavaScript: `new Float64Array(Uint8Array.from(atob(r.values_b64), c => c.charCodeAt(0)).buffer)`.\n\n## Units and conventions\n\nCoordinates in `.dmesh` are metres, Z up, right-handed winding (the face normal points to the front side). `radiation`, `direct`, `diffuse`: kWh/m² over the evaluated period; `irradiance`: W/m² mean; `illuminance`: lux mean; `sunhours`: hours (equivalent full-sun hours with `--transmission on`). Columns are named `<quantity>_<side>` (`radiation_front`, `sunhours_back`).\n\nSurfaces are opaque and black by default (the only reflection is the `--ground` plane beyond the model). The server takes numbers, no materials: a `.dmesh` may give each face an optics slot, `--optics` gives a mesh or a slot its reflectance and transmittance, `--transmission on` lets light through glass and porous slots, `--fresnel` picks angle-dependent or flat glass, and `--bounces N` adds the light the model reflects, up to N diffuse reflections traced with `--bounce-samples` paths per sensor (see `args`).\n\n## Errors and limits\n\nErrors are `text/plain`, first line `error: <cause>`; usage errors are `400` and include the CLI usage text. `--optics` rows are checked twice: grammar and ranges at submission (`400`, as are `--bounces` and `--bounce-samples` out of range and the switches ladybug mode refuses), names and slots against the run's meshes when the job runs (the job ends in `error`, status 500). `429`: this client already has `--client-jobs` (default 2) jobs queued or running; identify a client with the `X-Client-Id` header (else the network address). `503`: the queue holds `--max-queue` (default 32) jobs. Both carry `Retry-After`. Finished jobs are kept 15 minutes. There is no authentication; job ids are random UUIDs that only their submitter knows.\n\n## Agents (MCP)\n\nWith `--mcp`, agents on this machine (Claude Code, Claude Desktop) work with the web app over MCP: they open models, set roles and settings, run, read results, set cameras, take screenshots, edit charts and write PDF reports, and talk about what the results mean. `POST /mcp` (`mcpMessage`, tag `agents`) is their endpoint; its description covers the protocol, how to connect and the tools. The other `agents` routes serve the app itself, and all of them answer only requests from this machine.",
     "license": { "name": "Apache-2.0 AND LicenseRef-Commons-Clause-1.0", "url": "https://github.com/Cybernaut0815/kit-sim_daylight/blob/main/LICENSE" }
   },
   "servers": [{ "url": "/", "description": "this server" }],
@@ -14,6 +14,7 @@
     { "name": "jobs", "description": "Queued simulation runs: submit, wait, read, cancel." },
     { "name": "run", "description": "The one-call blocking variant." },
     { "name": "weather", "description": "Weather files through the server's download cache." },
+    { "name": "agents", "description": "MCP for agents on this machine (`--mcp`): `mcpMessage` is the agents' endpoint; the other routes serve the web app (its side of the tool-call relay, model files opened by path, reports and their PDFs, the hidden instance's session). Without `--mcp` every route here answers `404`; a request that does not come from this machine gets `403`." },
     { "name": "meta", "description": "Health and this documentation." }
   ],
   "paths": {
@@ -191,13 +192,252 @@
         "description": "This description rendered by ReDoc.",
         "responses": { "200": { "description": "HTML page.", "content": { "text/html": { "schema": { "type": "string" }, "example": "<!doctype html>..." } } } }
       }
+    },
+    "/mcp": {
+      "post": {
+        "tags": ["agents"],
+        "operationId": "mcpMessage",
+        "summary": "MCP endpoint for agents",
+        "description": "The web app's MCP server for agents on this machine, such as Claude Code and Claude Desktop. It answers the handshake and the tool list itself and relays each tool call to the app open in a browser tab (`bridgeNext`), which carries it out with everything its UI offers and shows it live: models, roles, settings, runs, results, cameras, screenshots, charts and reports. With no app tab open, the server starts the app hidden in headless Chrome (with `--web` or `--app-url`) and the agent works there; opening the app later picks that session up.\n\n## Protocol\n\nMCP Streamable HTTP, the revisions with the `initialize` handshake: 2025-11-25, 2025-06-18 and 2025-03-26. One JSON-RPC message per POST, answered as `application/json`: no SSE stream (`mcpGet` answers 405), no `Mcp-Session-Id`, no batches, no prompts or resources.\n\n| message | answer |\n|---|---|\n| `initialize` | `protocolVersion` (the one asked for when supported, else `2025-11-25`), `capabilities: {tools: {}}`, `serverInfo`, `instructions` (how to work with the app) |\n| `ping` | `{}` |\n| `tools/list` | every tool, in one page |\n| `tools/call` | the app's `CallToolResult` (`arguments` may be left out) |\n| a notification (no `id`) | `202`, no body; `notifications/cancelled` too: hanging up cancels a call |\n| anything else (`prompts/list`, `resources/list`, `server/discover`, ...) | error `-32601` |\n\nJSON-RPC errors come with HTTP 200 and echo the request's `id` as sent. A request other than `initialize` whose `MCP-Protocol-Version` header names another revision gets `400 text/plain`, so a client probing for 2026-07-28 falls back to `initialize`.\n\n**Every call answers within 55 s** (Claude Desktop ends tool calls at about 60 s, and Claude Code waits 60 s for an HTTP answer by default). Long steps (a run, a big model, a PDF) go on in the app and the reply says `running` or `generating`: call the tool again. What the agent can act on comes back as an `isError` result: no app tab open (ask the user to open the app and keep its tab open), or no answer within 55 s (the step may still be running in the app: call `app_state`).\n\n## Connect\n\nStart `daylight_server --web ..\\web\\dist --mcp` (`--web` serves the app at http://localhost:8080/ and lets the server start the hidden instance), then:\n\n- **Claude Code** (HTTP): `claude mcp add --transport http daylight http://127.0.0.1:8080/mcp`; `/mcp` in Claude Code lists the tools. If it does not connect, start Claude Code with the environment variable `MCP_PROTOCOL_NEGOTIATION=legacy` (no probe for 2026-07-28).\n- **Claude Desktop** (stdio only: its connectors run in Anthropic's cloud and cannot reach this machine): merge the entry below into `%APPDATA%\\Claude\\claude_desktop_config.json` with absolute paths (`where node` shows node.exe) and restart Claude Desktop. `server/mcp-stdio.mjs` (Node 18 or later, no packages) relays each message to `http://127.0.0.1:8080/mcp`; a URL after the script path picks another address.\n\n```json\n{ \"mcpServers\": { \"daylight\": { \"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"args\": [\"F:\\\\Github\\\\kit-sim_daylight_frontend\\\\server\\\\mcp-stdio.mjs\"] } } }\n```\n\n## Tools\n\nModels by letter A-D, building parts by USD prim path, times in local standard time; `tools/list` gives each tool's description and input schema.\n\n- **App and knowledge:** `app_state` (call it first), `guide` (`daylight`, `report`, `kit-ui`), `site_info`\n- **Models and inputs:** `open_model`, `remove_model`, `model_tree`, `set_roles` (receiver, shade, none), `set_visibility`, `set_geometry`, `get_materials`, `edit_material`, `update_settings` (site, time, simulation, weather, colour scales, charts)\n- **Runs and results:** `run`, `results`, `find_critical`, `download_result`\n- **Views and images:** `set_display`, `set_camera`, `save_view`, `screenshot` (any width and height; never moves the user's camera)\n- **Reports:** `get_report`, `save_report`, `delete_report`, `generate_report` (one option, or 2 to 4 compared; a PDF in the kit-ui kit-report layout whose charts and cameras the user can edit in the app)",
+        "parameters": [
+          { "name": "MCP-Protocol-Version", "in": "header", "required": false, "description": "The revision agreed in `initialize`, which clients send on every later request.", "schema": { "type": "string", "enum": ["2025-11-25", "2025-06-18", "2025-03-26"] }, "example": "2025-11-25" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonRpcRequest" }, "examples": {
+            "initialize": { "value": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": { "name": "claude-code", "version": "2.1.0" } } } },
+            "initialized": { "value": { "jsonrpc": "2.0", "method": "notifications/initialized" } },
+            "toolsList": { "value": { "jsonrpc": "2.0", "id": 1, "method": "tools/list" } },
+            "toolsCall": { "value": { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "find_critical", "arguments": { "model": "A", "column": "sunhours_front", "below": 2 } } } }
+          } } }
+        },
+        "responses": {
+          "200": { "description": "The JSON-RPC answer: the method's `result`, or an `error` (`-32601` unknown method, `-32602` a `tools/call` without a tool name). A tool that could not do its step answers a result with `isError: true` and a text saying what to do.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonRpcResponse" }, "examples": {
+            "initialize": { "value": { "jsonrpc": "2.0", "id": 0, "result": { "protocolVersion": "2025-11-25", "capabilities": { "tools": {} }, "serverInfo": { "name": "daylight_server", "version": "1.0.0" }, "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, ... Start with app_state. ..." } } },
+            "toolsCall": { "value": { "jsonrpc": "2.0", "id": 2, "result": { "content": [{ "type": "text", "text": "{\"model\":\"A\",\"column\":\"sunhours_front\",\"unit\":\"h\",\"groups\":[{\"mesh\":\"/Site/Block/Facade_S\",\"facing\":\"S\",\"area\":38.4,...}]}" }] } } },
+            "noTab": { "value": { "jsonrpc": "2.0", "id": 2, "result": { "content": [{ "type": "text", "text": "No daylight app tab is open on this machine: ask the user to open the app and keep its tab open (LAN tabs cannot be driven), or to start daylight_server with --web or --app-url so it can start a hidden instance itself." }], "isError": true } } },
+            "unknownMethod": { "value": { "jsonrpc": "2.0", "id": 3, "error": { "code": -32601, "message": "Method not found: prompts/list" } } }
+          } } } },
+          "202": { "description": "A notification (no `id`, e.g. `notifications/initialized`): accepted, no body." },
+          "400": { "description": "Not a message this server takes: an `MCP-Protocol-Version` header naming another revision on a request other than `initialize` (a newer client then falls back to `initialize`), or a body without a `method`.", "content": {
+            "text/plain": { "schema": { "type": "string" }, "example": "error: MCP-Protocol-Version 2026-07-28 is not supported (2025-11-25, 2025-06-18, 2025-03-26)\n" },
+            "application/json": { "schema": { "$ref": "#/components/schemas/JsonRpcResponse" }, "example": { "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "Invalid Request: one JSON-RPC request or notification per POST" } } }
+          } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      },
+      "get": {
+        "tags": ["agents"],
+        "operationId": "mcpGet",
+        "summary": "No event stream (405)",
+        "description": "MCP lets a server offer a `GET` stream for messages to the client; this one opens none (no SSE, no sessions), so `GET /mcp` answers `405` with `Allow: POST`. Send every message with `mcpMessage`.",
+        "responses": {
+          "405": { "description": "Not offered.", "headers": { "Allow": { "description": "`POST`", "schema": { "type": "string" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: POST JSON-RPC messages to /mcp; this server opens no SSE stream\n" } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      }
+    },
+    "/bridge/next": {
+      "get": {
+        "tags": ["agents"],
+        "operationId": "bridgeNext",
+        "summary": "Next tool call for an app tab (long poll)",
+        "description": "The web app's side of the relay; agents do not call it. Each page load keeps one `wait=25` poll open and gets the next `tools/call` meant for it, its params as the agent sent them; the tab carries it out and answers with `bridgeResult`. `wait=0` is a ping that never hands out a call: it keeps the tab live and, with `focus=1`, marks it as the one the user looked at last. A call goes to a live tab (a poll open, or one seen within 5 s): the user's tabs before the hidden instance (`kind=headless`), then the one focused last, then the one seen last. With none, the server starts the hidden instance (`--web` or `--app-url`) and gives it up to 30 s to poll; one that has not polled for a minute (its page crashed, or never reached this route) is started again. Tabs gone for a minute are forgotten.",
+        "parameters": [
+          { "$ref": "#/components/parameters/TabId" },
+          { "name": "wait", "in": "query", "required": false, "description": "Seconds to wait for a call, 0 to 25; 0 is a ping.", "schema": { "type": "integer", "minimum": 0, "maximum": 25, "default": 0 }, "example": 25 },
+          { "name": "focus", "in": "query", "required": false, "description": "`1` when the page's window has focus.", "schema": { "type": "integer", "enum": [0, 1] }, "example": 1 },
+          { "name": "kind", "in": "query", "required": false, "description": "`headless` from the hidden instance; the user's tabs leave it out.", "schema": { "type": "string", "enum": ["headless"] }, "example": "headless" }
+        ],
+        "responses": {
+          "200": { "description": "A call for this tab: its id and the `tools/call` params, raw (`arguments` added as `{}` when the agent left it out).", "content": { "application/json": { "schema": { "type": "object", "required": ["id", "params"], "properties": { "id": { "type": "string", "format": "uuid" }, "params": { "type": "object", "description": "`{name, arguments}`." } } }, "example": { "id": "5d0c8a2e-7f13-4b6a-9c41-0e2b7d9f3a10", "params": { "name": "set_camera", "arguments": { "model": "A", "frame": { "paths": ["/Site/Block/Facade_S"] }, "direction": "S", "elevation": 20 } } } } } },
+          "204": { "description": "No call within `wait` seconds, or a ping." },
+          "400": { "description": "No `X-Client-Id`, or not 1 to 64 of `[A-Za-z0-9-]`.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: X-Client-Id must be this page load's id ([A-Za-z0-9-], 1-64 characters)\n" } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      }
+    },
+    "/bridge/result/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/CallId" }],
+      "post": {
+        "tags": ["agents"],
+        "operationId": "bridgeResult",
+        "summary": "Answer a tool call (app tab)",
+        "description": "The tab's answer to a call from `bridgeNext`: one MCP `CallToolResult` object, sent as `Content-Type: application/json` and passed to the agent unchanged as the `tools/call` result.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CallToolResult" }, "example": { "content": [{ "type": "text", "text": "{\"view\":{...},\"description\":\"seen from the S (180°), 20° above the horizon, 42 m away\"}" }] } } } },
+        "responses": {
+          "204": { "description": "Passed on to the agent." },
+          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one CallToolResult object\n" } } },
+          "404": { "description": "No such call (answered already, past its 55 s, or the agent hung up), or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "call": { "value": "error: no such call (answered already, or past its 55 s)\n" },
+            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/files": {
+      "get": {
+        "tags": ["agents"],
+        "operationId": "readLocalPath",
+        "summary": "Read a model file or folder on this machine (app tab)",
+        "description": "How the app opens a model by path (the `open_model` tool): a file's bytes, or a folder's model files, listed recursively for the tab to fetch one after another. Absolute drive-letter paths only (`C:\\...` or `C:/...`; no network share, no device path) and only the Model panel's file types plus weather files: `.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw`. A folder listing skips other files, names starting with a dot, `__MACOSX` and linked folders, and holds at most 2000 files and `--max-mb` in all; a file is at most `--max-mb`.",
+        "parameters": [
+          { "name": "path", "in": "query", "required": true, "description": "Absolute path of a file or folder, URL-encoded.", "schema": { "type": "string" }, "example": "C:\\models\\house" }
+        ],
+        "responses": {
+          "200": { "description": "A file's bytes, or a folder's listing (paths relative to the folder, `/`-separated).", "content": {
+            "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" }, "example": "#usda 1.0\n(\n    metersPerUnit = 1\n    upAxis = \"Z\"\n)\n..." },
+            "application/json": { "schema": { "type": "object", "required": ["path", "files"], "properties": { "path": { "type": "string", "description": "The folder." }, "files": { "type": "array", "items": { "type": "object", "required": ["path", "bytes"], "properties": { "path": { "type": "string" }, "bytes": { "type": "integer" } } } } } }, "example": { "path": "C:\\models\\house", "files": [{ "path": "house.usda", "bytes": 48213 }, { "path": "textures/wall.png", "bytes": 5678 }] } }
+          } },
+          "400": { "description": "Not an absolute local path, not a model, texture or weather file, or over the limits.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "path": { "value": "error: path must be an absolute local path such as C:\\models\\house.usdz (no network or device paths)\n" },
+            "type": { "value": "error: not a model, texture or weather file (.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw)\n" },
+            "size": { "value": "error: C:\\models holds over 2000 model files or 2048 MB: open a subfolder or single files\n" }
+          } } } },
+          "404": { "description": "No such file or folder, or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "path": { "value": "error: no such file or folder: C:\\models\\house.usdz\n" },
+            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/reports": {
+      "get": {
+        "tags": ["agents"],
+        "operationId": "listReports",
+        "summary": "List the stored reports (app)",
+        "description": "The reports the app stored with `saveReport`, each with its spec as a JSON string (the app parses each one by itself, so a damaged file cannot break the list) and whether a PDF exists. Each lives in `<cache>/reports/<id>/` (`--cache`, default `%LOCALAPPDATA%\\daylight_server`): `report.json` (the spec), `index.html` (the page last printed) and `report.pdf`. Agents reach them with the `get_report`, `save_report`, `delete_report` and `generate_report` tools.",
+        "responses": {
+          "200": { "description": "The reports, possibly none.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ReportEntry" } }, "example": [{ "id": "south-facade", "pdf": true, "spec": "{\"id\":\"south-facade\",\"title\":\"Sun on the south facade\",\"updated\":\"2026-10-29T10:12:00Z\",...}" }] } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      }
+    },
+    "/reports/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/ReportId" }],
+      "put": {
+        "tags": ["agents"],
+        "operationId": "saveReport",
+        "summary": "Store a report spec (app)",
+        "description": "Creates or replaces the report's `report.json` with the body: one JSON object of at most 1 MB, the app's ReportSpec (title, models, stats, summary, blocks of text, charts, views and tables), which the app validates; the server stores it as it comes. Written to a temporary file and renamed, so a crash never leaves half a spec.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" }, "example": { "id": "south-facade", "title": "Sun on the south facade", "updated": "2026-10-29T10:12:00Z", "models": [{ "slot": "A", "name": "building.usda" }], "blocks": [] } } } },
+        "responses": {
+          "204": { "description": "Stored." },
+          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one JSON object (the report spec)\n" } } },
+          "413": { "description": "Over 1 MB.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: a report spec is at most 1 MB\n" } } },
+          "500": { "description": "The file could not be written (disk full, no access).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cannot store C:\\Users\\jane\\AppData\\Local\\daylight_server\\reports\\south-facade\\report.json\n" } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      },
+      "delete": {
+        "tags": ["agents"],
+        "operationId": "deleteReport",
+        "summary": "Delete a report (app)",
+        "description": "Removes the report's folder: spec, page and PDF. A program that holds `report.pdf` open (a PDF viewer that locks it) makes it refuse and the report stays: close the PDF and delete again.",
+        "responses": {
+          "204": { "description": "Deleted." },
+          "404": { "description": "No such report, or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "report": { "value": "error: no such report\n" },
+            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          } } } },
+          "409": { "description": "The PDF is open in another program, or the report is printing.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the report's PDF is open in another program or printing: close it and delete again\n" } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/reports/{id}/pdf": {
+      "parameters": [{ "$ref": "#/components/parameters/ReportId" }],
+      "post": {
+        "tags": ["agents"],
+        "operationId": "printReport",
+        "summary": "Print a report page to PDF (app)",
+        "description": "Saves the body, the report page the app rendered from the spec (self-contained HTML in the kit-ui kit-report layout: CSS, fonts and images inline), as `index.html` and prints it to `report.pdf` with headless Chrome or Edge (`--browser PATH`, else the one registered under Windows App Paths; its own profile in `<cache>/pdf-profile`), one print at a time, within 30 s. Answers the PDF's path, a URL that opens it (`getReportPdf`), its pages and bytes, and the fonts it embeds: `fallback` lists any that are not kit-ui's (Geist, Geist Mono, Space Mono, Tektur), i.e. characters those fonts lack that the browser drew with a system font (keep report text to Latin letters, digits and common punctuation).",
+        "requestBody": { "required": true, "content": { "text/html": { "schema": { "type": "string" }, "example": "<!doctype html>\n<html lang=\"en\" data-kit=\"sim\" data-theme=\"light\" data-density=\"compact\">\n<head><meta charset=\"utf-8\"><style>/* kit-ui.css, its fonts as data URIs */</style></head>\n<body><main class=\"report stack\" id=\"main\">...</main></body></html>\n" } } },
+        "responses": {
+          "200": { "description": "Printed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrintedReport" }, "example": { "pdf": "C:\\Users\\jane\\AppData\\Local\\daylight_server\\reports\\south-facade\\report.pdf", "url": "http://localhost:8080/reports/south-facade/pdf", "pages": 4, "bytes": 812345, "fonts": ["Tektur-Regular", "Geist-Regular", "GeistMono-Regular", "SpaceMono-Bold"], "fallback": [] } } } },
+          "404": { "description": "No such report (store its spec first), or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "report": { "value": "error: no such report: save its spec first (PUT /reports/{id})\n" },
+            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          } } } },
+          "409": { "description": "`report.pdf` is open in another program (a PDF viewer that locks it); the old PDF stays.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: C:\\Users\\jane\\AppData\\Local\\daylight_server\\reports\\south-facade\\report.pdf is open in another program: close the PDF and generate again\n" } } },
+          "500": { "description": "No browser to print with, or it printed no PDF (it failed, or took over 30 s).", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "browser": { "value": "error: no Chrome or Edge found to print the PDF: start daylight_server with --browser PATH\n" },
+            "print": { "value": "error: the browser printed no PDF (no PDF within 30 s): C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\n" }
+          } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "get": {
+        "tags": ["agents"],
+        "operationId": "getReportPdf",
+        "summary": "Open a report's PDF",
+        "description": "The PDF last printed by `printReport` (its `url` points here), inline so the browser shows it, never cached. Like every route of this tag it answers only on this machine.",
+        "responses": {
+          "200": { "description": "The PDF.", "headers": { "Content-Disposition": { "description": "`inline; filename=\"<id>.pdf\"`", "schema": { "type": "string" } } }, "content": { "application/pdf": { "schema": { "type": "string", "contentMediaType": "application/pdf" }, "example": "%PDF-1.4\n..." } } },
+          "404": { "description": "No PDF yet, or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "pdf": { "value": "error: no PDF of this report yet: generate it (POST /reports/{id}/pdf)\n" },
+            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/session": {
+      "get": {
+        "tags": ["agents"],
+        "operationId": "getSession",
+        "summary": "The hidden instance's session (app)",
+        "description": "Claude-only mode: with no app tab open, the server runs the app hidden in headless Chrome (`--web` or `--app-url`; its profile in `<cache>/agent-profile`) and the agent works there. That instance records here, in memory, its settings, the state-changing tool calls it made and whether it ran. An app tab opening later reads the record, replays it (same models, roles, settings, camera and results) and deletes it (`deleteSession`), which ends the hidden instance.",
+        "responses": {
+          "200": { "description": "The record, as the hidden instance stored it.", "content": { "application/json": { "schema": { "type": "object" }, "example": { "settings": "{\"site\":{\"lat\":52.52,\"lon\":13.41,\"place\":\"Berlin\"},...}", "steps": [{ "name": "open_model", "arguments": { "paths": ["C:\\models\\house.usdz"], "model": "A" } }, { "name": "set_roles", "arguments": { "paths": ["/Site/Block"], "role": "receiver" } }], "ran": true } } } },
+          "404": { "description": "No session (no hidden instance, or picked up already), or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+            "none": { "value": "error: no session\n" },
+            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "put": {
+        "tags": ["agents"],
+        "operationId": "putSession",
+        "summary": "Record the hidden instance's session (app)",
+        "description": "Replaces the record with the body, one JSON object (the hidden instance sends it after each change). It stays in memory until `deleteSession` or the server exits.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" }, "example": { "settings": "{\"site\":{\"lat\":52.52,\"lon\":13.41,\"place\":\"Berlin\"},...}", "steps": [], "ran": false } } } },
+        "responses": {
+          "204": { "description": "Stored." },
+          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one JSON object\n" } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      },
+      "delete": {
+        "tags": ["agents"],
+        "operationId": "deleteSession",
+        "summary": "Pick the session up (app)",
+        "description": "Forgets the record and ends the hidden instance (its browser and every process it started). Sent by the app tab that picked the session up.",
+        "responses": {
+          "204": { "description": "Done." },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotEnabled" }
+        }
+      }
     }
   },
   "components": {
     "parameters": {
       "MeshId": { "name": "id", "in": "path", "required": true, "description": "Mesh id chosen by the client: 1 to 64 of `[A-Za-z0-9-]`, a UUID is ideal.", "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "example": "3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11" },
       "JobId": { "name": "id", "in": "path", "required": true, "description": "Job id from `submitJob`.", "schema": { "type": "string", "format": "uuid" }, "example": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b" },
-      "ClientId": { "name": "X-Client-Id", "in": "header", "required": false, "description": "Identifies one client (a browser tab, a script) for the per-client job limit and `listMyJobs`. Without it the network address is used.", "schema": { "type": "string", "maxLength": 64 }, "example": "tab-5f0e2b" }
+      "ClientId": { "name": "X-Client-Id", "in": "header", "required": false, "description": "Identifies one client (a browser tab, a script) for the per-client job limit and `listMyJobs`. Without it the network address is used.", "schema": { "type": "string", "maxLength": 64 }, "example": "tab-5f0e2b" },
+      "TabId": { "name": "X-Client-Id", "in": "header", "required": true, "description": "This page load's id, a random UUID per load (a duplicated tab is another tab).", "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "example": "0b6f3c2a-91d4-4e57-8a2b-6c1d0e9f4a37" },
+      "CallId": { "name": "id", "in": "path", "required": true, "description": "The call's id from `bridgeNext`.", "schema": { "type": "string", "format": "uuid" }, "example": "5d0c8a2e-7f13-4b6a-9c41-0e2b7d9f3a10" },
+      "ReportId": { "name": "id", "in": "path", "required": true, "description": "Report id chosen by the app: 1 to 64 of `[a-z0-9-]` (lowercase: report folders ignore case on Windows).", "schema": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" }, "example": "south-facade" }
     },
     "requestBodies": {
       "RunRequest": {
@@ -218,7 +458,9 @@
       "TooManyJobs": { "description": "This client already has its limit of jobs queued or running.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: 2 jobs of this client are queued or running (limit 2); wait for one to finish or DELETE /jobs/{id}\n" } } },
       "QueueFull": { "description": "The queue is full.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the queue is full (32 jobs); retry shortly\n" } } },
       "DownloadFailed": { "description": "The weather resource could not be downloaded.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: download failed (curl exit 22): https://energyplus-weather.s3.amazonaws.com/...\n" } } },
-      "NoSuchJob": { "description": "Unknown id, or finished more than 15 minutes ago.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: no such job (finished jobs are kept 15 minutes)\n" } } }
+      "NoSuchJob": { "description": "Unknown id, or finished more than 15 minutes ago.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: no such job (finished jobs are kept 15 minutes)\n" } } },
+      "Forbidden": { "description": "Agent routes answer only requests from this machine: TCP peer 127.0.0.1 or ::1, `Host` localhost, 127.0.0.1 or [::1] (any port), `Origin` absent or the page's own, `Sec-Fetch-Site` absent, `none` or `same-origin`, no `Forwarded` or `X-Forwarded-*` header (a proxy), and the JSON bodies of `mcpMessage` and `bridgeResult` sent as `Content-Type: application/json`.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: agent routes answer only on this machine (Host localhost, 127.0.0.1 or [::1]; same origin; no proxy; JSON bodies as Content-Type: application/json)\n" } } },
+      "NotEnabled": { "description": "The server runs without `--mcp`, so every agent route is off.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: agent routes are off (start daylight_server with --mcp)\n" } } }
     },
     "schemas": {
       "RunRequest": {
@@ -310,6 +552,65 @@
           "queued": { "type": "integer" },
           "running": { "type": "boolean" },
           "jobs_retained": { "type": "integer", "description": "Jobs in memory, finished ones included." }
+        }
+      },
+      "JsonRpcRequest": {
+        "type": "object",
+        "description": "One JSON-RPC 2.0 request, or a notification (no `id`).",
+        "required": ["jsonrpc", "method"],
+        "properties": {
+          "jsonrpc": { "type": "string", "const": "2.0" },
+          "id": { "type": ["string", "integer"], "description": "Echoed in the answer exactly as sent." },
+          "method": { "type": "string", "description": "`initialize`, `ping`, `tools/list`, `tools/call`, or a notification." },
+          "params": { "type": "object" }
+        }
+      },
+      "JsonRpcResponse": {
+        "type": "object",
+        "description": "The answer to one request: its `result`, or an `error`.",
+        "required": ["jsonrpc", "id"],
+        "properties": {
+          "jsonrpc": { "type": "string", "const": "2.0" },
+          "id": { "type": ["string", "integer", "null"], "description": "The request's `id`; `null` when the request could not be read." },
+          "result": { "type": "object", "description": "For `tools/call`, a `CallToolResult`." },
+          "error": { "type": "object", "required": ["code", "message"], "properties": { "code": { "type": "integer" }, "message": { "type": "string" } } }
+        }
+      },
+      "CallToolResult": {
+        "type": "object",
+        "description": "An MCP tool result as the app answers it: text (compact JSON or a message), images (JPEG, base64) and links; `isError` when the step could not be done, its text saying what to fix.",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "array", "items": { "type": "object", "required": ["type"], "properties": {
+            "type": { "type": "string", "enum": ["text", "image", "resource_link"] },
+            "text": { "type": "string" },
+            "data": { "type": "string", "contentEncoding": "base64" },
+            "mimeType": { "type": "string" },
+            "uri": { "type": "string", "format": "uri" },
+            "name": { "type": "string" }
+          } } },
+          "isError": { "type": "boolean" }
+        }
+      },
+      "ReportEntry": {
+        "type": "object",
+        "required": ["id", "pdf", "spec"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+          "pdf": { "type": "boolean", "description": "Whether a printed PDF exists (`getReportPdf`)." },
+          "spec": { "type": "string", "contentMediaType": "application/json", "description": "`report.json` as stored, as a string: parse it." }
+        }
+      },
+      "PrintedReport": {
+        "type": "object",
+        "required": ["pdf", "url", "pages", "bytes", "fonts", "fallback"],
+        "properties": {
+          "pdf": { "type": "string", "description": "Absolute path of `report.pdf` on this machine." },
+          "url": { "type": "string", "format": "uri", "description": "Where `getReportPdf` serves it, on the address the request came to." },
+          "pages": { "type": "integer", "description": "Page count." },
+          "bytes": { "type": "integer", "description": "File size." },
+          "fonts": { "type": "array", "items": { "type": "string" }, "description": "PostScript names of the embedded fonts, subset tags dropped." },
+          "fallback": { "type": "array", "items": { "type": "string" }, "description": "The fonts that are not kit-ui's (Geist, Geist Mono, Space Mono, Tektur): the browser drew some characters with a system font. Empty for a clean report." }
         }
       }
     }

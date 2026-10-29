@@ -6,7 +6,9 @@
 
 The complete, machine-readable description is the OpenAPI 3.1 document at /openapi.json (human views: /docs, /redoc).
 Read it for every parameter, schema, example and error. Operation ids: uploadMesh, meshExists, submitJob, getJob,
-cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
+cancelJob, listMyJobs, runSync, proxyDownload, getHealth. Agent routes (--mcp, this machine only): mcpMessage, mcpGet,
+bridgeNext, bridgeResult, readLocalPath, listReports, saveReport, deleteReport, printReport, getReportPdf, getSession,
+putSession, deleteSession.
 
 ## Workflow
 
@@ -59,3 +61,18 @@ cancelJob, listMyJobs, runSync, proxyDownload, getHealth.
 - Send X-Client-Id to identify your client: at most 2 jobs queued or running per client (429), 32 in the queue (503),
   both with Retry-After. Finished jobs are kept 15 minutes. Identical requests are answered from a result cache.
 - No authentication; job ids are random UUIDs only their submitter knows.
+
+## Agents (MCP)
+
+With --mcp, an agent on this machine works with the web app itself instead of the routes above: it opens models by
+path, sets roles, settings and cameras, runs, reads results and critical areas, takes screenshots of any size, edits
+charts, writes PDF reports (one option, or 2-4 compared) and discusses what the results mean.
+- Endpoint: POST /mcp (mcpMessage), JSON-RPC over HTTP, revisions 2025-11-25, 2025-06-18 and 2025-03-26, JSON answers
+  (no SSE). Claude Code: claude mcp add --transport http daylight http://127.0.0.1:8080/mcp (if it does not connect,
+  set MCP_PROTOCOL_NEGOTIATION=legacy). Claude Desktop: the stdio relay server/mcp-stdio.mjs, with an absolute node.exe
+  path in claude_desktop_config.json.
+- Start with the app_state tool; tools/list describes every tool. Each call answers within 55 s: "running" or
+  "generating" means call it again.
+- Calls run in the app's browser tab (keep it open) or, with none open, in a hidden instance the server starts (--web
+  or --app-url); opening the app picks that session up.
+- Agent routes answer only requests from this machine (403) and are off without --mcp (404).

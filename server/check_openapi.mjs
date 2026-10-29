@@ -1,6 +1,7 @@
-// Drift check: every route registered in src/server.cpp is described in openapi.json and vice versa, and every
-// operation is documented well enough for a person or an agent (operationId, summary, description, responses with a
-// schema or an example). Run: node check_openapi.mjs (ctest runs it as openapi_drift). Exit 1 lists every problem.
+// Drift check: every route registered in src/server.cpp is described in openapi.json and vice versa, every operation
+// is documented well enough for a person or an agent (operationId, summary, description, responses with a schema or an
+// example), and every MCP tool in mcp.json is named in the mcpMessage description. Run: node check_openapi.mjs (ctest
+// runs it as openapi_drift). Exit 1 lists every problem.
 import { readFileSync } from 'node:fs';
 
 const here = new URL('.', import.meta.url);
@@ -38,5 +39,10 @@ for (const o of ops) if (!routes.has(o)) problems.push(`${o}: in openapi.json bu
 const ids = [...ops].map((k) => { const [m, p] = k.split(' '); return spec.paths[p][m].operationId; });
 for (const id of ids) if (ids.indexOf(id) !== ids.lastIndexOf(id)) problems.push(`operationId ${id} is not unique`);
 
+// The /docs tool list: each tool POST /mcp answers in tools/list, in backticks
+const tools = JSON.parse(readFileSync(new URL('mcp.json', here), 'utf8')).tools ?? [];
+const mcpDoc = spec.paths['/mcp']?.post?.description ?? '';
+for (const t of tools) if (!mcpDoc.includes(`\`${t.name}\``)) problems.push(`mcp.json tool ${t.name}: not named in the mcpMessage description`);
+
 if (problems.length) { console.error(`openapi drift: ${problems.length} problem(s)\n  ${[...new Set(problems)].join('\n  ')}`); process.exit(1); }
-console.log(`openapi ok: ${ops.size} operations match server.cpp`);
+console.log(`openapi ok: ${ops.size} operations match server.cpp, ${tools.length} MCP tools documented`);

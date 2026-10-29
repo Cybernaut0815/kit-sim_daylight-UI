@@ -22,10 +22,11 @@ in front of the server (a TLS reverse proxy) or a port forward to their own loca
 | `/openapi.json` | OpenAPI 3.1, the machine-readable source; agents should read this |
 | `/llms.txt` | a short plain-text guide for agents (workflow, units, limits) pointing at `/openapi.json` |
 
-The description lives in [openapi.json](openapi.json) and the guide in [llms.txt](llms.txt); both are embedded into the
-exe at build time. `ctest` runs [check_openapi.mjs](check_openapi.mjs), which fails when a route in `src/server.cpp`
-is missing from the description (or the reverse), or an operation lacks an id, summary, description or documented
-responses. `npx @redocly/cli lint openapi.json` (config [redocly.yaml](redocly.yaml)) validates it against the spec.
+The description lives in [openapi.json](openapi.json), the guide in [llms.txt](llms.txt) and the MCP tools in
+[mcp.json](mcp.json); all three are embedded into the exe at build time. `ctest` runs [check_openapi.mjs](check_openapi.mjs),
+which fails when a route in `src/server.cpp` is missing from the description (or the reverse), an operation lacks an
+id, summary, description or documented responses, or a tool in `mcp.json` is not named in the `mcpMessage`
+description. `npx @redocly/cli lint openapi.json` (config [redocly.yaml](redocly.yaml)) validates it against the spec.
 Change an endpoint: edit `server.cpp` and `openapi.json` together.
 
 ## Several users
@@ -75,8 +76,63 @@ job (500).
 
 `--port 8080`, `--web DIR` (static files), `--cache DIR` (default `%LOCALAPPDATA%\daylight_server`), `--max-mb 2048`
 (request body limit), `--mesh-cache-mb 2048`, `--client-jobs 2`, `--max-queue 32`, `--job-ttl-min 15` (how long finished
-jobs stay readable), `--gpu-scenes 4`.
+jobs stay readable), `--gpu-scenes 4`, `--mcp` (the agent routes, below), `--browser PATH` (Chrome or Edge for report
+PDFs and the hidden instance; default the one registered under Windows App Paths), `--app-url URL` (the app the hidden
+instance opens; default this server's `--web` app).
 
 Weather downloads use the Windows-bundled `curl.exe` and only these URL prefixes (see `proxyDownload` in `/docs`):
 the EnergyPlus station index on raw.githubusercontent.com, EnergyPlus weather files on S3 (see the EnergyPlus weather
 data licence), and PVGIS (European Commission JRC; 30 requests per second per IP).
+
+## Agents (MCP)
+
+`--mcp` lets agents on this machine work with the web app over MCP: Claude Code or Claude Desktop opens models, sets
+roles, settings and cameras, runs, reads results, takes screenshots of any shape, edits the Results charts, writes PDF
+reports in the kit-ui `kit-report` layout (one option, or 2 to 4 compared) and talks through what the results mean. The
+app has no chat: the agent drives the open app tab and everything it changes shows there. `POST /mcp` answers the
+handshake and the tool list from [mcp.json](mcp.json) and relays each tool call to the tab (`web/src/mcp`); `/docs`
+documents the routes (tag `agents`) and lists the tools under `mcpMessage`.
+
+```
+build\RelWithDebInfo\daylight_server.exe --web ..\web\dist --mcp
+```
+
+- **Claude Code:** `claude mcp add --transport http daylight http://127.0.0.1:8080/mcp`, then `/mcp` lists the tools. If
+  it does not connect, start Claude Code with `MCP_PROTOCOL_NEGOTIATION=legacy` (the server speaks the MCP revisions
+  2025-11-25, 2025-06-18 and 2025-03-26, which have the `initialize` handshake).
+- **Claude Desktop** runs local servers only as stdio commands (its connectors run in Anthropic's cloud and cannot reach
+  this machine), so [mcp-stdio.mjs](mcp-stdio.mjs) (Node 18 or later, no packages) relays its messages to `POST /mcp`.
+  Merge the entry into `%APPDATA%\Claude\claude_desktop_config.json` with absolute paths (`where node` shows node.exe;
+  Claude Desktop does not quote `args`, so keep the script path free of spaces), restart Claude Desktop and read
+  `%APPDATA%\Claude\logs\mcp*.log` if the tools do not show. A URL after the script path picks another server.
+
+  ```json
+  { "mcpServers": { "daylight": { "command": "C:\\Program Files\\nodejs\\node.exe",
+                                  "args": ["F:\\Github\\kit-sim_daylight_frontend\\server\\mcp-stdio.mjs"] } } }
+  ```
+
+- **Every call answers within 55 s** (Claude Desktop ends tool calls at about 60 s): a run, a big model or a PDF goes on
+  in the app, the reply says `running` or `generating`, and the agent calls again.
+- **Keep the app tab open.** Background and minimised tabs work, but a browser that discards tabs to save memory loses
+  the loaded models: put the app's address on its list of sites to always keep active (Chrome: Settings > Performance;
+  Edge: Settings > System and performance, "Never put these sites to sleep"). **One tab per address:** each tab holds
+  one long poll open and browsers allow 6 connections per host, so several tabs slow each other's model downloads;
+  calls go to the tab focused last.
+- **Claude-only mode.** With no app tab open, the first tool call starts the app hidden in headless Chrome (or Edge) and
+  the agent works there. It needs `--web` (or `--app-url URL` for an app served elsewhere, such as the Vite dev server
+  on `http://localhost:5173/`) and a browser (`--browser PATH`, else the one registered under Windows App Paths). The
+  hidden instance has its own profile in `<cache>\agent-profile` and takes about 1.5 GB of memory with a model loaded.
+  It ends with the server, or when you open the app: the app picks its session up (models, roles, settings, camera,
+  results) and the server closes it. A hidden page that cannot reach the server (a wrong `--app-url`, a host name other
+  than localhost or 127.0.0.1, a dev server that does not forward `/bridge`) makes tool calls say so after 30 s; one
+  that stops polling for a minute is started again.
+- **Reports** live in `<cache>\reports\<id>\`: `report.json` (the spec the agent saved, which you edit in the app: charts
+  with the settings button in Results, cameras in the Views menu), `index.html` (the page last printed) and `report.pdf`,
+  printed by the same browser in headless mode (profile `<cache>\pdf-profile`). After editing, generate the PDF again from
+  the Reports menu; a PDF viewer that locks `report.pdf` stops that (`409`), so close the PDF first.
+- **This machine only.** Without `--mcp` the agent routes (`/mcp`, `/bridge`, `/files`, `/reports`, `/session`) answer
+  `404`. With it they answer only requests from this machine (TCP peer 127.0.0.1 or ::1, `Host` localhost, 127.0.0.1 or
+  [::1], same origin, no proxy headers; else `403`), since they read files on this machine and drive its browser; LAN
+  users keep the app and the job API. Two setups make a LAN user look local, so do not combine them with `--mcp`: an SSH
+  port forward (`ssh -L 8080:localhost:8080`), and a reverse proxy on this machine that adds no `X-Forwarded-For` header
+  (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` makes the agent routes refuse its requests).

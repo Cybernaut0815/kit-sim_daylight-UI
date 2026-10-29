@@ -3,15 +3,21 @@
 // box, so no WASM). One worker thread owns the GPU and runs queued jobs one after another; everything else (uploads,
 // validation, cached answers, status polls, weather downloads) runs on the HTTP thread pool and never waits for it.
 // The API is self-describing: GET /openapi.json (OpenAPI 3.1, embedded from server/openapi.json), /docs (Swagger UI),
-// /redoc (ReDoc) and /llms.txt (a plain-text guide for agents).
+// /redoc (ReDoc) and /llms.txt (a plain-text guide for agents). With --mcp, agents on this machine drive the web app
+// over MCP (POST /mcp): each tool call is relayed to the app's browser tab, or to a hidden instance the server starts;
+// the app keeps its reports here and has a headless browser print them to PDF.
 #include "cli.h"
 #include "daylight.h"
 #include <httplib.h>
 #include <cuda_runtime.h>
+#include <windows.h>
 
+#include "agent.h"
 #include "llms_txt.h"
+#include "mcp_json.h"
 #include "openapi_json.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -30,6 +36,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -64,6 +71,16 @@ struct Job {
   int status = 0;                                 // error: the HTTP status POST /run answers
 };
 
+// Agent routes (--mcp), guarded by Server::mcpMu: a tools/call relayed to an app tab (POST /mcp -> GET /bridge/next ->
+// POST /bridge/result/{id}), and the tabs that poll for them (one per page load, X-Client-Id).
+struct Call { std::string id, params, result; bool done = false; };   // params: the raw tools/call params
+struct Tab {
+  std::deque<std::shared_ptr<Call>> queue;        // not yet handed out
+  Clock::time_point seen, focus;                  // last poll; last poll that said the window has focus (server clock)
+  int parked = 0;                                 // polls open now (a tab with one is never purged)
+  bool headless = false;                          // the hidden instance (kind=headless): any tab of the user's goes first
+};
+
 struct Server {
   std::mutex meshMu;                              // mesh LRU
   std::unordered_map<std::string, MeshEntry> meshes;
@@ -85,6 +102,19 @@ struct Server {
   std::mutex dl;                                  // one download at a time (the .part -> file rename)
   fs::path dir;                                   // disk cache of /proxy
   std::string gpu;                                // device name for /health
+
+  std::mutex mcpMu;                               // agent routes: tabs, calls, session, hidden instance; mcpCv signals every change
+  std::condition_variable mcpCv;
+  std::unordered_map<std::string, Tab> tabs;      // by X-Client-Id
+  std::unordered_map<std::string, std::shared_ptr<Call>> calls;   // relayed, not yet answered
+  std::string session;                            // PUT /session: the hidden instance's record for the app to pick up (raw JSON)
+  HANDLE hidden = nullptr, job = nullptr;         // the hidden instance's browser process and the job object that ends it
+  Clock::time_point hiddenSeen;                   // its start, then its last poll (kind=headless): a minute without one restarts it
+  std::wstring browser;                           // --browser, else Chrome or Edge from App Paths ("" = none)
+  std::string appUrl;                             // what the hidden instance opens: --app-url, else this server's --web app
+
+  std::mutex repMu;                               // reports: spec writes, the list, deletes
+  std::mutex pdfMu;                               // one PDF print at a time (one browser profile)
 };
 
 // ---------------------------------------------------------------------------------------------------- helpers
@@ -174,6 +204,13 @@ std::string read_file(const fs::path& p) {
   std::ostringstream ss;
   ss << f.rdbuf();
   return ss.str();
+}
+
+bool write_file(const fs::path& p, const std::string& body) {
+  std::ofstream f(p, std::ios::binary);
+  f << body;
+  f.close();
+  return !f.fail();
 }
 
 void text(httplib::Response& res, int status, const std::string& body) { res.status = status; res.set_content(body, "text/plain; charset=utf-8"); }
@@ -395,6 +432,137 @@ void worker(Server& S) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------- agents (--mcp)
+// POST /mcp answers the MCP handshake and the tool list from the embedded mcp.json itself and relays each tools/call to
+// an app tab (web/src/mcp), which long-polls GET /bridge/next and answers on POST /bridge/result/{id}.
+std::string tool_error(const std::string& msg) {   // a CallToolResult the agent can act on
+  return "{\"content\": [{\"type\": \"text\", \"text\": " + json_str(msg) + "}], \"isError\": true}";
+}
+
+// The tab a call goes to: a live one (a poll open, or one within 5 s), the user's tabs before the hidden instance, then
+// the one focused last, then the one seen last; "" when none. Caller holds mcpMu.
+std::string target(const Server& S) {
+  const auto now = Clock::now();
+  const std::pair<const std::string, Tab>* best = nullptr;
+  for (const auto& e : S.tabs) {
+    const Tab& t = e.second;
+    if (!t.parked && now - t.seen > std::chrono::seconds(5)) continue;
+    if (!best || std::make_tuple(!t.headless, t.focus, t.seen) > std::make_tuple(!best->second.headless, best->second.focus, best->second.seen)) best = &e;
+  }
+  return best ? best->first : "";
+}
+
+// The browser for the hidden instance (and report PDFs) when --browser names none: the App Paths entry of chrome.exe,
+// then of msedge.exe, per user before per machine; "" when neither is installed.
+std::wstring find_browser() {
+  for (const wchar_t* exe : {L"chrome.exe", L"msedge.exe"})
+    for (const HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+      wchar_t buf[2048];
+      DWORD bytes = sizeof buf;   // RRF_RT_REG_SZ takes REG_EXPAND_SZ too, expanded
+      const std::wstring key = std::wstring(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\") + exe;
+      if (RegGetValueW(root, key.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, buf, &bytes) != ERROR_SUCCESS) continue;
+      std::wstring p = buf;
+      if (p.size() > 1 && p.front() == L'"' && p.back() == L'"') p = p.substr(1, p.size() - 2);
+      std::error_code ec;
+      if (fs::is_regular_file(p, ec)) return p;
+    }
+  return {};
+}
+
+// Starts exe with each argument quoted (agent.h quote): no console window, no inherited handles (the listening socket
+// stays ours), and inside `job` when given, before it can start children of its own. The process handle, or nullptr.
+HANDLE spawn(const std::wstring& exe, const std::vector<std::wstring>& args, HANDLE job, std::string& err) {
+  std::wstring cmd = quote(exe);
+  for (const auto& a : args) cmd += L" " + quote(a);
+  STARTUPINFOW si{};
+  si.cb = sizeof si;
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
+    err = "cannot start " + fs::path(exe).u8string() + " (error " + std::to_string(GetLastError()) + ")";
+    return nullptr;
+  }
+  if (job && !AssignProcessToJobObject(job, pi.hProcess)) {
+    err = "cannot put the browser in a job object (error " + std::to_string(GetLastError()) + ")";
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return nullptr;
+  }
+  ResumeThread(pi.hThread);
+  CloseHandle(pi.hThread);
+  return pi.hProcess;
+}
+
+void stop_hidden(Server& S) {   // caller holds mcpMu
+  if (S.job) CloseHandle(S.job);   // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: the browser and its children end here
+  if (S.hidden) { WaitForSingleObject(S.hidden, 5000); CloseHandle(S.hidden); }   // gone, so a new one can take its profile
+  S.job = S.hidden = nullptr;
+}
+
+// No app tab is open: start ONE headless browser on the app (#headless makes the page a bridge tab of kind headless),
+// in a job object, so it ends with the server (even a crash) or when the app picks its session up (DELETE /session).
+// One that has not polled for a minute (its page crashed, or never reached /bridge/next) is started again. false with
+// the agent's next step when that cannot work. Caller holds mcpMu.
+// ponytail: a minute without a poll counts as wedged, so a page whose main thread blocks that long restarts too (its
+// models lost); raise the minute if that shows
+bool start_hidden(Server& S, std::string& why) {
+  const bool alive = S.hidden && WaitForSingleObject(S.hidden, 0) == WAIT_TIMEOUT;
+  if (alive && Clock::now() - S.hiddenSeen < std::chrono::seconds(60)) return true;   // starting, or polled within the minute
+  stop_hidden(S);
+  if (S.appUrl.empty()) {
+    why = "No daylight app tab is open on this machine: ask the user to open the app and keep its tab open (LAN tabs cannot "
+          "be driven), or to start daylight_server with --web or --app-url so it can start a hidden instance itself.";
+    return false;
+  }
+  const std::string ask = " ask the user to open " + S.appUrl + " and keep the tab open";
+  if (S.browser.empty()) {
+    why = "No daylight app tab is open and no Chrome or Edge was found for a hidden instance:" + ask + ", or to start daylight_server with --browser PATH.";
+    return false;
+  }
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION lim{};
+  lim.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  S.job = CreateJobObjectW(nullptr, nullptr);
+  std::string err = "cannot create a job object";
+  if (S.job && SetInformationJobObject(S.job, JobObjectExtendedLimitInformation, &lim, sizeof lim))
+    S.hidden = spawn(S.browser, {L"--headless", L"--no-first-run", L"--no-default-browser-check", L"--user-data-dir=" + (S.dir / "agent-profile").wstring(),
+                                 fs::path(S.appUrl + "#headless").wstring()}, S.job, err);
+  if (S.hidden) { S.hiddenSeen = Clock::now(); return true; }
+  stop_hidden(S);
+  why = "No daylight app tab is open and the hidden instance did not start (" + err + "):" + ask + ".";
+  return false;
+}
+
+// tools/call: queued for the target tab (with none open, the hidden instance is started and given up to 30 s to poll)
+// and answered with the tab's CallToolResult, raw. A client that hangs up cancels a call no tab has taken yet.
+// ponytail: every answer within 55 s (Claude Desktop ends calls at about 60 s; long steps answer `running` in the tab),
+// and no re-delivery of a call whose tab closed (the timeout text sends the agent to app_state)
+std::string relay(Server& S, const httplib::Request& req, const std::string& params) {
+  const auto end = Clock::now() + std::chrono::seconds(55);
+  std::unique_lock<std::mutex> lock(S.mcpMu);
+  std::string key = target(S), why;
+  if (key.empty()) {
+    if (!start_hidden(S, why)) return tool_error(why);
+    const auto ready = std::min(end, Clock::now() + std::chrono::seconds(30));
+    while ((key = target(S)).empty() && Clock::now() < ready && !req.is_connection_closed()) S.mcpCv.wait_for(lock, std::chrono::seconds(1));
+    if (key.empty())
+      return tool_error("No daylight app tab is open and the hidden instance (" + S.appUrl + ") did not poll this server (/bridge/next) within 30 s. "
+                        "Call again once: it may still be starting, and one that stops polling is started again after a minute. If that fails "
+                        "too, its page cannot reach this server: ask the user to open " + S.appUrl + " and keep the tab open, and to check that it "
+                        "shows the daylight app, that --app-url names this machine as localhost or 127.0.0.1, and that a dev server forwards "
+                        "/bridge to daylight_server.");
+  }
+  auto c = std::make_shared<Call>();
+  c->id = uuid();
+  c->params = params;
+  S.calls[c->id] = c;
+  S.tabs[key].queue.push_back(c);
+  S.mcpCv.notify_all();
+  while (!c->done && Clock::now() < end && !req.is_connection_closed()) S.mcpCv.wait_for(lock, std::chrono::seconds(1));
+  S.calls.erase(c->id);
+  if (auto t = S.tabs.find(key); t != S.tabs.end()) t->second.queue.erase(std::remove(t->second.queue.begin(), t->second.queue.end(), c), t->second.queue.end());
+  return c->done ? c->result : tool_error("The app did not answer within 55 s; the step may still be running in the app: call app_state.");
+}
+
 // ---------------------------------------------------------------------------------------------------- docs pages
 const char* const kDocs = R"(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -419,14 +587,18 @@ int main(int argc, char** argv) {
   int port = 8080;
   size_t maxMb = 2048;
   std::string web;
+  bool mcp = false;
   Server S;
-  const char* local = std::getenv("LOCALAPPDATA");
-  S.dir = fs::path(local ? local : ".") / "daylight_server";
+  const wchar_t* local = _wgetenv(L"LOCALAPPDATA");   // wide: a user name outside the ANSI code page stays intact
+  S.dir = fs::path(local ? local : L".") / "daylight_server";
   for (int i = 1; i < argc; ++i) {
     const std::string f = argv[i];
     auto val = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
     if (f == "--port") port = std::atoi(val());
     else if (f == "--web") web = val();
+    else if (f == "--mcp") mcp = true;
+    else if (f == "--browser") S.browser = fs::path(val()).wstring();
+    else if (f == "--app-url") S.appUrl = val();
     else if (f == "--cache") S.dir = val();
     else if (f == "--max-mb") maxMb = static_cast<size_t>(std::atoll(val()));
     else if (f == "--mesh-cache-mb") S.meshCap = static_cast<size_t>(std::atoll(val())) << 20;
@@ -436,9 +608,19 @@ int main(int argc, char** argv) {
     else if (f == "--gpu-scenes") S.gpuScenes = std::max(1, std::atoi(val()));
     else {
       std::fprintf(stderr, "usage: daylight_server [--port 8080] [--web DIR] [--cache DIR] [--max-mb 2048] [--mesh-cache-mb 2048]\n"
-                           "                       [--client-jobs 2] [--max-queue 32] [--job-ttl-min 15] [--gpu-scenes 4]\n");
+                           "                       [--client-jobs 2] [--max-queue 32] [--job-ttl-min 15] [--gpu-scenes 4]\n"
+                           "                       [--mcp] [--browser PATH] [--app-url URL]\n");
       return 1;
     }
+  }
+  if (mcp && S.browser.empty()) S.browser = find_browser();
+  if (S.appUrl.empty() && !web.empty()) S.appUrl = "http://127.0.0.1:" + std::to_string(port) + "/";
+  // POST /mcp answers from the embedded mcp.json (tools, instructions) and openapi.json (version), as raw JSON tokens.
+  const std::string mcpDoc(reinterpret_cast<const char*>(mcp_json), mcp_json_len), api(reinterpret_cast<const char*>(openapi_json), openapi_json_len);
+  const std::string tools = member(mcpDoc, "tools"), instructions = member(mcpDoc, "instructions"), version = member(member(api, "info"), "version");
+  if (tools.empty() || tools[0] != '[' || instructions.empty() || instructions[0] != '"' || version.empty()) {
+    std::fprintf(stderr, "error: the embedded mcp.json lacks tools or instructions (or openapi.json info.version); fix it and rebuild\n");
+    return 1;
   }
   std::error_code ec;
   fs::create_directories(S.dir, ec);
@@ -451,7 +633,20 @@ int main(int argc, char** argv) {
   const httplib::Headers isolation{{"Cross-Origin-Opener-Policy", "same-origin"}, {"Cross-Origin-Embedder-Policy", "require-corp"}};
   if (!web.empty() && !svr.set_mount_point("/", web, isolation)) { std::fprintf(stderr, "error: --web %s is not a directory\n", web.c_str()); return 1; }
   svr.set_logger([](const httplib::Request& req, const httplib::Response& res) {
+    if (res.status == 204 && req.path == "/bridge/next") return;   // an idle poll: one per open app tab every 25 s
     std::fprintf(stderr, "%s %s -> %d\n", req.method.c_str(), req.path.c_str(), res.status);
+  });
+  // Agent routes (/mcp, /bridge/*, /files, /reports*, /session): 404 without --mcp, and only this machine may use them
+  // (agent.h local_request). This runs before a body is read and before the --web files.
+  svr.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
+    const auto under = [&](std::string_view p) { return req.path.compare(0, p.size(), p) == 0 && (req.path.size() == p.size() || req.path[p.size()] == '/'); };
+    if (!under("/mcp") && !under("/bridge") && !under("/files") && !under("/reports") && !under("/session")) return httplib::Server::HandlerResponse::Unhandled;
+    if (!mcp) text(res, 404, "error: agent routes are off (start daylight_server with --mcp)\n");
+    else if (!local_request(req.remote_addr, req.headers, req.method == "POST" && (under("/mcp") || under("/bridge"))))
+      text(res, 403, "error: agent routes answer only on this machine (Host localhost, 127.0.0.1 or [::1]; same origin; no proxy; "
+                     "JSON bodies as Content-Type: application/json)\n");
+    else return httplib::Server::HandlerResponse::Unhandled;
+    return httplib::Server::HandlerResponse::Handled;
   });
 
   // ---- meta
@@ -569,9 +764,216 @@ int main(int argc, char** argv) {
     text(res, j->status, j->error + "\n");
   });
 
+  // ---- agents (--mcp; this machine only, see the gate above). MCP over HTTP with JSON answers (no SSE, no sessions):
+  // revisions 2025-11-25, 2025-06-18 and 2025-03-26. JSON-RPC errors come with HTTP 200, ids are echoed as raw tokens.
+  svr.Post("/mcp", [&](const httplib::Request& req, httplib::Response& res) {
+    const auto known = [](const std::string& v) { return v == "2025-11-25" || v == "2025-06-18" || v == "2025-03-26"; };
+    const std::string method = member(req.body, "method"), id = member(req.body, "id"), pv = req.get_header_value("MCP-Protocol-Version");
+    if (method != "\"initialize\"" && !pv.empty() && !known(pv))   // a newer client's probe: the 400 makes it fall back to initialize
+      return text(res, 400, "error: MCP-Protocol-Version " + pv + " is not supported (2025-11-25, 2025-06-18, 2025-03-26)\n");
+    if (method.size() < 2 || method[0] != '"')
+      return json(res, 400, R"({"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "Invalid Request: one JSON-RPC request or notification per POST"}})");
+    if (id.empty()) { res.status = 202; return; }   // a notification; notifications/cancelled too: hanging up cancels
+    const auto answer = [&](const std::string& result) { json(res, 200, "{\"jsonrpc\": \"2.0\", \"id\": " + id + ", \"result\": " + result + "}"); };
+    const auto rpcError = [&](int code, const std::string& msg) {
+      json(res, 200, "{\"jsonrpc\": \"2.0\", \"id\": " + id + ", \"error\": {\"code\": " + std::to_string(code) + ", \"message\": " + json_str(msg) + "}}");
+    };
+    if (method == "\"initialize\"") {
+      const std::string asked = member(member(req.body, "params"), "protocolVersion");
+      return answer("{\"protocolVersion\": " + (asked.size() > 2 && known(asked.substr(1, asked.size() - 2)) ? asked : std::string("\"2025-11-25\"")) +
+                    ", \"capabilities\": {\"tools\": {}}, \"serverInfo\": {\"name\": \"daylight_server\", \"version\": " + version +
+                    "}, \"instructions\": " + instructions + "}");
+    }
+    if (method == "\"ping\"") return answer("{}");
+    if (method == "\"tools/list\"") return answer("{\"tools\": " + tools + "}");
+    if (method != "\"tools/call\"") return rpcError(-32601, "Method not found: " + method.substr(1, method.size() - 2));
+    std::string params = member(req.body, "params");
+    const std::string tool = member(params, "name");
+    if (tool.size() < 2 || tool[0] != '"') return rpcError(-32602, "Invalid params: tools/call takes {name, arguments}");
+    if (member(params, "arguments").empty())   // some clients leave it out for a tool without arguments
+      params = "{\"arguments\": {}" + std::string(params[ws(params, 1)] == '}' ? "" : ", ") + params.substr(1);
+    answer(relay(S, req, params));
+  });
+  svr.Get("/mcp", [](const httplib::Request&, httplib::Response& res) {
+    res.set_header("Allow", "POST");
+    text(res, 405, "error: POST JSON-RPC messages to /mcp; this server opens no SSE stream\n");
+  });
+  // The app tab's side: one long poll always open per page load (X-Client-Id), answered with the next call for that tab.
+  // wait=0 is a ping (liveness, focus=1 when the window has focus) and never hands out a call.
+  svr.Get("/bridge/next", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string me = req.get_header_value("X-Client-Id");
+    if (!valid_id(me)) return text(res, 400, "error: X-Client-Id must be this page load's id ([A-Za-z0-9-], 1-64 characters)\n");
+    const int wait = std::min(25, std::max(0, std::atoi(req.get_param_value("wait").c_str())));
+    std::unique_lock<std::mutex> lock(S.mcpMu);
+    const auto now = Clock::now();
+    Tab& t = S.tabs[me];   // a reference into the map stays valid while other tabs are erased
+    t.seen = now;
+    if (req.get_param_value("focus") == "1") t.focus = now;
+    t.headless = req.get_param_value("kind") == "headless";
+    if (t.headless) S.hiddenSeen = now;   // start_hidden restarts one silent for a minute
+    for (auto it = S.tabs.begin(); it != S.tabs.end();)   // tabs gone for a minute
+      if (!it->second.parked && it->second.queue.empty() && now - it->second.seen > std::chrono::seconds(60)) it = S.tabs.erase(it);
+      else ++it;
+    S.mcpCv.notify_all();   // a relay waiting for a tab (the hidden instance starting) looks again
+    if (wait == 0) { res.status = 204; return; }
+    ++t.parked;
+    while (t.queue.empty() && Clock::now() < now + std::chrono::seconds(wait) && !req.is_connection_closed()) S.mcpCv.wait_for(lock, std::chrono::seconds(1));
+    --t.parked;
+    const bool closed = req.is_connection_closed();   // the tab closed or reloaded: no longer a target (its next poll says otherwise)
+    t.seen = closed ? Clock::time_point{} : Clock::now();
+    if (t.queue.empty() || closed) { res.status = 204; return; }   // a closed poll leaves the call queued
+    const auto c = t.queue.front();
+    t.queue.pop_front();
+    json(res, 200, "{\"id\": " + json_str(c->id) + ", \"params\": " + c->params + "}");
+  });
+  svr.Post(R"(/bridge/result/([0-9a-f-]{36}))", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!is_object(req.body)) return text(res, 400, "error: the body is one CallToolResult object\n");
+    std::lock_guard<std::mutex> lock(S.mcpMu);
+    auto it = S.calls.find(req.matches[1]);
+    if (it == S.calls.end() || it->second->done) return text(res, 404, "error: no such call (answered already, or past its 55 s)\n");
+    it->second->result = req.body;
+    it->second->done = true;
+    S.mcpCv.notify_all();
+    res.status = 204;
+  });
+  // Open by path: one file's bytes, or a folder's model files (recursive) for the tab to fetch one after another.
+  svr.Get("/files", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string arg = req.get_param_value("path");
+    if (!local_path(arg)) return text(res, 400, "error: path must be an absolute local path such as C:\\models\\house.usdz (no network or device paths)\n");
+    const fs::path p = fs::u8path(arg);
+    const size_t cap = maxMb << 20;
+    std::error_code fe;
+    if (fs::is_regular_file(p, fe)) {
+      if (!served_ext(p.extension().u8string()))
+        return text(res, 400, "error: not a model, texture or weather file (.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw)\n");
+      if (fs::file_size(p, fe) > cap) return text(res, 400, "error: the file is over --max-mb " + std::to_string(maxMb) + "\n");
+      return res.set_file_content(p.u8string(), "application/octet-stream");
+    }
+    if (!fs::is_directory(p, fe)) return text(res, 404, "error: no such file or folder: " + arg + "\n");
+    std::string files;
+    size_t count = 0, bytes = 0;
+    // no dot or __MACOSX entries (the Model panel skips them too); directory symlinks and junctions are not followed
+    for (fs::recursive_directory_iterator it(p, fs::directory_options::skip_permission_denied, fe), done; !fe && it != done; it.increment(fe)) {
+      const std::string leaf = it->path().filename().u8string();
+      if (leaf.rfind('.', 0) == 0 || leaf == "__MACOSX") { it.disable_recursion_pending(); continue; }
+      std::error_code ee;   // a broken link skips its entry, not the rest of the folder
+      if (!it->is_regular_file(ee) || !served_ext(it->path().extension().u8string())) continue;
+      const uintmax_t size = it->file_size(ee);
+      if (ee) continue;
+      bytes += static_cast<size_t>(size);
+      if (++count > 2000 || bytes > cap)
+        return text(res, 400, "error: " + arg + " holds over 2000 model files or " + std::to_string(maxMb) + " MB: open a subfolder or single files\n");
+      files += std::string(files.empty() ? "" : ", ") + "{\"path\": " + json_str(it->path().lexically_relative(p).generic_u8string()) +
+               ", \"bytes\": " + std::to_string(size) + "}";
+    }
+    json(res, 200, "{\"path\": " + json_str(p.u8string()) + ", \"files\": [" + files + "]}");
+  });
+  // Reports, one folder each under <cache>/reports/<id>: report.json (the spec the app saves and the user edits there),
+  // index.html (the page the app renders from it) and report.pdf (that page printed by a headless browser). Absolute: the
+  // browser takes file:/// URLs and an absolute --print-to-pdf path (a relative one prints nothing).
+  const fs::path reports = fs::absolute(S.dir, ec) / "reports";
+  svr.Get("/reports", [&](const httplib::Request&, httplib::Response& res) {
+    std::string list;
+    std::error_code fe;
+    std::lock_guard<std::mutex> lock(S.repMu);
+    for (fs::directory_iterator it(reports, fe), end; !fe && it != end; it.increment(fe)) {
+      const std::string id = it->path().filename().u8string();
+      std::error_code ee;
+      if (!valid_id(id) || !fs::is_regular_file(it->path() / "report.json", ee)) continue;
+      // the spec as a JSON string: one damaged file cannot break the list (the app parses each spec by itself)
+      list += std::string(list.empty() ? "" : ", ") + "{\"id\": " + json_str(id) + ", \"pdf\": " +
+              (fs::is_regular_file(it->path() / "report.pdf", ee) ? "true" : "false") + ", \"spec\": " + json_str(read_file(it->path() / "report.json")) + "}";
+    }
+    json(res, 200, "[" + list + "]");
+  });
+  svr.Put(R"(/reports/([a-z0-9-]{1,64}))", [&](const httplib::Request& req, httplib::Response& res) {
+    if (req.body.size() > (size_t(1) << 20)) return text(res, 413, "error: a report spec is at most 1 MB\n");
+    if (!is_object(req.body)) return text(res, 400, "error: the body is one JSON object (the report spec)\n");
+    const fs::path dir = reports / std::string(req.matches[1]), part = dir / "report.json.part";
+    std::error_code fe;
+    std::lock_guard<std::mutex> lock(S.repMu);
+    fs::create_directories(dir, fe);
+    const bool written = write_file(part, req.body);   // then renamed: a crash mid-write leaves the old spec whole
+    if (written) fs::rename(part, dir / "report.json", fe);
+    if (!written || fe) return text(res, 500, "error: cannot store " + (dir / "report.json").u8string() + "\n");
+    res.status = 204;
+  });
+  svr.Delete(R"(/reports/([a-z0-9-]{1,64}))", [&](const httplib::Request& req, httplib::Response& res) {
+    const fs::path dir = reports / std::string(req.matches[1]);
+    std::error_code fe;
+    std::lock_guard<std::mutex> lock(S.repMu);
+    if (!fs::is_directory(dir, fe)) return text(res, 404, "error: no such report\n");
+    fs::remove(dir / "report.pdf", fe);   // first: a PDF open in a viewer refuses, and the report stays whole
+    if (!fe) fs::remove_all(dir, fe);
+    if (fe) return text(res, 409, "error: the report's PDF is open in another program or printing: close it and delete again\n");
+    res.status = 204;
+  });
+  // Prints the page the app rendered (self-contained: CSS, fonts and images inline) to PDF with the browser in headless
+  // mode, one print at a time, and answers where the PDF is, its pages and fonts (fallback: faces kit-ui does not ship).
+  svr.Post(R"(/reports/([a-z0-9-]{1,64})/pdf)", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string id = req.matches[1];
+    const fs::path dir = reports / id, page = dir / "index.html", tmp = dir / "report.new.pdf", out = dir / "report.pdf";
+    std::error_code fe;
+    if (!fs::is_regular_file(dir / "report.json", fe)) return text(res, 404, "error: no such report: save its spec first (PUT /reports/{id})\n");
+    if (S.browser.empty()) return text(res, 500, "error: no Chrome or Edge found to print the PDF: start daylight_server with --browser PATH\n");
+    std::lock_guard<std::mutex> lock(S.pdfMu);
+    fs::remove(tmp, fe);   // a stale one would pass the %PDF- check below
+    if (!write_file(page, req.body)) return text(res, 500, "error: cannot write " + page.u8string() + "\n");
+    const std::string url = file_url(page.u8string());   // ASCII: every other byte is percent-encoded
+    std::string err;
+    const HANDLE p = spawn(S.browser, {L"--headless", L"--no-first-run", L"--no-default-browser-check", L"--no-pdf-header-footer", L"--virtual-time-budget=10000",
+                                       L"--user-data-dir=" + (S.dir / "pdf-profile").wstring(), L"--print-to-pdf=" + tmp.wstring(), std::wstring(url.begin(), url.end())},
+                           nullptr, err);
+    if (!p) return text(res, 500, "error: " + err + "\n");
+    // ponytail: TerminateProcess ends the browser process only; its helpers exit when their pipe to it closes (a job
+    // object, as for the hidden instance, if strays ever show)
+    DWORD code = 1;
+    if (WaitForSingleObject(p, 30000) == WAIT_OBJECT_0) GetExitCodeProcess(p, &code);
+    else { TerminateProcess(p, 1); WaitForSingleObject(p, 5000); err = "no PDF within 30 s"; }
+    CloseHandle(p);
+    const std::string pdf = read_file(tmp);
+    if (code != 0 || pdf.rfind("%PDF-", 0) != 0)
+      return text(res, 500, "error: the browser printed no PDF (" + (err.empty() ? "exit code " + std::to_string(code) : err) + "): " + fs::path(S.browser).u8string() + "\n");
+    if (fs::rename(tmp, out, fe); fe) return text(res, 409, "error: " + out.u8string() + " is open in another program: close the PDF and generate again\n");
+    std::string fonts, fallback;
+    for (const std::string& f : pdf_fonts(pdf)) {
+      fonts += (fonts.empty() ? "" : ", ") + json_str(f);
+      if (!kit_font(f)) fallback += (fallback.empty() ? "" : ", ") + json_str(f);
+    }
+    json(res, 200, "{\"pdf\": " + json_str(out.u8string()) + ", \"url\": " + json_str("http://" + req.get_header_value("Host") + "/reports/" + id + "/pdf") +
+                       ", \"pages\": " + std::to_string(pdf_pages(pdf)) + ", \"bytes\": " + std::to_string(pdf.size()) + ", \"fonts\": [" + fonts +
+                       "], \"fallback\": [" + fallback + "]}");
+  });
+  svr.Get(R"(/reports/([a-z0-9-]{1,64})/pdf)", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string id = req.matches[1];
+    std::string pdf = read_file(reports / id / "report.pdf");   // read whole: no handle stays open for the next print's rename
+    if (pdf.empty()) return text(res, 404, "error: no PDF of this report yet: generate it (POST /reports/{id}/pdf)\n");
+    res.set_header("Content-Disposition", "inline; filename=\"" + id + ".pdf\"");
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(std::move(pdf), "application/pdf");
+  });
+  // The hidden instance's record (its settings and the steps it took), in memory, for the app to pick up when it opens.
+  svr.Get("/session", [&](const httplib::Request&, httplib::Response& res) {
+    std::lock_guard<std::mutex> lock(S.mcpMu);
+    if (S.session.empty()) return text(res, 404, "error: no session\n");
+    json(res, 200, S.session);
+  });
+  svr.Put("/session", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!is_object(req.body)) return text(res, 400, "error: the body is one JSON object\n");
+    std::lock_guard<std::mutex> lock(S.mcpMu);
+    S.session = req.body;
+    res.status = 204;
+  });
+  svr.Delete("/session", [&](const httplib::Request&, httplib::Response& res) {   // picked up: the hidden instance ends too
+    std::lock_guard<std::mutex> lock(S.mcpMu);
+    S.session.clear();
+    stop_hidden(S);
+    res.status = 204;
+  });
+
   std::thread(worker, std::ref(S)).detach();   // lives as long as the process
-  std::fprintf(stderr, "daylight_server: http://localhost:%d  docs /docs  gpu %s  cache %s%s\n", port, S.gpu.c_str(), S.dir.string().c_str(),
-               web.empty() ? "" : ("  web " + web).c_str());
+  std::fprintf(stderr, "daylight_server: http://localhost:%d  docs /docs  gpu %s  cache %s%s%s\n", port, S.gpu.c_str(), S.dir.u8string().c_str(),
+               web.empty() ? "" : ("  web " + web).c_str(), mcp ? "  mcp /mcp" : "");
   if (!svr.listen("0.0.0.0", port)) { std::fprintf(stderr, "error: cannot listen on port %d\n", port); return 2; }
   return 0;
 }

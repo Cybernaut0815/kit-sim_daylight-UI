@@ -1,0 +1,569 @@
+{
+  "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, or in a hidden instance when no tab is open (opening the app takes that session over). Start with app_state. Read guide 'daylight' before interpreting results. Conventions: models by letter A-D (up to four design options sharing site, weather, time and settings; default the active model); building parts by USD prim path ('/' = all; find them with model_tree); times 'HH:MM' local standard time, dates YYYY-MM-DD; azimuth in degrees clockwise from true north; lengths in m and areas in m² in model coordinates (metres, Z up). Numbers come rounded as the app shows them: quote numbers only from tool output. Changed inputs make results stale: run. Long steps answer 'running' or 'generating': call again. Reports: read guide 'report', then save_report, then generate_report; the user edits report charts and cameras in the app and regenerates the PDF from its Reports menu.",
+  "tools": [
+    {
+      "name": "app_state",
+      "title": "App state",
+      "description": "Snapshot of the app: call it first, and again whenever the user may have changed something in the UI. Returns compact JSON: the tab (the user's browser tab or the hidden instance, whether it is visible, whether the browser discarded it); per model A-D its file, loading state or load problems, meshes by role (receiver, shade, none), faces, run status and whether its result is fresh, stale or running; the active model, the shown column and colouring; every setting (site, time, simulation, weather, colour scales, charts) and the problems that would stop a run; the saved views; and the stored reports (id, title, models, updated, PDF present, generating, last error).",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "guide",
+      "title": "Read a guide",
+      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions: read it before interpreting results. 'report': the kit-ui kit-report skill, how reports work here and the ReportSpec reference with two examples (one option, a comparison): read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": { "type": "string", "enum": ["daylight", "report", "kit-ui"], "description": "Guide to read." }
+        },
+        "required": ["topic"],
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "site_info",
+      "title": "Site and sun",
+      "description": "The site and its sun. Returns the place, coordinates, time zone (standard time, no daylight saving), north, weather source, the EPW header (station, km from the site, leap year), its monthly digest (sunshine and possible daylight hours; GHI, DNI and DHI in kWh/m²) and the 8 nearest weather stations (title, km; pass a title as update_settings weather.station). Per date: sunrise, sunset, day length, and the sun's altitude and azimuth (degrees, azimuth clockwise from true north) at the given hours. Dates default to the time setting's (annual: 21 Mar, 21 Jun, 21 Dec); hours default to every full hour between sunrise and sunset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dates": { "type": "array", "items": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }, "maxItems": 12, "description": "Dates, YYYY-MM-DD." },
+          "hours": { "type": "array", "items": { "type": "string", "pattern": "^\\d{2}:\\d{2}$" }, "maxItems": 48, "description": "Times of day, 'HH:MM' standard time." }
+        },
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "update_settings",
+      "title": "Update settings",
+      "description": "Change the inputs every model shares, as the Location, Time, Simulation and Weather panels and the Results panel's colour scale and charts do. Only the given fields change; changed inputs make results stale (call run). site.query geocodes a place name; moving the site picks the nearest weather station. time.mode: annual (every hour of the weather year), instant (one date and hour) or range (every day from from.date to to.date, from from.hour to to.hour, every step minutes). viz sets one quantity's colour scale and problem range, shared by the 3D views, charts, screenshots and PDFs; the problem range also drives the shares in results and find_critical. charts adds, changes or removes Results panel charts. Returns the new settings and the problems a run would report.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "site": {
+            "type": "object",
+            "description": "Location panel.",
+            "properties": {
+              "query": { "type": "string", "description": "Place name or address to geocode (first match; the others come back as alternatives)." },
+              "lat": { "type": "number", "minimum": -90, "maximum": 90, "description": "Latitude, degrees north." },
+              "lon": { "type": "number", "minimum": -180, "maximum": 180, "description": "Longitude, degrees east." },
+              "place": { "type": "string", "description": "Display name of the site." }
+            },
+            "additionalProperties": false
+          },
+          "time": {
+            "type": "object",
+            "description": "Time panel.",
+            "properties": {
+              "mode": { "type": "string", "enum": ["annual", "instant", "range"], "description": "annual: every hour of the weather year; instant: date and hour; range: from, to and step." },
+              "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Instant: the date (the year is not used)." },
+              "hour": { "type": "string", "pattern": "^\\d{2}:\\d{2}$", "description": "Instant: time of day, 'HH:MM' standard time." },
+              "from": {
+                "type": "object",
+                "description": "Range: first date and daily start time.",
+                "properties": {
+                  "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "First date." },
+                  "hour": { "type": "string", "pattern": "^\\d{2}:\\d{2}$", "description": "Start time, 'HH:MM'." }
+                },
+                "additionalProperties": false
+              },
+              "to": {
+                "type": "object",
+                "description": "Range: last date and daily end time.",
+                "properties": {
+                  "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Last date." },
+                  "hour": { "type": "string", "pattern": "^\\d{2}:\\d{2}$", "description": "End time, 'HH:MM' ('24:00' = end of day)." }
+                },
+                "additionalProperties": false
+              },
+              "step": { "type": "integer", "enum": [10, 15, 30, 60], "description": "Range: minutes per step." }
+            },
+            "additionalProperties": false
+          },
+          "sim": {
+            "type": "object",
+            "description": "Simulation panel, and north from the Location panel.",
+            "properties": {
+              "mode": { "type": "string", "enum": ["physical", "ladybug"], "description": "physical (default), or ladybug: RadiationStudy's opaque black scene, no illuminance, transmission or reflections." },
+              "quantities": { "type": "array", "items": { "type": "string", "enum": ["radiation", "direct", "diffuse", "irradiance", "illuminance", "sunhours"] }, "minItems": 1, "description": "Quantities to compute; each gives one column per side, e.g. illuminance_front." },
+              "sides": { "type": "string", "enum": ["front", "back", "both"], "description": "Receiving side: front = where the face normal points; both adds the _back columns." },
+              "on": { "type": "string", "enum": ["faces", "vertices"], "description": "Sensors on each face (centroid) or each vertex." },
+              "north": { "type": "number", "description": "Degrees counter-clockwise from the model's +Y axis to true north (0: +Y is north; 90: -X is north)." },
+              "skyDensity": { "type": "integer", "enum": [1, 2, 4], "description": "Sky patches: 1 = 145, 2 = 577, 4 = 2305 (physical only)." },
+              "patchSamples": { "type": "integer", "enum": [1, 4, 9, 16], "description": "Physical: rays per sky patch." },
+              "transmission": { "type": "boolean", "description": "Glass, screens and trees let light through by their transmittance (physical)." },
+              "fresnel": { "type": "boolean", "description": "Angle-dependent glass, with transmission or reflections on (default on)." },
+              "bounces": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Diffuse reflections off the model's surfaces, 0 = off (physical)." },
+              "bounceSamples": { "type": "integer", "enum": [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536], "description": "Paths per sensor with reflections; noise falls as 1/sqrt(samples)." },
+              "ground": { "type": "number", "minimum": 0, "maximum": 1, "description": "Reflectance of the ground beyond the model (default 0.2)." },
+              "offset": { "type": "number", "description": "Sensor offset from the surface along its normal, m." },
+              "cullBackfaces": { "type": "boolean", "description": "Occluders block only from their front side." },
+              "selfOcclude": { "type": "boolean", "description": "Receivers block rays too (default on)." }
+            },
+            "additionalProperties": false
+          },
+          "weather": {
+            "type": "object",
+            "description": "Weather panel.",
+            "properties": {
+              "source": { "type": "string", "enum": ["station", "pvgis", "upload", "clear-sky"], "description": "station: an EPW weather station; pvgis: the PVGIS typical year at the site; upload: an EPW file; clear-sky: Ineichen clear sky, no weather file." },
+              "station": { "type": "string", "description": "A station title or URL from site_info's nearest stations; sets source station." },
+              "file": { "type": "string", "description": "Absolute path of an .epw file on this computer; sets source upload." },
+              "turbidity": { "type": "number", "minimum": 2, "maximum": 7, "description": "Clear sky: Linke turbidity (2 very clear, 3 clear, 4-5 hazy or urban, 6-7 polluted)." },
+              "altitude": { "type": "number", "description": "Clear sky: site altitude, m." }
+            },
+            "additionalProperties": false
+          },
+          "viz": {
+            "type": "object",
+            "description": "Colour scale and problem range of one quantity (its front and back columns share them).",
+            "properties": {
+              "quantity": { "type": "string", "enum": ["radiation", "direct", "diffuse", "irradiance", "illuminance", "sunhours"], "description": "Quantity; default the shown column's." },
+              "gradient": { "type": "string", "enum": ["inferno", "magma", "plasma", "viridis", "cividis", "turbo", "ladybug", "greys"], "description": "Colour gradient." },
+              "min": { "type": ["number", "null"], "description": "Legend minimum in the quantity's unit; null = the data's, over every model." },
+              "max": { "type": ["number", "null"], "description": "Legend maximum in the quantity's unit; null = the data's, over every model." },
+              "below": { "type": ["number", "null"], "description": "Problem range: values under it are painted belowColour and count as problems; null = no lower bound." },
+              "above": { "type": ["number", "null"], "description": "Problem range: values over it are painted aboveColour and count as problems; null = no upper bound." },
+              "belowColour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Colour under the range, '#rrggbb', shared by every quantity (default #0000ff)." },
+              "aboveColour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Colour over the range, '#rrggbb', shared by every quantity (default #ff0000)." },
+              "reset": { "type": "string", "enum": ["scale", "range"], "description": "Applied first: 'scale' restores gradient, min and max; 'range' clears the problem range and restores both colours." }
+            },
+            "additionalProperties": false
+          },
+          "charts": {
+            "type": "array",
+            "description": "Results panel charts, applied in order. A spec with a new id adds a chart (kind needed); with an existing id only its given fields change. 'hist' (Distribution) and 'curve' (Cumulative area) are built in: their look can change, they cannot be removed. {id, remove: true} deletes an added chart; {id, reset: true} restores a chart's defaults. Report charts are part of the report (save_report).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "'hist', 'curve' or an id of your own." },
+                "kind": { "type": "string", "enum": ["histogram", "curve", "parts"], "description": "histogram: share of the area per value bin; curve: share of the area at or below each value; parts: one bar per model for each prim in parts." },
+                "title": { "type": "string", "maxLength": 120, "description": "Heading over the chart." },
+                "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column; default the shown one." },
+                "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models drawn; default every model with a result." },
+                "parts": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prim paths: histogram and curve count the receivers at or under them; parts draws one row each (up to 24). Default every receiver." },
+                "range": { "type": ["string", "array"], "anyOf": [{ "type": "string", "enum": ["relative", "absolute"] }, { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }], "description": "Value axis: 'relative' = the colour scale's min to max (default), 'absolute' = the data's range, or [min, max] in the column's unit." },
+                "bins": { "type": ["integer", "string"], "anyOf": [{ "type": "integer", "minimum": 4, "maximum": 100 }, { "type": "string", "enum": ["auto"] }], "description": "Histogram bins, 4 to 100, or 'auto' (default: more bins for more elements)." },
+                "markers": { "type": "array", "items": { "type": "string", "enum": ["mean", "median", "p10", "p90"] }, "description": "Statistics marked on the chart, drawn with one model only (the curve has no mean)." },
+                "grid": { "type": "boolean", "description": "Grid lines (default on)." },
+                "height": { "type": "number", "minimum": 100, "maximum": 400, "description": "Height in chart units at a width of 320 (default histogram 200, curve 170)." },
+                "metric": { "type": "string", "enum": ["mean", "median", "p10", "p90", "min", "max", "below", "within", "above"], "description": "parts: the value of each bar; below, within and above are area shares of the problem range (default mean)." },
+                "remove": { "type": "boolean", "description": "true: delete this added chart." },
+                "reset": { "type": "boolean", "description": "true: restore this chart's defaults." }
+              },
+              "required": ["id"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "open_model",
+      "title": "Open a model",
+      "description": "Open a model from this computer, as the Model panel's file and folder pickers do. paths: absolute paths of one folder (a USD scene with its assets; its top-level USD file opens) or of files (.usd, .usda, .usdc, .usdz; .glb; .gltf with its .bin and textures; .obj with its .mtl and textures). model: the slot to open into, replacing what it holds; without it the active slot if empty, else a new slot (four at most). A lone mesh becomes the receiver; otherwise every mesh starts ignored, so assign roles with set_roles. Returns the letter, name, units, mesh count, top prims and load problems. A big model may answer 'running': poll app_state until it has loaded (do not open it again).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Absolute paths: one folder, or the model's files." },
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Slot to open into; default the active slot if empty, else a new one." }
+        },
+        "required": ["paths"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": true }
+    },
+    {
+      "name": "remove_model",
+      "title": "Remove a model",
+      "description": "Remove a model, as the x on its tab does: its view, roles, result and any job on its way. The other models keep their letters. Refused for the last model and while a model is loading.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter." }
+        },
+        "required": ["model"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": true }
+    },
+    {
+      "name": "model_tree",
+      "title": "Model prim tree",
+      "description": "Browse a model's prim hierarchy to name building parts: the prims below `path`, `depth` levels deep. Per prim: path, name, type, children, meshes and triangles under it and their role (receiver, shade, none or mixed), visibility, lock, and variant sets with the selected variant. `query` searches the whole stage instead and returns the matching prim paths: words match names, 'type:Mesh' filters by prim type, e.g. 'type:Mesh roof'. At most `limit` prims; the reply says when there are more.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "path": { "type": "string", "pattern": "^/", "description": "Prim to list below; default '/' (the stage root)." },
+          "depth": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Levels below path (default 2)." },
+          "query": { "type": "string", "description": "Search the whole stage instead, e.g. 'type:Mesh roof'." },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 500, "description": "Most prims returned (default 100)." }
+        },
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "set_roles",
+      "title": "Set mesh roles",
+      "description": "Set the role of every mesh at or under the given prims, as the Model panel's Receiver, Shade and Ignore buttons do. receiver: gets results and casts shade. shade: only casts shade (e.g. neighbours, trees). none: ignored by the simulation. Instanced meshes can only shade or be ignored. A change clears that model's result (call run). Returns the role counts, the meshes changed and the paths that matched nothing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Prim paths; every mesh at or under each ('/' = all)." },
+          "role": { "type": "string", "enum": ["receiver", "shade", "none"], "description": "New role." }
+        },
+        "required": ["paths", "role"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_visibility",
+      "title": "Set visibility",
+      "description": "Change what the 3D view shows and what the user can pick, as the prim tree's eye, lock and H keys do. View only: hidden meshes still run by their role, and nothing is saved. hide and show: these prims; isolate: show only these; showAll: show everything again; lock and unlock: stop or allow picking them in the view; select: highlight these prims in the view and the tree ([] clears). Applied as showAll, hide, show, isolate, lock, unlock, then select. Returns the hidden, locked and selected paths.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "showAll": { "type": "boolean", "description": "true: show every prim again." },
+          "hide": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to hide." },
+          "show": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to show." },
+          "isolate": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to show alone." },
+          "lock": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims the user can no longer pick in the view." },
+          "unlock": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to make pickable again." },
+          "select": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to select ([] clears the selection)." }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_geometry",
+      "title": "Change model geometry",
+      "description": "Change what is drawn and simulated, as the prim tree's variant column and the Model panel's subdivision controls do. variant: switch a variant set on a prim (sets and values from model_tree). subdivision: how catmullClark and loop meshes are refined; without paths one level for every model (0 = control cage, the default; -1 = the authored schemes up to level 2; 1 to 3); with paths that level for the meshes under them, or 'model' to restore the model's level. Roles are kept by path, new meshes start ignored, and the result clears (call run). Returns the mesh and role counts. A slow re-read may answer 'running': poll app_state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "variant": {
+            "type": "object",
+            "description": "Variant switch.",
+            "properties": {
+              "path": { "type": "string", "pattern": "^/", "description": "Prim holding the variant set." },
+              "set": { "type": "string", "description": "Variant set name." },
+              "value": { "type": "string", "description": "Variant to select." }
+            },
+            "required": ["path", "set", "value"],
+            "additionalProperties": false
+          },
+          "subdivision": {
+            "type": "object",
+            "description": "Refinement of subdivision meshes.",
+            "properties": {
+              "level": { "type": ["integer", "string"], "enum": [-1, 0, 1, 2, 3, "model"], "description": "-1 authored up to 2, 0 control cage, 1 to 3 levels; 'model' (with paths) restores the model's level." },
+              "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims whose meshes get the level; default every model as a whole." }
+            },
+            "required": ["level"],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_materials",
+      "title": "Get materials",
+      "description": "The Materials table of a model: 'default' (surfaces without a material; opaque, reflectance 0.2), 'glass' (glass without numbers; transmittance 0.64) and each material bound to a receiver or shade, by material path. Per row: kind (opaque, glass or porous), reflectance rho and transmittance tau (0 to 1; visible light, one band, also used for energy), source (derived, default, edited or unread) and any warning, plus the preset names edit_material accepts. The values only count in physical mode with transmission on (tau) or bounces above 0 (rho); otherwise every surface is opaque and black.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." }
+        },
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "edit_material",
+      "title": "Edit a material",
+      "description": "Override one row of a model's Materials table, as its kind select and boxes do. material: 'default', 'glass' or a material path from get_materials. Give a preset name, or kind, rho and/or tau: a kind change keeps the surface's albedo, as the table does; glass reflects by angle, so its rho is 0. reset: back to the derived or default values. Values outside the core's ranges are adjusted at run time with a warning (get_materials shows it). Edits last until the model is opened again, and make results stale when they count (physical mode with transmission or bounces). Returns the row.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "material": { "type": "string", "description": "'default', 'glass' or a material path." },
+          "preset": { "type": "string", "description": "Preset name from get_materials, e.g. 'Brick', 'Double low-e', 'Opening (no glazing)'." },
+          "kind": { "type": "string", "enum": ["opaque", "glass", "porous"], "description": "Material kind." },
+          "rho": { "type": "number", "minimum": 0, "maximum": 1, "description": "Diffuse reflectance, 0 to 1." },
+          "tau": { "type": "number", "minimum": 0, "maximum": 1, "description": "Transmittance at normal incidence, 0 to 1." },
+          "reset": { "type": "boolean", "description": "true: back to the derived or default values." }
+        },
+        "required": ["material"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "run",
+      "title": "Run the simulation",
+      "description": "Run the simulation for every model with a receiver, with the current inputs, as the Run button does: one GPU job per model, one after another. Waits up to `wait` seconds and joins a batch already running instead of starting another. Returns per model: done, failed (with the reason) or not run, the run time, and the shown column's mean, P10 and P90; or the problems that stopped it (fix them with update_settings, set_roles or edit_material). If it answers 'running', call run again to keep waiting. `cancel` stops the batch; models already done keep their results.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "wait": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Seconds to wait for the batch (default 40)." },
+          "cancel": { "type": "boolean", "description": "true: stop the running batch instead." }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "results",
+      "title": "Result statistics",
+      "description": "Area-weighted statistics of one result column per model, from its last run: elements, area (m²), min, P10, median, mean, P90, max, total (value x area, e.g. kWh or lm), the shares of the area (%) below, within and above the problem range, and for each threshold x the share below x and at or above x. Each model's whole-model row comes first, then rows by 'mesh' (each receiver mesh, largest first), by 'parts' (each prim in paths: the receivers at or under it) or by 'facing' (elements grouped by the side they face: N, E, S, W, up, down; useful when the building is one mesh). With several models, differences to the first. Also the unit, what the column means, whether each result is fresh, stale or running, and the run's provenance (period, hours evaluated, arguments, timing).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, the first is the reference; default every model with a result." },
+          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column, e.g. 'sunhours_front'; default the shown one." },
+          "by": { "type": "string", "enum": ["mesh", "parts", "facing"], "description": "Rows per receiver mesh, per prim in paths, or per facing side; default parts when paths are given, else mesh." },
+          "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prim paths: one row each with by parts; with mesh or facing, only the receivers under them." },
+          "thresholds": { "type": "array", "items": { "type": "number" }, "maxItems": 8, "description": "Values in the column's unit, e.g. [1.5, 3, 4] h; each gives the area shares below and at or above it." },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Most rows per model (default 50)." }
+        },
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "find_critical",
+      "title": "Find critical areas",
+      "description": "Where a model does worst in one column: its result elements under `below` or over `above` (default: the problem range set with update_settings viz), grouped by receiver mesh and the side they face (N, E, S, W, up, down), largest problem area first. Per group: mesh path, facing, elements, problem area (m²) and its share of that mesh side, mean and worst value, centre and box (m, model coordinates, Z up), normal, a camera `view` framing it from the side it faces, and `near`, the cutaway (m) that clears what stands in front. Also the model's whole problem area and share. Show a group with screenshot (view and near) or set_camera (view); for another image shape pass its box and normal as frame. Needs a current result: run first when it is stale.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column; default the shown one." },
+          "below": { "type": "number", "description": "Elements under this value are problems (column's unit)." },
+          "above": { "type": "number", "description": "Elements over this value are problems (column's unit)." },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Most groups (default 8)." }
+        },
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "set_display",
+      "title": "Set the display",
+      "description": "Change what the views show, as the run bar, Results panel and app bar do. Only the given fields change. active: the model the Model and Materials panels, Views and Download act on. column and colourBy: the result shown and whether surfaces are coloured by value or plain. highlight: fade everything outside [lo, hi] in the column's unit (null clears it; a run clears it too). Also the theme, the sun path and its size, two or three views side by side or stacked, linked cameras, and Run on every change (auto: every input change starts a run). Returns the display state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "active": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Active model." },
+          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column shown in every view." },
+          "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "Result colours, or the model's own look." },
+          "highlight": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[lo, hi] to keep in colour, or null." },
+          "theme": { "type": "string", "enum": ["auto", "light", "dark"], "description": "App theme; auto follows the system." },
+          "sunPath": { "type": "boolean", "description": "Show the sun path around the model." },
+          "sunScale": { "type": "number", "minimum": 0.25, "maximum": 4, "description": "Sun path size over the fitted one (1 = fitted)." },
+          "split": { "type": "string", "enum": ["side", "stacked"], "description": "Two or three views side by side or stacked (four always show 2 x 2)." },
+          "link": { "type": "boolean", "description": "Linked cameras: every view follows the active one." },
+          "auto": { "type": "boolean", "description": "Run on every change." }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_camera",
+      "title": "Set the camera",
+      "description": "Move a model's 3D view; the user sees it (with linked cameras every view follows). Give one of: `view`, an exact camera from find_critical, set_camera, save_view or app_state output; `camera`, a stage camera path or a saved view name; or `frame`, the prims or box to fit, seen from `direction` at `elevation` degrees above the horizon and fitted to `aspect` (the width/height of the screenshot you plan). Nothing given frames the whole model. Returns the view, a description (seen from which side and bearing, elevation, distance in m) and, for frame, `near`: the cutaway (m) that clears what stands in front, for screenshot. Use it to show the user a part or a critical area; to only capture an image, pass view or frame to screenshot, which leaves the user's camera alone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "view": {
+            "type": "object",
+            "description": "An exact camera in the viewer's world coordinates (stage units, Y up; not model metres): copy it from tool output.",
+            "properties": {
+              "eye": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Camera position [x, y, z]." },
+              "target": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Point looked at and orbited [x, y, z]." },
+              "fov": { "type": "number", "description": "Vertical field of view, degrees." },
+              "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Projection." },
+              "height": { "type": "number", "description": "Orthographic half-height, world units." }
+            },
+            "required": ["eye", "target", "fov", "projection", "height"],
+            "additionalProperties": false
+          },
+          "camera": { "type": "string", "description": "A stage camera path (e.g. '/Cameras/Street') or a saved view name." },
+          "frame": {
+            "type": "object",
+            "description": "What to fit: {paths}, or {box, normal} e.g. from a find_critical group; {} = the whole model.",
+            "properties": {
+              "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to fit." },
+              "box": {
+                "type": "object",
+                "description": "Box to fit, model coordinates (m, Z up).",
+                "properties": {
+                  "min": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Lowest corner [x, y, z]." },
+                  "max": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Highest corner [x, y, z]." }
+                },
+                "required": ["min", "max"],
+                "additionalProperties": false
+              },
+              "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Direction the framed surfaces face [x, y, z]; used by direction auto." }
+            },
+            "additionalProperties": false
+          },
+          "direction": { "type": "string", "enum": ["auto", "N", "NE", "E", "SE", "S", "SW", "W", "NW", "top"], "description": "Frame: where the camera stands, true compass ('S' sees south-facing surfaces); 'top' = plan, north up; 'auto' (default) faces the framed surfaces." },
+          "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon (default 20; negative looks up from below)." },
+          "aspect": { "type": "number", "minimum": 0.1, "maximum": 10, "description": "Frame: width/height to fit; default the view's own." },
+          "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Frame: projection; default the view's current one." }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "save_view",
+      "title": "Save a view",
+      "description": "Save the model's current camera in the Views menu under `name` (this session; it serves every view), or remove the saved view of that name. To save a camera you have not applied yet, call set_camera first. Returns the saved view and the list. Report figure cameras are not saved here: they are the view blocks of a report (save_report).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "View name." },
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model whose camera is saved; default the active model." },
+          "remove": { "type": "boolean", "description": "true: remove the saved view of that name." }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "screenshot",
+      "title": "Take a screenshot",
+      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). column, colourBy, sunPath and grid apply to this shot only. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side (smaller with several models). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours) and the size.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, one image each; default the active model." },
+          "width": { "type": "integer", "minimum": 16, "maximum": 8192, "description": "Width in px (default 1280)." },
+          "height": { "type": "integer", "minimum": 16, "maximum": 8192, "description": "Height in px (default 800)." },
+          "view": {
+            "type": "object",
+            "description": "An exact camera for every image, in the viewer's world coordinates (stage units, Y up; not model metres): copy it from tool output.",
+            "properties": {
+              "eye": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Camera position [x, y, z]." },
+              "target": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Point looked at [x, y, z]." },
+              "fov": { "type": "number", "description": "Vertical field of view, degrees." },
+              "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Projection." },
+              "height": { "type": "number", "description": "Orthographic half-height, world units." }
+            },
+            "required": ["eye", "target", "fov", "projection", "height"],
+            "additionalProperties": false
+          },
+          "frame": {
+            "type": "object",
+            "description": "What to fit, as in set_camera: {paths}, or {box, normal}; {} = the whole model.",
+            "properties": {
+              "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to fit." },
+              "box": {
+                "type": "object",
+                "description": "Box to fit, model coordinates (m, Z up).",
+                "properties": {
+                  "min": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Lowest corner [x, y, z]." },
+                  "max": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Highest corner [x, y, z]." }
+                },
+                "required": ["min", "max"],
+                "additionalProperties": false
+              },
+              "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Direction the framed surfaces face [x, y, z]." }
+            },
+            "additionalProperties": false
+          },
+          "direction": { "type": "string", "enum": ["auto", "N", "NE", "E", "SE", "S", "SW", "W", "NW", "top"], "description": "Frame: where the camera stands, as in set_camera (default auto)." },
+          "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon (default 20)." },
+          "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Frame: projection; default the view's current one." },
+          "near": { "type": "number", "minimum": 0, "description": "Cutaway: geometry closer to the eye than this, m, is not drawn." },
+          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column to colour by; default the shown one." },
+          "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "Result colours or the model's own look; default the current." },
+          "sunPath": { "type": "boolean", "description": "Draw the sun path; default as shown." },
+          "grid": { "type": "boolean", "description": "Draw the ground grid; default as shown." }
+        },
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "get_report",
+      "title": "Get a report",
+      "description": "The full spec of one stored report (app_state lists the ids), including `updated`: edit it and pass it to save_report together with that `updated`. Also whether a PDF exists, and whether the report is ready to generate or what differs (a model not open, another variant or roles, a stale result), which open_model, set_geometry, set_roles and run can restore.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Report id." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "save_report",
+      "title": "Save a report",
+      "description": "Create or replace a report stored in the app, from a ReportSpec: read guide 'report' first (fields, rules, two examples). One model gives a report on that option, 2 to 4 models a comparison (the first is the reference). Blocks: text that quotes numbers copied from tool output, charts (ChartSpec), views (a camera from find_critical or set_camera, with near and aspect) and tables. The spec is validated (each problem names its path, e.g. blocks[3].caption) and stored with each model's current run: after a run with other inputs, save it again. When replacing, pass the `updated` you got from get_report: the save is refused when the user changed the report in the app since (re-read it and merge). Returns the id, updated and whether it is ready to generate; then call generate_report.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spec": { "type": "object", "description": "The ReportSpec, as described in guide 'report'." },
+          "updated": { "type": "string", "description": "When replacing: the spec's updated time from get_report." }
+        },
+        "required": ["spec"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_report",
+      "title": "Delete a report",
+      "description": "Delete a stored report with its PDF; it leaves the app's Reports menu. This cannot be undone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Report id." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": true }
+    },
+    {
+      "name": "generate_report",
+      "title": "Generate report PDF",
+      "description": "Build a stored report as a PDF: draw its figures from the current results (charts; each view block as one image per report model, on the shared colour scale), lay it out in the kit-ui kit-report format (summary, inputs, results, method and assumptions, provenance) and print it with headless Chrome or Edge. Refused with the reason when the report is not ready (a model not open, a result stale or running, or run with other inputs than at save_report). Waits up to 40 s, then answers 'generating': call again for the result. Returns the PDF path, a link to it, pages, bytes and fonts (fallback should be empty). Then read the PDF back if you can, else ask the user to check it; the user edits report charts (settings button in Results) and cameras (Views menu) and regenerates from the Reports menu.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Report id." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "download_result",
+      "title": "Download the result",
+      "description": "Save a model's result as a file in the browser's downloads folder, as the Download menu does (the model becomes the active one): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ. Receivers are coloured with the shown column's colour scale (set_display column); every format but OBJ also holds each result column as values. mode, USD only: 'replace' (default) puts the colours in place of the receivers' materials; 'variants' adds a 'daylight' variant set per receiver to a flattened stage. Returns what was saved; the browser picks the folder. Several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them: the reply says so.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "format": { "type": "string", "enum": ["usdz", "usda", "usdc", "usd", "glb", "gltf", "obj"], "description": "File format." },
+          "mode": { "type": "string", "enum": ["replace", "variants"], "description": "USD only: colours replace the materials, or a variant set per result." }
+        },
+        "required": ["format"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
