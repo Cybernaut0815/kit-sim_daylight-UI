@@ -18,4 +18,6 @@ export const fmtTick = (v: number): string => (Math.abs(v) >= 1000 ? Math.round(
 
 export const FONT = 9, TITLE_FONT = 10;
 export const TEXT = 'var(--chart-text)', STRONG = 'var(--chart-text-strong)', GRID = 'var(--chart-grid)', AXIS = 'var(--chart-axis)';
+/** A comparison's lines, per series: the first (the reference) solid, the others dashed over it, so equal stretches show both. */
+export const DASH = [undefined, '4 2', '1.5 1.5', '6 2 1.5 2'];
 export const MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];

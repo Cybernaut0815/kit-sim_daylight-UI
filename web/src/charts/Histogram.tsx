@@ -9,7 +9,7 @@ import { svgColor, type Scale } from '../lib/gradients';
 import { fmtNum } from '../lib/result';
 import type { Action } from '../store';
 import { pct } from '../ui';
-import { AXIS, FONT, GRID, STRONG, TEXT, fmtTick, niceTicks } from './axes';
+import { AXIS, DASH, FONT, GRID, STRONG, TEXT, fmtTick, niceTicks } from './axes';
 
 const L = 34, R = 8, TOP = 20, BOTTOM = 30;
 
@@ -32,11 +32,13 @@ export function Histogram({ edges, shares, counts, below, above, scale, unit, pr
   const hiOf = (b: number) => (b < bins - 1 ? edges[b + 1] : above > 0 ? dmax + (dmax - dmin) * 1e-9 : Infinity); // the last bin keeps its top value
   const hover = (b: number) => dispatch && (() => dispatch({ type: 'BIN', bin: [edges[b], hiOf(b)] }));
   const has = (m: Marker) => !series && show.includes(m); // the markers: one model only
-  // the mean label sits above the plot, the median label just above the axis, so the two never collide
-  const marker = (v: number, label: string, ty: number, dash?: string) => (
+  const header = series ? `per model, bin ${fmtNum((dmax - dmin) / bins)} ${unit}` : `${n.toLocaleString('en-GB')} elements, bin ${fmtNum((dmax - dmin) / bins)} ${unit}`;
+  // the mean label sits above the plot, the median label just above the axis, so the two never collide; a label starting
+  // at the line starts no sooner than `from` (the mean's: past the header, glyphs about 5 units wide)
+  const marker = (v: number, label: string, ty: number, dash?: string, from = 0) => (
     <g key={label}>
       <line x1={x(v)} x2={x(v)} y1={TOP - 4} y2={base} stroke={STRONG} strokeWidth={1.25} strokeDasharray={dash} />
-      <text x={x(v) + 3} y={ty} fontSize={FONT} fill={STRONG} textAnchor={x(v) > L + plotW * 0.75 ? 'end' : 'start'} dx={x(v) > L + plotW * 0.75 ? -6 : 0}>{label}</text>
+      <text x={x(v) > L + plotW * 0.75 ? x(v) + 3 : Math.max(x(v) + 3, from)} y={ty} fontSize={FONT} fill={STRONG} textAnchor={x(v) > L + plotW * 0.75 ? 'end' : 'start'} dx={x(v) > L + plotW * 0.75 ? -6 : 0}>{label}</text>
     </g>
   );
   return (
@@ -66,10 +68,10 @@ export function Histogram({ edges, shares, counts, below, above, scale, unit, pr
           <title>{`${fmtNum(edges[b])} to ${fmtNum(edges[b + 1])} ${unit}: ${series.map((s) => `${s.label} ${pct(s.shares[b])}`).join(', ')} of the area`}</title>
         </rect>
       ))}
-      {series?.map((s) => <path key={s.label} d={`M${L} ${base}${s.shares.map((v, b) => `V${y(v)}H${L + (b + 1) * bw}`).join('')}V${base}`} fill="none" stroke={s.color} strokeWidth={1.5} pointerEvents="none" />)}
+      {series?.map((s, k) => <path key={s.label} d={`M${L} ${base}${s.shares.map((v, b) => `V${y(v)}H${L + (b + 1) * bw}`).join('')}V${base}`} fill="none" stroke={s.color} strokeWidth={1.5} strokeDasharray={DASH[k]} pointerEvents="none" />)}
       {!series && below > 0 && <text x={L + 2} y={TOP + 8} fontSize={FONT} fill={TEXT}><title>{`${pct(below)} of the area is below ${fmtNum(dmin)} ${unit}, where the chart starts`}</title>{`‹ ${pct(below)} below`}</text>}
       {!series && above > 0 && <text x={L + plotW - 2} y={TOP + 8} fontSize={FONT} textAnchor="end" fill={TEXT}><title>{`${pct(above)} of the area is above ${fmtNum(dmax)} ${unit}, where the chart ends`}</title>{`${pct(above)} above ›`}</text>}
-      {has('mean') && inside(markers.mean) && marker(markers.mean, `mean ${fmtNum(markers.mean)}`, TOP - 7)}
+      {has('mean') && inside(markers.mean) && marker(markers.mean, `mean ${fmtNum(markers.mean)}`, TOP - 7, undefined, L + 5 * header.length + 6)}
       {has('median') && inside(markers.median) && (!has('mean') || Math.abs(x(markers.median) - x(markers.mean)) > 2) && marker(markers.median, `median ${fmtNum(markers.median)}`, base - 4, '3 2')}
       {(['p10', 'p90'] as const).filter((k) => has(k) && inside(markers[k])).map((k) => (
         <g key={k}>
@@ -87,7 +89,7 @@ export function Histogram({ edges, shares, counts, below, above, scale, unit, pr
       ))}
       {/* the unit, unless the last tick's label would run into it (glyphs about 5 units wide) */}
       <text x={L + plotW} y={base + 26} fontSize={FONT} textAnchor="end" fill={TEXT}>{L + plotW - x(last) < Math.max(20, 5 + 5 * unit.length + 2.5 * fmtTick(last).length) ? '' : unit}</text>
-      <text x={L} y={TOP - 7} fontSize={FONT} fill={TEXT}>{series ? `per model, bin ${fmtNum((dmax - dmin) / bins)} ${unit}` : `${n.toLocaleString('en-GB')} elements, bin ${fmtNum((dmax - dmin) / bins)} ${unit}`}</text>
+      <text x={L} y={TOP - 7} fontSize={FONT} fill={TEXT}>{header}</text>
     </svg>
   );
 }

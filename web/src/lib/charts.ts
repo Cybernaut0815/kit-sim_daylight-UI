@@ -92,7 +92,7 @@ export function putChart(charts: readonly ChartSpec[], raw: unknown): ChartSpec[
 export type WeightsFor = (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
 export interface Markers { mean: number; median: number; p10: number; p90: number }
 export interface Row { id: string; name: string; g: RunResult['manifest']['meshes'][number]; w: ArrayLike<number>; stats: Stats }
-export interface Data { r: RunResult; col: number; rows: Row[]; total: number; cum: Cumulative; markers: Markers; bins: number }
+export interface Data { r: RunResult; col: number; rows: Row[]; total: number; cum: Cumulative; markers: Markers; bins: number; step: number }
 
 // Per result, column and receiver subset: cumulative() sorts every element, and a selection or a run status re-renders
 // the panel; a result's rows never change while it lives (a load, a re-read or a role change drops it).
@@ -113,12 +113,23 @@ export function dataOf(r: RunResult, col: number, objects: readonly ObjectRow[],
   const cum = cumulative(r.values, col, rows.map((x) => x.g), rows.map((x) => x.w));
   const bins = Math.min(64, Math.max(12, Math.round(1.5 * Math.sqrt(cum.v.length)))); // more detail with more elements
   const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
-  const d = { r, col, rows, total, cum, markers, bins };
+  const d = { r, col, rows, total, cum, markers, bins, step: stepOf(cum.v) };
   held.set(key, d);
   // ponytail: per result at most 3 full columns' worth of elements (16 B each), least recent out; raise it if many charts thrash it
   const full = groups.reduce((n, g) => n + g.count, 0), size = () => [...held.values()].reduce((n, x) => n + x.cum.v.length, 0);
   while (held.size > 1 && size() > 3 * full) held.delete(held.keys().next().value!);
   return d;
+}
+
+/** The step that sorted values `v` all are whole multiples of (sun hours without transmission: the time step), or 0:
+ *  values on a continuum, float noise, or over 1000 steps. */
+export function stepOf(v: ArrayLike<number>): number {
+  const span = v.length ? v[v.length - 1] - v[0] : 0;
+  let q = Infinity;
+  for (let i = 1; i < v.length; i++) { const d = v[i] - v[i - 1]; if (d > 1e-6 * span && d < q) q = d; }
+  if (!(q < Infinity) || span / q > 1000) return 0;
+  for (let i = 0; i < v.length; i++) if (Math.abs(v[i] / q - Math.round(v[i] / q)) > 1e-3) return 0;
+  return q;
 }
 
 export interface ChartInput {
@@ -170,8 +181,18 @@ export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
   const seen: [number, number] = [Math.min(...ds.map(({ d }) => d.cum.v[0])), Math.max(...ds.map(({ d }) => d.cum.v[d.cum.v.length - 1]))]; // absolute: the data's
   const range: [number, number] = Array.isArray(want) ? want : want === 'relative' && scale.vmax > scale.vmin ? [scale.vmin, scale.vmax] : seen;
   if (spec.kind === 'curve') return { kind: 'curve', scale, unit, grid, show, height: spec.height ?? 170, cum: first.cum, domain: range, curves: many ? ds.map(({ slot, d }) => ({ slot, cum: d.cum })) : undefined };
-  const bins = typeof spec.bins === 'number' ? spec.bins : Math.min(...ds.map(({ d }) => d.bins)); // auto: the same bins for every model, so a hovered bin lines up
-  const hs = ds.map(({ d }) => histogram(d.r.values, d.col, d.rows.map((x) => x.g), d.rows.map((x) => x.w), bins, range));
+  let bins = typeof spec.bins === 'number' ? spec.bins : Math.min(...ds.map(({ d }) => d.bins)), span = range; // auto: the same bins for every model, so a hovered bin lines up
+  // auto bins over values in whole steps (every model's alike) from a range that starts on one: bins of whole steps, centred
+  // on the values; finer bins than the step would leave most of them empty
+  const q = ds.every(({ d }) => d.step === ds[0].d.step) ? ds[0].d.step : 0;
+  if (spec.bins === undefined || spec.bins === 'auto') {
+    if (q > 0 && !Array.isArray(want) && Math.abs(range[0] / q - Math.round(range[0] / q)) < 1e-3) {
+      const lo = range[0] - q / 2, k = Math.max(1, Math.ceil((range[1] - range[0] + q) / bins / q));
+      bins = Math.max(1, Math.ceil((range[1] - range[0] + q) / (k * q) - 1e-9));
+      span = [lo, lo + bins * k * q];
+    }
+  }
+  const hs = ds.map(({ d }) => histogram(d.r.values, d.col, d.rows.map((x) => x.g), d.rows.map((x) => x.w), bins, span));
   return {
     kind: 'histogram', scale, unit, grid, show, height: spec.height ?? 200, edges: hs[0].edges, shares: hs[0].shares, counts: hs[0].counts, markers: first.markers,
     below: hs[0].below, above: Math.max(...hs.map((h) => h.above)), // several: the largest share above of any (the last bin's hover stops at the top)

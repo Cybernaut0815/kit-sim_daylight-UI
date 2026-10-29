@@ -6,7 +6,7 @@ import { MARKERS, type Marker } from '../lib/charts';
 import { type Scale } from '../lib/gradients';
 import { fmtNum, percentile, shareBelow, type Cumulative } from '../lib/result';
 import { pct } from '../ui';
-import { AXIS, FONT, GRID, STRONG, TEXT, fmtTick, niceTicks } from './axes';
+import { AXIS, DASH, FONT, GRID, STRONG, TEXT, fmtTick, niceTicks } from './axes';
 
 const L = 34, R = 8, TOP = 10, BOTTOM = 30;
 const AT: Partial<Record<Marker, number>> = { p10: 0.1, median: 0.5, p90: 0.9 }; // the marked percentiles
@@ -42,7 +42,7 @@ export function AreaCurve({ cum, domain, scale, unit, probe, curves, show = MARK
       {scale.hi !== null && scale.hi < dmax && <rect x={x(scale.hi)} y={TOP} width={L + plotW - x(scale.hi)} height={plotH} fill={scale.above} opacity={0.12} />}
       {grid && [0.25, 0.5, 0.75, 1].map((s) => <line key={s} x1={L} x2={L + plotW} y1={y(s)} y2={y(s)} stroke={GRID} />)}
       {[0, 0.25, 0.5, 0.75, 1].map((s) => <text key={s} x={L - 4} y={y(s) + 3} fontSize={FONT} textAnchor="end" fill={TEXT}>{`${100 * s} %`}</text>)}
-      {(curves ?? [{ color: STRONG, cum }]).map((c, k) => <polyline key={k} points={line(c.cum)} fill="none" stroke={c.color} strokeWidth={curves ? 2 : 1.5} />)}
+      {(curves ?? [{ color: STRONG, cum }]).map((c, k) => <polyline key={k} points={line(c.cum)} fill="none" stroke={c.color} strokeWidth={curves ? 2 : 1.5} strokeDasharray={curves ? DASH[k] : undefined} />)}
       {!curves && show.flatMap((m) => AT[m] ?? []).map((q) => {
         const v = percentile(cum, q), right = x(v) > L + plotW * 0.7; // labels near the right edge turn inwards
         return inside(v) && (

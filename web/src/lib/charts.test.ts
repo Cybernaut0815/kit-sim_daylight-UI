@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, type ObjectRow, type RunResult } from '../store';
-import { chartData, cleanSpec, dataOf, putChart, type ChartInput, type ChartKind, type ChartSpec, type Drawn } from './charts';
+import { chartData, cleanSpec, dataOf, putChart, stepOf, type ChartInput, type ChartKind, type ChartSpec, type Drawn } from './charts';
 
 const obj = (id: string, path: string): ObjectRow => ({ id, name: id, path, tris: 2, verts: 4, role: 'receiver' });
 /** A 'radiation_front' result with one mesh per receiver: values[k] are the rows of receivers[k]. */
@@ -60,7 +60,7 @@ describe('chartData', () => {
     const h = draw('histogram', {}, [A, B]);
     expect(h.edges).toHaveLength(13); // A: 20 elements -> 12 bins, B: 400 -> 30
     expect(h.series?.map((s) => [s.slot, s.shares.length])).toEqual([[0, 12], [1, 12]]);
-    expect(draw('histogram', { models: [1] }, [A, B]).edges).toHaveLength(31);
+    expect(draw('histogram', { models: [1] }, [A, B]).edges).toHaveLength(30); // B alone: 30 bins, then whole steps of 0.1 (below)
     expect(draw('histogram', { bins: 5 }, [A, B]).edges).toHaveLength(6);
   });
   it("several of the chart's models open: a comparison, also before a second result lands; one of them: not", () => {
@@ -70,9 +70,19 @@ describe('chartData', () => {
     expect(draw('histogram', { models: [0] }, [A, B]).series).toBeUndefined();
     expect(draw('curve', { models: [0, 3] }, [A, B]).curves).toBeUndefined(); // D is not open
   });
+  it('values in whole steps (sun hours every 15 min): auto bins of whole steps centred on them, none left empty', () => {
+    expect([stepOf([0, 0.25, 0.5, 1.75]), stepOf([0, 0.1, 0.35]), stepOf([0, 0.123, 0.5, 0.987]), stepOf([1, 1])]).toEqual([0.25, 0, 0, 0]);
+    expect(stepOf([0, 1e-9, 1])).toBeCloseTo(1, 6); // float noise is no step
+    expect(stepOf(Float32Array.from([0, 1 / 6, 2 / 6, 5 / 6]))).toBeCloseTo(1 / 6, 6); // float32 thirds: a 10 min step
+    const S = { slot: 0, objects: [obj('s', '/W/s')], result: result(['s'], [range(1760, (i) => (i % 31) / 4)]) }; // 0 to 7.5 h
+    const h = draw('histogram', {}, [S]); // 1760 elements: 63 bins of 0.12 h would leave every other one empty
+    expect([h.edges.length, h.edges[0], h.edges[1] - h.edges[0], h.counts.every((c) => c > 0)]).toEqual([32, -0.125, 0.25, true]);
+    expect(draw('histogram', { bins: 63 }, [S]).edges).toHaveLength(64); // a set number keeps it
+    expect(draw('histogram', { range: [0, 8] }, [S]).edges[0]).toBe(0); // and so does a set range
+  });
   it('relative = the colour scale over every model, absolute = the drawn data, a set range wins', () => {
     const viz = defaultSettings().viz;
-    expect(draw('histogram', { models: [0] }, [A, B]).edges[0]).toBe(0); // relative: B's values colour A's chart too
+    expect(draw('histogram', { models: [0] }, [A, B]).edges[0]).toBe(-0.5); // relative: B's values colour A's chart too (from 0, A's bins centred on its whole numbers)
     expect(draw('curve', { models: [0], range: 'absolute' }, [A, B]).domain).toEqual([1, 20]);
     viz.scales.radiation = { min: 0, max: 100 };
     const h = draw('histogram', {}, [A, B], viz);
@@ -85,7 +95,7 @@ describe('chartData', () => {
   it('a parts subset restricts the elements; the derived data is cached per result, column and subset', () => {
     const M = { slot: 0, objects: [obj('n', '/S/N'), obj('s', '/S/S')], result: result(['n', 's'], [[1, 2], [10, 20, 30]]) };
     const h = draw('histogram', { parts: ['/S/S'], range: 'absolute' }, [M]);
-    expect([h.counts.reduce((a, b) => a + b), h.edges[0], h.edges[h.edges.length - 1], h.markers.mean]).toEqual([3, 10, 30, 20]);
+    expect([h.counts.reduce((a, b) => a + b), h.edges[0], h.edges[h.edges.length - 1], h.markers.mean]).toEqual([3, 5, 35, 20]); // 10, 20, 30 in steps of 10
     expect(draw('curve', { parts: ['/S'] }, [M]).cum.v).toHaveLength(5);
     const w = () => undefined;
     expect(dataOf(M.result, 0, M.objects, w)).toBe(dataOf(M.result, 0, M.objects, w));
