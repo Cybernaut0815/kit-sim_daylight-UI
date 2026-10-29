@@ -4,7 +4,7 @@
 import type { Dispatch } from 'react';
 import { BUILT_IN, FIELDS, MARKERS, METRICS, isShare, type ChartSpec, type Drawn, type Metric } from '../lib/charts';
 import { GRADIENTS, scaleFor, type Scale } from '../lib/gradients';
-import { fmtNum, unitFor } from '../lib/result';
+import { columnLabel, fmtNum, unitFor } from '../lib/result';
 import type { Action, Settings } from '../store';
 import { ColorQuad, MenuButton, NumberField, ResetButton, Segmented } from '../ui';
 import { niceStep } from './axes';
@@ -138,7 +138,7 @@ export function ChartSettings({ id, title, spec, d, column, viz, many, dispatch,
         <>
           <div className="stack chart-menu">{FIELDS[spec.kind].map(field)}</div>
           <div className="menu__separator" />
-          <div className="menu__section">Colours of {quantity}, shared with the 3D views and every chart</div>
+          <div className="menu__section">Colours of {columnLabel(quantity).toLowerCase()}, shared with the 3D views and every chart</div>
           <div className="chart-menu"><ScaleFields idp={`${id}:`} quantity={quantity} scale={scale} viz={viz} many={many} dispatch={dispatch} /></div>
           <div className="menu__footer cluster">
             {!BUILT_IN.some((b) => b.id === spec.id) && <button className="btn btn--danger" type="button" onClick={() => { close(); onChart({ id: spec.id, remove: true }); }}>Remove</button>}

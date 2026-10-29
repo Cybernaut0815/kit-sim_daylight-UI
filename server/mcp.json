@@ -11,7 +11,7 @@
     {
       "name": "guide",
       "title": "Read a guide",
-      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions: read it before interpreting results. 'report': how reports work here and the ReportSpec reference with two examples (one option, a comparison), followed by the kit-ui kit-report skill when the app's kit-ui package ships it: read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow (from the same package).",
+      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions: read it before interpreting results. 'report': how reports work here and the ReportSpec reference with two examples (one option, a comparison), followed by the kit-ui kit-report skill when the app's kit-ui package ships it: read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow (from the same package, when it ships them).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -240,7 +240,8 @@
           "select": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims to select ([] clears the selection)." }
         },
         "additionalProperties": false
-      }
+      },
+      "annotations": { "destructiveHint": false }
     },
     {
       "name": "set_geometry",
@@ -310,7 +311,7 @@
     {
       "name": "run",
       "title": "Run the simulation",
-      "description": "Run the simulation for every model with a receiver, with the current inputs, as the Run button does: one GPU job per model, one after another. Waits up to `wait` seconds and joins a batch already running instead of starting another. Returns per model: done, failed (with the reason) or not run, the run time, and the shown column's mean, P10 and P90; or the problems that stopped it (fix them with update_settings, set_roles or edit_material). If it answers 'running', call run again to keep waiting. `cancel` stops the batch; models already done keep their results.",
+      "description": "Run the simulation for every model with a receiver, with the current inputs, as the Run button does: one GPU job per model, one after another. Waits up to `wait` seconds and joins a batch already running instead of starting another. Returns per model its status (done; failed, with the reason; queued or running; stale: inputs changed since; no receiver; not run), the run time, and the shown column's mean, P10 and P90 of its last result; or the problems that stopped it (fix them with update_settings, set_roles or edit_material). If it answers 'running', call run again to keep waiting. `cancel` stops the batch; models already done keep their results.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -327,7 +328,7 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, the first is the reference; default every model with a result." },
+          "models": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, the first is the reference; default every model with a result." },
           "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column, e.g. 'sunhours_front'; default the shown one." },
           "by": { "type": "string", "enum": ["mesh", "parts", "facing"], "description": "Rows per receiver mesh, per prim in paths, or per facing side; default parts when paths are given, else mesh." },
           "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prim paths: one row each with by parts; with mesh or facing, only the receivers under them." },
@@ -374,7 +375,8 @@
           "auto": { "type": "boolean", "description": "Run on every change." }
         },
         "additionalProperties": false
-      }
+      },
+      "annotations": { "destructiveHint": false }
     },
     {
       "name": "set_camera",
@@ -417,13 +419,14 @@
             },
             "additionalProperties": false
           },
-          "direction": { "type": "string", "enum": ["auto", "N", "NE", "E", "SE", "S", "SW", "W", "NW", "top"], "description": "Frame: where the camera stands, true compass ('S' sees south-facing surfaces); 'top' = plan, north up; 'auto' (default) faces the framed surfaces." },
-          "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon (default 20; negative looks up from below)." },
+          "direction": { "type": "string", "enum": ["auto", "N", "NE", "E", "SE", "S", "SW", "W", "NW", "top"], "description": "Frame: where the camera stands, true compass ('S' sees south-facing surfaces); 'top' = plan, north up; 'auto' (default) faces the framed surfaces (frame.normal, else the meshes' own), or sees a closed shape such as a whole building from the SW." },
+          "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon (default 20; negative looks up from below). With direction auto: degrees above the framed surfaces' own tilt (default 20: a wall from 20 degrees up, a roof as a plan); a closed shape from the SW at 35 degrees unless given." },
           "aspect": { "type": "number", "minimum": 0.1, "maximum": 10, "description": "Frame: width/height to fit; default the view's own." },
           "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Frame: projection; default the view's current one." }
         },
         "additionalProperties": false
-      }
+      },
+      "annotations": { "destructiveHint": false }
     },
     {
       "name": "save_view",
@@ -438,16 +441,17 @@
         },
         "required": ["name"],
         "additionalProperties": false
-      }
+      },
+      "annotations": { "destructiveHint": false }
     },
     {
       "name": "screenshot",
       "title": "Take a screenshot",
-      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). column, colourBy, sunPath and grid apply to this shot only. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side (smaller with several models). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours) and the size.",
+      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). column, colourBy, sunPath and grid apply to this shot only. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side, and comes at a lower JPEG quality, then with fewer pixels, when the reply would pass about 800 KB (shared by the models' images). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours) and the size.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, one image each; default the active model." },
+          "models": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, one image each; default the active model." },
           "width": { "type": "integer", "minimum": 16, "maximum": 8192, "description": "Width in px (default 1280)." },
           "height": { "type": "integer", "minimum": 16, "maximum": 8192, "description": "Height in px (default 800)." },
           "view": {
@@ -483,7 +487,7 @@
             "additionalProperties": false
           },
           "direction": { "type": "string", "enum": ["auto", "N", "NE", "E", "SE", "S", "SW", "W", "NW", "top"], "description": "Frame: where the camera stands, as in set_camera (default auto)." },
-          "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon (default 20)." },
+          "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon, as in set_camera (default 20; with direction auto above the framed surfaces' own tilt; a closed shape from the SW at 35 degrees unless given)." },
           "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Frame: projection; default the view's current one." },
           "near": { "type": "number", "minimum": 0, "description": "Cutaway: geometry closer to the eye than this, m, is not drawn." },
           "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column to colour by; default the shown one." },
@@ -553,7 +557,7 @@
     {
       "name": "download_result",
       "title": "Download the result",
-      "description": "Save a model's result as a file in the browser's downloads folder, as the Download menu does (the model becomes the active one): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ. Receivers are coloured with the shown column's colour scale (set_display column); every format but OBJ also holds each result column as values. mode, USD only: 'replace' (default) puts the colours in place of the receivers' materials; 'variants' adds a 'daylight' variant set per receiver to a flattened stage. Returns what was saved; the browser picks the folder. Several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them: the reply says so.",
+      "description": "Save a model's result as a file in the browser's downloads folder, as the Download menu does (the model becomes the active one): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ. Receivers are coloured with the shown column's colour scale (set_display column); every format but OBJ also holds each result column as values. mode, USD only: 'replace' (default) puts the colours in place of the receivers' materials; 'variants' adds a 'daylight' variant set per receiver to a flattened stage. Returns what was saved; the browser picks the folder. A big model may answer 'running': the file is still being written and lands in the downloads folder by itself, so do not call again for it (a call while one is written is refused). Several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them: the reply says so.",
       "inputSchema": {
         "type": "object",
         "properties": {

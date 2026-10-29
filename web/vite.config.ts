@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Agent } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
+import type { ProxyOptions } from 'vite';
 import { defineConfig } from 'vitest/config';
 import { mock } from './mock/run.ts';
 
@@ -13,6 +14,16 @@ const rev = (repo: string) => { try { return execFileSync('git', ['-C', here(rep
 // what a report's provenance names: this app, kit-ui, the core and the USD viewer (the submodules' revisions)
 const VERSIONS = { app: version('./package.json'), kitUi: version('./node_modules/kit-ui/package.json'), core: rev('../kit-sim_daylight'), viewer: rev('../USD_WebViewer') };
 const agent = new Agent({ keepAlive: true }); // without it the dev proxy opens a new TCP connection for every request
+// The proxy reaches the server from 127.0.0.1 with the browser's Host, which the agent routes' local-only gate takes for
+// this machine: a client from another one (`vite --host`, `vite preview --host`) is named in X-Forwarded-For, which the
+// gate refuses (and the job API ignores).
+const proxied: ProxyOptions = {
+  target: API, agent,
+  configure: (proxy) => proxy.on('proxyReq', (out, req) => {
+    const peer = req.socket.remoteAddress ?? '';
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(peer)) out.setHeader('X-Forwarded-For', peer || 'unknown');
+  }),
+};
 // The USD viewer's wasm core runs threads (SharedArrayBuffer), so pages must be cross-origin isolated; preview inherits it.
 const isolation = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
 
@@ -56,7 +67,7 @@ export default defineConfig(({ command, mode }) => {
       headers: isolation,
       fs: { allow: ['..'] },
       // the agent routes too (daylight_server --mcp): the Host stays localhost:5173, which the server's local-only gate accepts
-      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt', '/mcp', '/bridge', '/files', '/reports', '/session'].map((p) => [p, { target: API, agent }])),
+      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt', '/mcp', '/bridge', '/files', '/reports', '/session'].map((p) => [p, proxied])),
     },
     // kit-ui's stylesheets as the report inlines them (?raw): vitest blanks every other CSS import
     test: { environment: 'node', include: ['src/**/*.test.ts'], css: { include: [/kit-ui[\\/]css[\\/]/] } },

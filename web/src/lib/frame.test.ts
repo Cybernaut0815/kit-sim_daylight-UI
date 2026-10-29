@@ -73,6 +73,8 @@ describe('viewDir', () => {
     expect(close(closed, [0, 0, 0])).toBe(true);
     expect(close(toModel(viewDir('auto', 0, closed)), [-1, -1, 1].map((v) => v / Math.sqrt(3)), 1e-4)).toBe(true);
     expect(viewDir('auto', 0)).toEqual(viewDir('auto', 0, closed));
+    expect(close(viewDir('auto', 0, closed, 60), viewDir('SW', 0, undefined, 60))).toBe(true); // an elevation given counts
+    expect(close(viewDir('auto', 90, [0, 1, 0], 45), viewDir('E', 90, undefined, 45))).toBe(true); // a wall: above the horizon
   });
   it('auto: a plan keeps north up, and a level surface its south side, whatever float noise or a drainage fall says', () => {
     expect(viewDir('auto', 30, [1e-7, 2e-7, 1])).toEqual(viewDir('top', 30)); // one float32 ulp off level

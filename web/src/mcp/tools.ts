@@ -12,7 +12,7 @@ import type { ObjMesh } from 'daylight-mesh';
 import type { ViewState } from 'usd-viewer';
 import type { Pane, UiPrefs } from '../App';
 import { validate, weatherLeap } from '../lib/args';
-import { BUILT_IN, putChart, type ChartSpec, type WeightsFor } from '../lib/charts';
+import { BUILT_IN, FIELDS, putChart, type ChartSpec, type WeightsFor } from '../lib/charts';
 import { boxToWorld, cornersOf, describeView, facingOf, findCritical, frameView, meanNormal, viewDir, type Box, type Facing, type Points, type Vec3 } from '../lib/frame';
 import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, photonReverse, photonSearch, proxyUrl } from '../lib/geo';
 import { gradientFor, type Scale } from '../lib/gradients';
@@ -124,10 +124,15 @@ export const TOOLS = mcp.tools as unknown as { name: string; inputSchema: Schema
 const is = (t: string, v: unknown) =>
   t === 'integer' ? Number.isInteger(v) : t === 'number' ? Number.isFinite(v) : t === 'array' ? Array.isArray(v)
     : t === 'object' ? !!v && typeof v === 'object' && !Array.isArray(v) : t === 'null' ? v === null : typeof v === t;
-const WORDS: Record<string, string> = {
+/** Each inputSchema pattern in words (mcp.test.ts: every pattern of mcp.json has them). */
+export const WORDS: Record<string, string> = {
   '^\\d{4}-\\d{2}-\\d{2}$': 'a date, YYYY-MM-DD', '^\\d{2}:\\d{2}$': "a time, 'HH:MM'", '^/': 'a prim path, starting with /', '^[a-z0-9-]{1,64}$': '1 to 64 lowercase letters, digits or -',
+  '^#[0-9A-Fa-f]{6}$': "a colour, '#rrggbb'", '^[A-Za-z0-9_-]{1,64}$': '1 to 64 letters, digits, _ or -',
+  '^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$': "a result column such as 'sunhours_front'",
 };
 const span = (lo?: number, hi?: number) => (lo === hi ? `${lo}` : lo !== undefined && hi !== undefined ? `${lo} to ${hi}` : lo !== undefined ? `at least ${lo}` : `at most ${hi}`);
+/** A span of a count, its noun agreeing with the last number: 'at least 1 item', '1 to 4 items'. */
+const count = (lo: number | undefined, hi: number | undefined, noun: string) => `${span(lo, hi)} ${noun}${(hi ?? lo) === 1 ? '' : 's'}`;
 
 /** What is wrong with `v` under a tool's inputSchema (the parts mcp.json uses), by its path, e.g. 'time.step: one of
  *  10, 15, 30, 60'; '' when nothing. */
@@ -141,11 +146,11 @@ export function check(s: Schema, v: unknown, at = 'arguments'): string {
   }
   if (typeof v === 'string') {
     if (s.pattern && !new RegExp(s.pattern).test(v)) return no(WORDS[s.pattern] ?? `as ${s.pattern}`);
-    if (v.length < (s.minLength ?? 0) || v.length > (s.maxLength ?? Infinity)) return no(`${span(s.minLength, s.maxLength)} characters`);
+    if (v.length < (s.minLength ?? 0) || v.length > (s.maxLength ?? Infinity)) return no(count(s.minLength, s.maxLength, 'character'));
   }
   if (typeof v === 'number' && (v < (s.minimum ?? -Infinity) || v > (s.maximum ?? Infinity))) return no(span(s.minimum, s.maximum));
   if (Array.isArray(v)) {
-    if (v.length < (s.minItems ?? 0) || v.length > (s.maxItems ?? Infinity)) return no(`${span(s.minItems, s.maxItems)} items`);
+    if (v.length < (s.minItems ?? 0) || v.length > (s.maxItems ?? Infinity)) return no(count(s.minItems, s.maxItems, 'item'));
     for (const [i, x] of v.entries()) { const w = s.items && check(s.items, x, `${at}[${i}]`); if (w) return w; }
   }
   if (s.properties && is('object', v)) {
@@ -243,11 +248,13 @@ function quoted(u: Summary, th: readonly number[], ranged: boolean) {
     ...(th.length ? { thresholds: th.map((x, i) => ({ x, below: roundPct(1 - u.atLeast[i]), atOrAbove: roundPct(u.atLeast[i]) })) } : {}),
   };
 }
-/** u minus the reference's v: values in the column's unit, shares in percentage points. */
-function difference(u: Summary, v: Summary, th: readonly number[], ranged: boolean) {
-  const pts = (d: number) => roundNum(100 * d);
+/** u minus the reference's v: values in the column's unit, shares in percentage points, both as the Results panel shows
+ *  them; a difference within float noise is 0 (two equal shares differ by 0, not 1.11e-14). */
+export function difference(u: Summary, v: Summary, th: readonly number[], ranged: boolean) {
+  const pts = (d: number) => roundNum(Math.abs(d) < 1e-9 ? 0 : 100 * d) + 0; // + 0: no -0
+  const minus = (a: number, b: number) => roundNum(Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b)) ? 0 : a - b);
   return {
-    ...Object.fromEntries(NUMS.map((k) => [k, roundNum(u[k] - v[k])])),
+    ...Object.fromEntries(NUMS.map((k) => [k, minus(u[k], v[k])])),
     ...(ranged ? { below: pts(u.below - v.below), within: pts(u.within - v.within), above: pts(u.above - v.above) } : {}),
     ...(th.length ? { thresholds: th.map((x, i) => ({ x, below: pts(v.atLeast[i] - u.atLeast[i]), atOrAbove: pts(u.atLeast[i] - v.atLeast[i]) })) } : {}),
   };
@@ -337,8 +344,8 @@ function drawnPoints(objs: readonly Object3D[]): Points {
 }
 /**
  * set_camera's and screenshot's frame: the drawn meshes at or under frame.paths (every mesh without), or frame.box (model
- * metres), fitted to `aspect` from a.direction at a.elevation in the view's lens (or a.projection). auto faces
- * frame.normal, else the framed meshes (their backs for a back column).
+ * metres), fitted to `aspect` from a.direction at a.elevation (viewDir's defaults when not given) in the view's lens (or
+ * a.projection). auto faces frame.normal, else the framed meshes (their backs for a back column).
  */
 function framed(x: Ctl, m: Model, a: Args, aspect: number, back: boolean): { view: ViewState; cut: number } {
   const { el } = x.viewer(m.slot), f = a.frame as { paths?: string[]; box?: Box; normal?: Vec3 };
@@ -353,7 +360,7 @@ function framed(x: Ctl, m: Model, a: Args, aspect: number, back: boolean): { vie
     normal ??= meanNormal(m.objects.flatMap((o) => (ids.has(o.id) && !o.instances ? x.meshOf(o.id) ?? [] : []))).map((v) => (back ? -v : v)) as Vec3;
   }
   try {
-    return frameView(pts, viewDir(a.direction ?? 'auto', x.state.settings.sim.north, normal, a.elevation ?? 20), { fov: el.view.fov, aspect, projection: a.projection ?? el.view.projection });
+    return frameView(pts, viewDir(a.direction ?? 'auto', x.state.settings.sim.north, normal, a.elevation), { fov: el.view.fov, aspect, projection: a.projection ?? el.view.projection });
   } catch (e) {
     throw new Error(`frame.${(e as Error).message}`); // 'box: no extent; ...'
   }
@@ -558,9 +565,13 @@ export function settingsActions(a: Args, s: State, shown: string | null, file?: 
       if (!old) throw new Error(`${at}.id: no chart '${given.id}' (${st.settings.charts.map((c) => c.id).join(', ')})`);
       if (remove && BUILT_IN.some((b) => b.id === old.id)) throw new Error(`${at}.remove: '${old.id}' is built in; reset it instead`);
       act = remove ? { type: 'CHART', id: old.id, remove: true } : { type: 'CHART', id: old.id, reset: true };
-    } else { // an existing chart: only the given fields change
+    } else { // an existing chart: only the given fields change; a field of another kind is refused, as in save_report (a
+      // model not open is kept: the app keeps a removed model's letter in its charts too, and app_state's copy comes back)
+      const kind: string | undefined = given.kind ?? old?.kind, look = kind && Object.hasOwn(FIELDS, kind) ? FIELDS[kind as ChartSpec['kind']] : null; // no kind: putChart says so
+      const own = ['id', 'kind', 'title', 'column', 'models', 'parts', ...(look ?? [])], other = Object.keys(given).find((k) => !own.includes(k));
+      if (look && other) throw new Error(`${at}.${other}: not a field of a ${kind} chart (${own.join(', ')})`);
       const spec = { ...old, ...given, ...(given.models ? { models: given.models.map((l: string) => LETTERS.indexOf(l)) } : {}) } as ChartSpec, r = putChart(st.settings.charts, spec);
-      if (typeof r === 'string') throw new Error(`${at} ${r}`);
+      if (typeof r === 'string') throw new Error(r.startsWith('charts:') ? `${at}${r.slice(6)}` : `${at}.${r}`); // 'charts[2]: at most 16 ...', 'charts[0].bins: ...'
       act = { type: 'CHART', spec };
     }
     out.push(act);
@@ -596,19 +607,23 @@ export async function putReport(d: Draft & Partial<Pick<Report, 'created' | 'upd
 const waiting = new Set<string>(); // the reports generate_report answered 'generating' for: the next call gets that generation
 
 // ---------------------------------------------------------------------------------------------- the tools
-// Read-only tools run at once; the others change state under exclusive(), and wait for App outside it.
+// Read-only tools run at once, except that those reading the display (app_state, results, find_critical) wait their turn
+// under exclusive(): a shot or a report's figures show a look of their own meanwhile (staged), and a client runs
+// read-only tools in parallel. The others change state under exclusive(), and wait for App outside it.
 export const HANDLERS: Record<string, Handler> = {
   async app_state(_a, c) {
-    const x = c(), s = x.state;
-    return ok({
-      tab: { kind: HEADLESS ? 'hidden' : 'UI', visible: document.visibilityState === 'visible', discarded: (document as Document & { wasDiscarded?: boolean }).wasDiscarded === true },
-      models: s.models.map((m, i) => ({
-        model: letter(m.slot), name: m.name || null, loading: !!x.panes[m.slot]?.loading, problems: x.panes[m.slot]?.loadError ?? null,
-        meshes: roles(m), faces: m.objects.reduce((n, o) => n + o.tris, 0), run: m.run.status === 'error' ? 'failed' : m.run.status, ...(m.error ? { error: m.error } : {}), result: freshness(x, i),
-        ...(x.panes[m.slot]?.meshes.size ? { view: x.viewer(m.slot).el.view } : {}), // its camera now, exact
-      })),
-      display: display(x), subdivision: x.ui.subdiv, settings: publicSettings(s.settings), problems: problems(x), views: x.views.map(({ name, view }) => ({ name, view })),
-      reports: (x.reports ?? []).map((e) => ({ id: e.id, title: e.spec.title, models: e.spec.models.map((m) => m.model), updated: e.spec.updated, pdf: e.pdf, ...x.generation(e.id) })),
+    return exclusive(() => {
+      const x = c(), s = x.state;
+      return ok({
+        tab: { kind: HEADLESS ? 'hidden' : 'UI', visible: document.visibilityState === 'visible', discarded: (document as Document & { wasDiscarded?: boolean }).wasDiscarded === true },
+        models: s.models.map((m, i) => ({
+          model: letter(m.slot), name: m.name || null, loading: !!x.panes[m.slot]?.loading, problems: x.panes[m.slot]?.loadError ?? null,
+          meshes: roles(m), faces: m.objects.reduce((n, o) => n + o.tris, 0), run: m.run.status === 'error' ? 'failed' : m.run.status, ...(m.error ? { error: m.error } : {}), result: freshness(x, i),
+          ...(x.panes[m.slot]?.meshes.size ? { view: x.viewer(m.slot).el.view } : {}), // its camera now, exact
+        })),
+        display: display(x), subdivision: x.ui.subdiv, settings: publicSettings(s.settings), problems: problems(x), views: x.views.map(({ name, view }) => ({ name, view })),
+        reports: (x.reports ?? []).map((e) => ({ id: e.id, title: e.spec.title, models: e.spec.models.map((m) => m.model), updated: e.spec.updated, pdf: e.pdf, ...x.generation(e.id) })),
+      });
     });
   },
 
@@ -858,47 +873,51 @@ export const HANDLERS: Record<string, Handler> = {
   },
 
   async results(a, c) {
-    const x = c(), s = x.state, named: string[] | undefined = a.models;
-    const ms = named ? named.map((l, i) => { const m = modelOf(x, l, `models[${i}]`); if (!m.result) throw new Error(`models[${i}]: model ${l} has no result; run first`); return m; }) : s.models.filter((m) => m.result);
-    if (!ms.length) throw new Error('models: no model has a result yet; run first');
-    const column: string = a.column ?? x.shown ?? ms[0].result!.columns[0], [q, side] = column.split('_'), lacks = ms.find((m) => !m.result!.columns.includes(column));
-    if (lacks) throw new Error(`column: model ${letter(lacks.slot)}'s result has no ${column} (${lacks.result!.columns.join(', ')}); run again`);
-    const paths: string[] | undefined = a.paths, by: 'mesh' | 'parts' | 'facing' = a.by ?? (paths ? 'parts' : 'mesh'), th: number[] = a.thresholds ?? [], limit: number = a.limit ?? 50;
-    if (by === 'parts' && !paths) throw new Error("paths: by 'parts' takes the prim paths (model_tree)");
-    const { lo = null, hi = null } = s.settings.viz.ranges[q] ?? {}, ranged = lo !== null || hi !== null;
-    const each = ms.map((m) => ({ m, ...summaries(x, m, column, by, paths, lo, hi, th) }));
-    const [ref] = each, refRows = new Map(ref.rows.map((row) => [row.key, row.u])); // the differences: to the first model, row by row
-    return ok({
-      column, unit: unitFor(column).value, totalUnit: unitFor(column).total, meaning: `${QUANTITY_HELP[q]} ${SIDE_HELP[side]}`, problemRange: { below: lo, above: hi }, by,
-      models: each.map(({ m, whole, rows }, j) => ({
-        model: letter(m.slot), name: m.name, result: freshness(x, s.models.indexOf(m)),
-        whole: { ...quoted(whole, th, ranged), ...(j ? { diff: difference(whole, ref.whole, th, ranged) } : {}) },
-        rows: rows.slice(0, limit).map((row) => { const v = j ? refRows.get(row.key) : undefined; return { ...row.head, ...quoted(row.u, th, ranged), ...(v ? { diff: difference(row.u, v, th, ranged) } : {}) }; }),
-        ...(rows.length > limit ? { moreRows: rows.length - limit } : {}), run: provenance(m.result!, m.objects),
-      })),
+    return exclusive(() => {
+      const x = c(), s = x.state, named: string[] | undefined = a.models;
+      const ms = named ? named.map((l, i) => { const m = modelOf(x, l, `models[${i}]`); if (!m.result) throw new Error(`models[${i}]: model ${l} has no result; run first`); return m; }) : s.models.filter((m) => m.result);
+      if (!ms.length) throw new Error('models: no model has a result yet; run first');
+      const column: string = a.column ?? x.shown ?? ms[0].result!.columns[0], [q, side] = column.split('_'), lacks = ms.find((m) => !m.result!.columns.includes(column));
+      if (lacks) throw new Error(`column: model ${letter(lacks.slot)}'s result has no ${column} (${lacks.result!.columns.join(', ')}); run again`);
+      const paths: string[] | undefined = a.paths, by: 'mesh' | 'parts' | 'facing' = a.by ?? (paths ? 'parts' : 'mesh'), th: number[] = a.thresholds ?? [], limit: number = a.limit ?? 50;
+      if (by === 'parts' && !paths) throw new Error("paths: by 'parts' takes the prim paths (model_tree)");
+      const { lo = null, hi = null } = s.settings.viz.ranges[q] ?? {}, ranged = lo !== null || hi !== null;
+      const each = ms.map((m) => ({ m, ...summaries(x, m, column, by, paths, lo, hi, th) }));
+      const [ref] = each, refRows = new Map(ref.rows.map((row) => [row.key, row.u])); // the differences: to the first model, row by row
+      return ok({
+        column, unit: unitFor(column).value, totalUnit: unitFor(column).total, meaning: `${QUANTITY_HELP[q]} ${SIDE_HELP[side]}`, problemRange: { below: lo, above: hi }, by,
+        models: each.map(({ m, whole, rows }, j) => ({
+          model: letter(m.slot), name: m.name, result: freshness(x, s.models.indexOf(m)),
+          whole: { ...quoted(whole, th, ranged), ...(j ? { diff: difference(whole, ref.whole, th, ranged) } : {}) },
+          rows: rows.slice(0, limit).map((row) => { const v = j ? refRows.get(row.key) : undefined; return { ...row.head, ...quoted(row.u, th, ranged), ...(v ? { diff: difference(row.u, v, th, ranged) } : {}) }; }),
+          ...(rows.length > limit ? { moreRows: rows.length - limit } : {}), run: provenance(m.result!, m.objects),
+        })),
+      });
     });
   },
 
   async find_critical(a, c) {
-    const x = c(), m = loadedOf(x, a.model), L = letter(m.slot), r = m.result, f = freshness(x, x.state.models.indexOf(m));
-    if (!r) throw new Error(`model: model ${L} has no result; run first`);
-    if (f !== 'fresh') throw new Error(`model: model ${L}'s result is ${f === 'running' ? 'being replaced by a run on its way; call run to wait for it' : 'stale (inputs changed since it ran); run first'}`);
-    const column: string = a.column ?? x.shown!, col = r.columns.indexOf(column), q = column.split('_')[0], range = x.state.settings.viz.ranges[q];
-    if (col < 0) throw new Error(`column: not in model ${L}'s result (${r.columns.join(', ')})`);
-    const given = a.below !== undefined || a.above !== undefined, below: number | undefined = given ? a.below : range?.lo ?? undefined, above: number | undefined = given ? a.above : range?.hi ?? undefined;
-    if (below === undefined && above === undefined) throw new Error(`below: the problem range of ${q} is empty; give below or above (${unitFor(column).value}), or set the range with update_settings viz`);
-    const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(x, r), rows = new Map(m.objects.map((o) => [o.id, o]));
-    const meshes = r.receivers.flatMap((id, k) => {
-      const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
-      return o && row ? [{ id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] }] : [];
-    });
-    const out = findCritical({ values: r.values, col, column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);
-    return ok({
-      model: L, column, unit: unitFor(column).value, below: below ?? null, above: above ?? null, problemArea: roundNum(out.problemArea), problemShare: roundPct(out.problemShare),
-      groups: out.clusters.map((g) => ({
-        mesh: g.path, facing: g.facing, side: g.side, elements: g.elements, area: roundNum(g.area), share: roundPct(g.share), mean: roundNum(g.mean), worst: roundNum(g.worst),
-        centre: xyz(g.centroid), box: { min: xyz(g.box.min), max: xyz(g.box.max) }, normal: g.normal.map((v) => Math.round(1000 * v) / 1000), view: g.view, near: roundNum(g.near * mpu),
-      })),
+    return exclusive(() => {
+      const x = c(), m = loadedOf(x, a.model), L = letter(m.slot), r = m.result, f = freshness(x, x.state.models.indexOf(m));
+      if (!r) throw new Error(`model: model ${L} has no result; run first`);
+      if (f !== 'fresh') throw new Error(`model: model ${L}'s result is ${f === 'running' ? 'being replaced by a run on its way; call run to wait for it' : 'stale (inputs changed since it ran); run first'}`);
+      const column: string = a.column ?? x.shown!, col = r.columns.indexOf(column), q = column.split('_')[0], range = x.state.settings.viz.ranges[q];
+      if (col < 0) throw new Error(`column: not in model ${L}'s result (${r.columns.join(', ')})`);
+      const given = a.below !== undefined || a.above !== undefined, below: number | undefined = given ? a.below : range?.lo ?? undefined, above: number | undefined = given ? a.above : range?.hi ?? undefined;
+      if (below === undefined && above === undefined) throw new Error(`below: the problem range of ${q} is empty; give below or above (${unitFor(column).value}), or set the range with update_settings viz`);
+      const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(x, r), rows = new Map(m.objects.map((o) => [o.id, o]));
+      const meshes = r.receivers.flatMap((id, k) => {
+        const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
+        return o && row ? [{ id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] }] : [];
+      });
+      const out = findCritical({ values: r.values, col, column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);
+      return ok({
+        model: L, column, unit: unitFor(column).value, below: below ?? null, above: above ?? null, problemArea: roundNum(out.problemArea), problemShare: roundPct(out.problemShare),
+        groups: out.clusters.map((g) => ({
+          mesh: g.path, facing: g.facing, side: g.side, elements: g.elements, area: roundNum(g.area), share: roundPct(g.share), mean: roundNum(g.mean), worst: roundNum(g.worst),
+          centre: xyz(g.centroid), box: { min: xyz(g.box.min), max: xyz(g.box.max) }, normal: g.normal.map((v) => Math.round(1000 * v) / 1000), view: g.view, near: roundNum(g.near * mpu),
+        })),
+      });
     });
   },
 
@@ -1002,11 +1021,14 @@ export const HANDLERS: Record<string, Handler> = {
   async download_result(a, c, end) {
     return exclusive(async () => {
       const x = c(), m = loadedOf(x, a.model), L = letter(m.slot), mode: ExportMode = a.mode ?? 'replace';
+      // one at a time, as the Download menu: a second export would write the same file, and the first one's end would
+      // say it was saved
+      if (x.exporting) throw new Error('format: a download is still being written; it lands in the downloads folder by itself, do not download it again');
       if (!m.result) throw new Error(`model: model ${L} has no result; run first`);
       if (!x.shown || !m.result.columns.includes(x.shown)) throw new Error(`model: model ${L}'s result has no ${x.shown} column; run it again`);
       flushSync(() => x.dispatch({ type: 'ACTIVE', slot: m.slot })); // the Download menu acts on the active model
       flushSync(() => void c().onDownload(a.format, mode));
-      if (!(await done(() => !c().exporting, end, 'the download'))) return ok({ model: L, status: 'running', note: 'still writing the file' });
+      if (!(await done(() => !c().exporting, end, 'the download'))) return ok({ model: L, status: 'running', note: 'still writing the file; it lands in the downloads folder by itself: do not call download_result again for it' });
       const e = c().exportError;
       if (e && e.result === m.result) return fail(`download failed: ${e.message}`);
       return ok({
@@ -1103,9 +1125,9 @@ async function record(name: string, args: Args, res: CallToolResult, active: num
 function pickup(c: () => Ctl): void {
   gate = gate.then(async () => {
     const r = await fetch('/session').catch(() => null);
-    if (!r || r.status === 403 || r.headers.get('Content-Type')?.startsWith('text/html')) return; // no agent routes here: a LAN tab, mock mode, a static host
+    if (!r?.ok || r.headers.get('Content-Type')?.startsWith('text/html')) return; // no agent routes here (403, 404): a LAN tab, --mcp off, mock mode, a static host
     try {
-      if (!r.ok || !isJson(r)) return;
+      if (!isJson(r)) return; // 204: no session
       const rec = (await r.json()) as Session, p = parseSettings(rec.settings), failed: string[] = [], shown: Args = {};
       const loaded = () => done(() => !Object.values(c().panes).some((q) => q.loading), Date.now() + 120e3, 'the models');
       const step = async (name: string, args: Args) => {

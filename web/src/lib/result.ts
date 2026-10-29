@@ -159,8 +159,8 @@ export function unitFor(column: string): { value: string; total: string } {
   return { value, total };
 }
 
-/** 'radiation_front' -> 'Radiation, front'. */
-export const columnLabel = (column: string): string => { const [q, side] = column.split('_'); return `${q[0].toUpperCase()}${q.slice(1)}${side ? `, ${side}` : ''}`; };
+/** 'radiation_front' -> 'Radiation, front', 'sunhours_back' -> 'Sun hours, back'; a quantity alone -> 'Sun hours'. */
+export const columnLabel = (column: string): string => { const [q, side] = column.split('_'); return `${q === 'sunhours' ? 'Sun hours' : `${q[0].toUpperCase()}${q.slice(1)}`}${side ? `, ${side}` : ''}`; };
 
 /** The number fmtNum shows: 3 significant digits below 1000, whole above (the tools quote what the app and the PDF show). */
 export const roundNum = (v: number): number => (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toPrecision(3)));

@@ -68,20 +68,21 @@ export function meanNormal(meshes: readonly { positions: ArrayLike<number>; indi
 }
 
 /**
- * From the target towards the eye (world, unit): from a compass side, `elevation` degrees up; 'top' a plan, north up;
- * 'auto' from where `normal` points (model space, as meanNormal), tilted `elevation` up and at most to the zenith: a
- * wall from 20° up, a roof as a plan, a soffit from below. A `normal` shorter than 0.35 (or none) faces every way, a
- * closed shape: from the SW, isometric. Within 0.06° of vertical a view keeps a hair of its bearing (three's lookAt
- * needs a horizontal part): south for a plan ('top', or 'auto' tilted to the zenith or nadir) and for a level surface
- * (horizontal part under 1e-3: float noise), so north is up in a plan.
+ * From the target towards the eye (world, unit): from a compass side, `elevation` degrees up (default 20); 'top' a plan,
+ * north up; 'auto' from where `normal` points (model space, as meanNormal), tilted `elevation` (default 20) above the
+ * surface's own tilt and at most to the zenith: a wall from 20° up, a roof as a plan, a soffit from below. A `normal`
+ * shorter than 0.35 (or none) faces every way, a closed shape: from the SW, `elevation` up (default 35.26°, isometric).
+ * Within 0.06° of vertical a view keeps a hair of its bearing (three's lookAt needs a horizontal part): south for a plan
+ * ('top', or 'auto' tilted to the zenith or nadir) and for a level surface (horizontal part under 1e-3: float noise), so
+ * north is up in a plan.
  */
-export function viewDir(from: Side | 'top' | 'auto', north: number, normal?: Vec3, elevation = 20): Vec3 {
-  let b = 225, e = 35.26; // the eye's bearing and elevation, degrees
+export function viewDir(from: Side | 'top' | 'auto', north: number, normal?: Vec3, elevation?: number): Vec3 {
+  let b = 225, e = elevation ?? 35.26; // the eye's bearing and elevation, degrees
   if (from === 'top') [b, e] = [180, 90];
-  else if (from !== 'auto') [b, e] = [SIDES.indexOf(from) * 45, elevation];
+  else if (from !== 'auto') [b, e] = [SIDES.indexOf(from) * 45, elevation ?? 20];
   else if (normal && Math.hypot(...normal) >= 0.35) {
     const h = Math.hypot(normal[0], normal[1]);
-    e = Math.max(-90, Math.min(90, Math.atan2(normal[2], h) * DEG + elevation));
+    e = Math.max(-90, Math.min(90, Math.atan2(normal[2], h) * DEG + (elevation ?? 20)));
     b = Math.abs(e) === 90 || h < 1e-3 ? 180 : bearing(normal, north); // a plan's bearing only turns the image
   }
   const { N, E } = compass(north), c = Math.max(Math.cos(e * RAD), 1e-3), cb = Math.cos(b * RAD), sb = Math.sin(b * RAD);

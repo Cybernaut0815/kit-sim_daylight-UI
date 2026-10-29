@@ -57,8 +57,10 @@ export function startBridge(handle: (name: string, args: Record<string, unknown>
         if (!seen.has(id)) { seen.add(id); void answer(id, params.name, params.arguments ?? {}); } // the next poll goes out at once
       } catch {
         if (stopped) return;
-        await sleep(wait * 1000); // the server is down or restarting: 1, 2, 4 ... 30 s
-        wait = Math.min(2 * wait, 30);
+        // the server is down or restarting: 1, 2, then every 3 s, so a restarted server sees this tab within the 5 s it
+        // waits before starting a hidden instance for a call
+        await sleep(wait * 1000);
+        wait = Math.min(2 * wait, 3);
       }
     }
   })();
@@ -69,8 +71,9 @@ export function startBridge(handle: (name: string, args: Record<string, unknown>
 }
 
 let chain: Promise<unknown> = Promise.resolve();
-/** fn once every exclusive fn before it has ended (a failure too): state-changing and rendering steps one at a time.
- *  Read-only tools run at once, and until() waits outside. */
+/** fn once every exclusive fn before it has ended (a failure too): state-changing and rendering steps one at a time,
+ *  and the reads of what is shown (app_state, results, find_critical: never a screenshot's look). Other read-only
+ *  tools run at once, and until() waits outside. */
 export function exclusive<T>(fn: () => T | Promise<T>): Promise<T> {
   const p = chain.then(fn);
   chain = p.catch(() => {});

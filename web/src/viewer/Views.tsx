@@ -133,9 +133,10 @@ export function DownloadMenu({ model, ready, exporting, error, onDownload }: { m
  * Delete, Open PDF and Generate PDF. A generation shows the same whether it started here or not. `onOpen`: on every open.
  */
 export function ReportsMenu({ reports, app, error, onOpen, onGenerate, onDelete }: {
-  reports: Stored[]; app: AppView; error: { title: string; message: string } | null; onOpen: () => void; onGenerate: (id: string) => void; onDelete: (id: string) => void;
+  reports: Stored[]; app: AppView; error: { id?: string; title: string; message: string } | null; onOpen: () => void; onGenerate: (id: string) => void; onDelete: (id: string) => void;
 }) {
   const [pick, setPick] = useState<string | null>(null);
+  useEffect(() => { if (error?.id) setPick(error.id); }, [error]); // a failed change: its report
   const list = [...reports].sort((a, b) => b.spec.updated.localeCompare(a.spec.updated)), r = list.find((x) => x.id === pick) ?? list[0];
   const { generating, lastError } = generation(r.id), no = [...new Set(readiness(r.spec, app).map(inApp))], failed = error ?? (lastError ? { title: 'PDF not generated', message: inApp(lastError) } : null);
   useEffect(() => { // the popover's own toggle: MenuButton keeps its element
@@ -144,7 +145,8 @@ export function ReportsMenu({ reports, app, error, onOpen, onGenerate, onDelete 
     return () => m?.removeEventListener('toggle', on);
   }, [onOpen]);
   return (
-    <MenuButton id="reports-menu" label="Reports" busy={reports.some((x) => generation(x.id).generating)} title="The reports kept here: a report's PDF, generated from the current results; open it, or delete the report">
+    // an icon: the run bar keeps its rows (one at 1440 px with one model), as without reports
+    <MenuButton id="reports-menu" label="Reports" icon="report" busy={reports.some((x) => generation(x.id).generating)} title="Reports: a report's PDF, generated from the current results; open it, or delete the report">
       {() => (
         <>
           <div className="views__format">

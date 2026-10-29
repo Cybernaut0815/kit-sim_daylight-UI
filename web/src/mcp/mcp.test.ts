@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import mcp from '../../../server/mcp.json';
+import type { Summary } from '../lib/result';
 import { glyphs } from '../report/spec';
 import { defaultSettings, initialState, reducer, type Action, type State, type Station } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
-import { HANDLERS, TOOLS, bySide, check, connect, publicSettings, settingsActions, shotSize } from './tools';
+import { HANDLERS, TOOLS, WORDS, bySide, check, connect, difference, publicSettings, settingsActions, shotSize } from './tools';
 
 const schema = (name: string) => TOOLS.find((t) => t.name === name)!.inputSchema;
 
@@ -58,6 +59,25 @@ describe('check', () => {
     expect(check(schema('set_roles'), { paths: ['Roof'], role: 'receiver' })).toBe('paths[0]: a prim path, starting with /');
     expect(check(schema('app_state'), { verbose: true })).toBe('verbose: not an argument here (none)');
     expect(check(schema('set_geometry'), { subdivision: { level: 4 } })).toBe('subdivision.level: one of -1, 0, 1, 2, 3, model');
+    expect(check(schema('update_settings'), { sim: { quantities: [] } })).toBe('sim.quantities: at least 1 item');
+    expect(check(schema('update_settings'), { viz: { belowColour: 'blue' } })).toBe("viz.belowColour: a colour, '#rrggbb'");
+  });
+  it('says every pattern of mcp.json in words', () => {
+    const patterns = new Set<string>(), walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (k === 'pattern') patterns.add(x as string); else walk(x); }
+    };
+    walk(mcp.tools);
+    expect([...patterns].filter((p) => !WORDS[p])).toEqual([]);
+  });
+});
+
+describe('results differences', () => {
+  const sum = (mean: number, atLeast: number): Summary => ({ elements: 1, area: 1, min: mean, p10: mean, median: mean, mean, p90: mean, max: mean, total: mean, below: 1 - atLeast, within: atLeast, above: 0, atLeast: [atLeast] });
+  it('within float noise of the values 0, shares on a 0.1 percentage-point grid', () => {
+    const pick = (d: object) => { const o = d as Record<string, unknown>; return [o.mean, o.below, o.within, (o.thresholds as unknown[])[0]]; };
+    expect(pick(difference(sum(2.68, 0.41 + 1e-16), sum(2.68 + 4e-16, 0.41), [3], true))).toEqual([0, 0, 0, { x: 3, below: 0, atOrAbove: 0 }]);
+    expect(pick(difference(sum(0.448, 0.2), sum(0.754, 0.3), [3], true))).toEqual([-0.306, 10, -10, { x: 3, below: 10, atOrAbove: -10 }]);
   });
 });
 
@@ -102,7 +122,13 @@ describe('settings', () => {
     expect(put).toEqual({ type: 'CHART', spec: { id: 'hist', kind: 'histogram', bins: 32 } });
     expect(() => settingsActions({ charts: [{ id: 'hist', remove: true }] }, s, null)).toThrow(/^charts\[0\]\.remove: /);
     expect(() => settingsActions({ charts: [{ id: 'mine', kind: 'parts' }, { id: 'mine', remove: true }, { id: 'mine', remove: true }] }, s, null)).toThrow(/^charts\[2\]\.id: /);
-    expect(() => settingsActions({ charts: [{ id: 'hist', title: 'x' }] }, s, null)).toThrow(/^charts\[0\] title: /);
+    expect(() => settingsActions({ charts: [{ id: 'hist', title: 'x' }] }, s, null)).toThrow(/^charts\[0\]\.title: /);
+  });
+  it('charts: a field of another kind is refused, as in save_report', () => {
+    const s = initialState(defaultSettings());
+    expect(() => settingsActions({ charts: [{ id: 'h', kind: 'histogram', metric: 'mean' }] }, s, null)).toThrow(/^charts\[0\]\.metric: not a field of a histogram chart /);
+    expect(() => settingsActions({ charts: [{ id: 'mine' }] }, s, null)).toThrow(/^charts\[0\]\.kind: /);
+    expect(settingsActions({ charts: [{ id: 'p', kind: 'parts', models: ['A'], metric: 'below' }] }, s, null)).toEqual([{ type: 'CHART', spec: { id: 'p', kind: 'parts', models: [0], metric: 'below' } }]);
   });
   it('a mode switch keeps the quantities given with it', () => {
     let s = initialState();

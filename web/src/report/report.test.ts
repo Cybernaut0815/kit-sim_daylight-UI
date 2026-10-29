@@ -70,7 +70,7 @@ describe('renderReport', () => {
     r.stats = [{ label: 'All', metric: 'mean', column: 'sunhours_front', model: 'A', path: '/' }];
     r.blocks = r.blocks.map((b) => (b.type === 'chart' ? { ...b, chart: { ...b.chart, title: 'Per facade.' } } : b));
     const out = renderReport(p);
-    expect(out).toContain('Mean · Sunhours, front · every receiver</span>');
+    expect(out).toContain('Mean · Sun hours, front · every receiver</span>');
     expect(out).toContain('<span class="arg">--from 03-21T08:00</span> <span class="arg">--to 03-21T18:00</span>');
     expect(out).toContain('Figure 1. <strong>Per facade. </strong>Mean sun hours per part, in h.');
     // 60 receiver meshes of one face each

@@ -123,16 +123,24 @@ build\RelWithDebInfo\daylight_server.exe --web ..\web\dist --mcp
   on `http://localhost:5173/`) and a browser (`--browser PATH`, else the one registered under Windows App Paths). The
   hidden instance has its own profile in `<cache>\agent-profile` and takes about 1.5 GB of memory with a model loaded.
   It ends with the server, or when you open the app: the app picks its session up (models, roles, settings, camera,
-  results) and the server closes it. A hidden page that cannot reach the server (a wrong `--app-url`, a host name other
-  than localhost or 127.0.0.1, a dev server that does not forward `/bridge`) makes tool calls say so after 30 s; one
-  that stops polling for a minute is started again.
+  results) and the server closes it. A tool call that finds no tab first gives one 5 s to come back (a page reloading,
+  or an app tab reconnecting after a server restart: it retries every 3 s), so the hidden instance never starts beside
+  the app you have open; should it start anyway (a frozen background tab), the app's next poll closes it when it has
+  changed nothing, else reloading the app picks its session up. A hidden page that cannot reach the server (a wrong
+  `--app-url`, a host name other than localhost or 127.0.0.1, a dev server that does not forward `/bridge`) makes tool
+  calls say so after 30 s; one that stops polling for a minute is started again.
 - **Reports** live in `<cache>\reports\<id>\`: `report.json` (the spec the agent saved, which you edit in the app: charts
   with the settings button in Results, cameras in the Views menu), `index.html` (the page last printed) and `report.pdf`,
   printed by the same browser in headless mode (profile `<cache>\pdf-profile`). After editing, generate the PDF again from
   the Reports menu; a PDF viewer that locks `report.pdf` stops that (`409`), so close the PDF first.
 - **This machine only.** Without `--mcp` the agent routes (`/mcp`, `/bridge`, `/files`, `/reports`, `/session`) answer
   `404`. With it they answer only requests from this machine (TCP peer 127.0.0.1 or ::1, `Host` localhost, 127.0.0.1 or
-  [::1], same origin, no proxy headers; else `403`), since they read files on this machine and drive its browser; LAN
-  users keep the app and the job API. Two setups make a LAN user look local, so do not combine them with `--mcp`: an SSH
-  port forward (`ssh -L 8080:localhost:8080`), and a reverse proxy on this machine that adds no `X-Forwarded-For` header
-  (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` makes the agent routes refuse its requests).
+  [::1], same origin, no proxy headers: `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Via`; else `403`), since they read
+  files on this machine and drive its browser; LAN users keep the app and the job API. Two setups make a LAN user look
+  local, so do not combine them with `--mcp`: an SSH port forward (`ssh -L 8080:localhost:8080`), and a reverse proxy on
+  this machine that adds none of those headers (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+  makes the agent routes refuse its requests). The app's own dev server (`vite --host`, `vite preview --host`) names a
+  client from another machine in `X-Forwarded-For` (web/vite.config.ts), so the agent routes refuse it too.
+- **Smoke test:** `node test\mcp-smoke.mjs --web ..\web\dist` starts servers of its own (ports 18100 and 18101, a fresh
+  cache) and checks the agent routes end to end in Claude-only mode: `404` without `--mcp`, the gate, the handshake, the
+  fixture [test/building.usda](test/building.usda) through the tools to two PDF reports, and `mcp-stdio.mjs`.

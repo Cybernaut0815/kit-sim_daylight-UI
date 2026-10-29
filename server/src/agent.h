@@ -65,6 +65,22 @@ inline bool is_object(const std::string& s) {   // one whole {...} and nothing a
   return i < s.size() && s[i] == '{' && ws(s, skip(s, i)) == s.size();
 }
 
+// The raw tokens of the array s's elements, in order (none when s is no array or is cut off).
+inline std::vector<std::string> elements(const std::string& s) {
+  std::vector<std::string> out;
+  size_t i = ws(s, 0);
+  if (i >= s.size() || s[i] != '[') return out;
+  for (i = ws(s, i + 1); i < s.size() && s[i] != ']';) {
+    const size_t e = skip(s, i);
+    if (e == std::string::npos) return {};
+    out.push_back(s.substr(i, e - i));
+    i = ws(s, e);
+    if (i < s.size() && s[i] == ',') i = ws(s, i + 1);
+    else if (i >= s.size() || s[i] != ']') return {};
+  }
+  return i < s.size() ? out : std::vector<std::string>{};
+}
+
 // ---------------------------------------------------------------------------------------------------- local-only gate
 inline std::string lower(std::string s) {
   for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -85,15 +101,15 @@ inline bool local_host(const std::string& host) {
 
 // The agent routes answer only to this machine: the TCP peer is loopback, Host names this machine, Origin is absent
 // (Claude Code, curl) or the page's own, the browser does not call the fetch cross-site, no proxy says it forwarded the
-// request (a reverse proxy on this machine would make a LAN user look local; an SSH forward says nothing: README), and a
-// JSON body (`jsonBody`) says so (a form or text/plain POST from another page needs no CORS preflight). headers: (name,
-// value) pairs.
+// request (Forwarded, X-Forwarded-*, X-Real-IP, Via: a reverse proxy on this machine would make a LAN user look local; an
+// SSH forward says nothing: README), and a JSON body (`jsonBody`) says so (a form or text/plain POST from another page
+// needs no CORS preflight). headers: (name, value) pairs.
 template <class Headers>
 bool local_request(const std::string& peer, const Headers& headers, bool jsonBody) {
   std::string host, origin, site, type;
   for (const auto& [k, v] : headers) {
     const std::string n = lower(k);
-    if (n == "forwarded" || n.rfind("x-forwarded-", 0) == 0) return false;
+    if (n == "forwarded" || n == "via" || n == "x-real-ip" || n.rfind("x-forwarded-", 0) == 0) return false;
     if (n == "host") host = v;
     else if (n == "origin") origin = v;
     else if (n == "sec-fetch-site") site = v;

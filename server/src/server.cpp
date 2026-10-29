@@ -532,14 +532,19 @@ bool start_hidden(Server& S, std::string& why) {
   return false;
 }
 
-// tools/call: queued for the target tab (with none open, the hidden instance is started and given up to 30 s to poll)
-// and answered with the tab's CallToolResult, raw. A client that hangs up cancels a call no tab has taken yet.
+// tools/call: queued for the target tab (with none live, one gets 5 s to come back, then the hidden instance is started
+// and given up to 30 s to poll) and answered with the tab's CallToolResult, raw. A client that hangs up cancels a call no
+// tab has taken yet.
 // ponytail: every answer within 55 s (Claude Desktop ends calls at about 60 s; long steps answer `running` in the tab),
 // and no re-delivery of a call whose tab closed (the timeout text sends the agent to app_state)
 std::string relay(Server& S, const httplib::Request& req, const std::string& params) {
   const auto end = Clock::now() + std::chrono::seconds(55);
   std::unique_lock<std::mutex> lock(S.mcpMu);
   std::string key = target(S), why;
+  // a page reloading, or an app tab reconnecting after a server restart (its bridge retries every 3 s), is the user's
+  // app: it goes before a hidden instance that would start empty beside it
+  for (const auto grace = Clock::now() + std::chrono::seconds(5); key.empty() && Clock::now() < grace && !req.is_connection_closed(); key = target(S))
+    S.mcpCv.wait_for(lock, std::chrono::seconds(1));
   if (key.empty()) {
     if (!start_hidden(S, why)) return tool_error(why);
     const auto ready = std::min(end, Clock::now() + std::chrono::seconds(30));
@@ -564,12 +569,14 @@ std::string relay(Server& S, const httplib::Request& req, const std::string& par
 }
 
 // ---------------------------------------------------------------------------------------------------- docs pages
+// The CDN files are pinned by hash (integrity): these pages share the origin the agent routes trust, so a changed file
+// must not run here. A version bump takes new hashes (openssl dgst -sha384 -binary FILE | openssl base64 -A).
 const char* const kDocs = R"(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>daylight_server API - Swagger UI</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.2/swagger-ui.css"></head>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.2/swagger-ui.css" integrity="sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW" crossorigin="anonymous"></head>
 <body><div id="ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.2/swagger-ui-bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.2/swagger-ui-bundle.js" integrity="sha384-gNnUp++d7WqR9OKX4OMoUmV2w0JxEs1uu6NPXgcynGClIX5DOu6ol4Lp+lINyZcJ" crossorigin="anonymous"></script>
 <script>SwaggerUIBundle({ url: 'openapi.json', dom_id: '#ui', deepLinking: true, displayOperationId: true, defaultModelsExpandDepth: 1 });</script>
 </body></html>
 )";
@@ -577,7 +584,7 @@ const char* const kRedoc = R"(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>daylight_server API - ReDoc</title></head>
 <body><redoc spec-url="openapi.json"></redoc>
-<script src="https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/redoc@2.5.4/bundles/redoc.standalone.js" integrity="sha384-w447zOpYfw/1Tv/5AK9NfHTlQIqE3RVR6KY62jCyy9zNDgO64cMwGGP1Fj0zJVf5" crossorigin="anonymous"></script>
 </body></html>
 )";
 
@@ -618,7 +625,9 @@ int main(int argc, char** argv) {
   // POST /mcp answers from the embedded mcp.json (tools, instructions) and openapi.json (version), as raw JSON tokens.
   const std::string mcpDoc(reinterpret_cast<const char*>(mcp_json), mcp_json_len), api(reinterpret_cast<const char*>(openapi_json), openapi_json_len);
   const std::string tools = member(mcpDoc, "tools"), instructions = member(mcpDoc, "instructions"), version = member(member(api, "info"), "version");
-  if (tools.empty() || tools[0] != '[' || instructions.empty() || instructions[0] != '"' || version.empty()) {
+  std::vector<std::string> names;   // the tools' names as raw tokens ("app_state"): tools/call answers others -32602
+  for (const std::string& t : elements(tools)) names.push_back(member(t, "name"));
+  if (names.empty() || std::find(names.begin(), names.end(), "") != names.end() || instructions.empty() || instructions[0] != '"' || version.empty()) {
     std::fprintf(stderr, "error: the embedded mcp.json lacks tools or instructions (or openapi.json info.version); fix it and rebuild\n");
     return 1;
   }
@@ -650,10 +659,13 @@ int main(int argc, char** argv) {
   });
 
   // ---- meta
-  svr.Get("/health", [&](const httplib::Request&, httplib::Response& res) {
+  // agents: whether this request may use the agent routes; the web app starts its side of them (bridge, reports) only then
+  svr.Get("/health", [&](const httplib::Request& req, httplib::Response& res) {
+    const bool agents = mcp && local_request(req.remote_addr, req.headers, false);
     std::lock_guard<std::mutex> lock(S.jobsMu);
     json(res, 200, "{\"status\": \"ok\", \"gpu\": " + json_str(S.gpu) + ", \"queued\": " + std::to_string(S.queue.size()) +
-                       ", \"running\": " + (S.running ? "true" : "false") + ", \"jobs_retained\": " + std::to_string(S.jobs.size()) + "}");
+                       ", \"running\": " + (S.running ? "true" : "false") + ", \"jobs_retained\": " + std::to_string(S.jobs.size()) +
+                       ", \"agents\": " + (agents ? "true" : "false") + "}");
   });
   svr.Get("/openapi.json", [](const httplib::Request&, httplib::Response& res) {
     res.set_content(std::string(reinterpret_cast<const char*>(openapi_json), openapi_json_len), "application/json");
@@ -771,8 +783,15 @@ int main(int argc, char** argv) {
     const std::string method = member(req.body, "method"), id = member(req.body, "id"), pv = req.get_header_value("MCP-Protocol-Version");
     if (method != "\"initialize\"" && !pv.empty() && !known(pv))   // a newer client's probe: the 400 makes it fall back to initialize
       return text(res, 400, "error: MCP-Protocol-Version " + pv + " is not supported (2025-11-25, 2025-06-18, 2025-03-26)\n");
-    if (method.size() < 2 || method[0] != '"')
-      return json(res, 400, R"({"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "Invalid Request: one JSON-RPC request or notification per POST"}})");
+    const auto invalid = [&](int code, const std::string& msg) {   // a message this server cannot take: no id to answer
+      json(res, 400, "{\"jsonrpc\": \"2.0\", \"id\": null, \"error\": {\"code\": " + std::to_string(code) + ", \"message\": " + json_str(msg) + "}}");
+    };
+    // ponytail: no batches, though 2025-03-26 has them (no MCP client sends one; 2025-06-18 dropped them)
+    if (!is_object(req.body))
+      return req.body[ws(req.body, 0)] == '[' ? invalid(-32600, "Invalid Request: one JSON-RPC message per POST, no batches")
+                                              : invalid(-32700, "Parse error: the body is not one JSON object");
+    if (method.size() < 2 || method[0] != '"' || (!id.empty() && id[0] != '"' && id[0] != '-' && !std::isdigit(static_cast<unsigned char>(id[0]))))
+      return invalid(-32600, "Invalid Request: a method, and an id that is a string or a number (a notification has none)");
     if (id.empty()) { res.status = 202; return; }   // a notification; notifications/cancelled too: hanging up cancels
     const auto answer = [&](const std::string& result) { json(res, 200, "{\"jsonrpc\": \"2.0\", \"id\": " + id + ", \"result\": " + result + "}"); };
     const auto rpcError = [&](int code, const std::string& msg) {
@@ -790,6 +809,7 @@ int main(int argc, char** argv) {
     std::string params = member(req.body, "params");
     const std::string tool = member(params, "name");
     if (tool.size() < 2 || tool[0] != '"') return rpcError(-32602, "Invalid params: tools/call takes {name, arguments}");
+    if (std::find(names.begin(), names.end(), tool) == names.end()) return rpcError(-32602, "Unknown tool: " + tool.substr(1, tool.size() - 2));
     if (member(params, "arguments").empty())   // some clients leave it out for a tool without arguments
       params = "{\"arguments\": {}" + std::string(params[ws(params, 1)] == '}' ? "" : ", ") + params.substr(1);
     answer(relay(S, req, params));
@@ -811,6 +831,9 @@ int main(int argc, char** argv) {
     if (req.get_param_value("focus") == "1") t.focus = now;
     t.headless = req.get_param_value("kind") == "headless";
     if (t.headless) S.hiddenSeen = now;   // start_hidden restarts one silent for a minute
+    // a user's tab is here, and calls go to it now: a hidden instance with nothing to hand over (no session: it changed
+    // nothing) and no call on its way ends (one started while this tab reconnected; one that only answered questions)
+    else if (S.hidden && S.session.empty() && S.calls.empty()) stop_hidden(S);
     for (auto it = S.tabs.begin(); it != S.tabs.end();)   // tabs gone for a minute
       if (!it->second.parked && it->second.queue.empty() && now - it->second.seen > std::chrono::seconds(60)) it = S.tabs.erase(it);
       else ++it;
@@ -844,20 +867,25 @@ int main(int argc, char** argv) {
     const size_t cap = maxMb << 20;
     std::error_code fe;
     if (fs::is_regular_file(p, fe)) {
-      if (!served_ext(p.extension().u8string()))
+      // checked as the file it opens: a symlink, or an 8.3 short name such as SECRE~1.PNG, by its target's long name (a
+      // mapped network drive resolves to its share, which serves as before)
+      // ponytail: a hard link cannot be told from its target cheaply, so one in a model folder serves that file
+      const fs::path real = fs::canonical(p, fe);
+      if (fe || !served_ext(real.extension().u8string()))
         return text(res, 400, "error: not a model, texture or weather file (.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw)\n");
-      if (fs::file_size(p, fe) > cap) return text(res, 400, "error: the file is over --max-mb " + std::to_string(maxMb) + "\n");
-      return res.set_file_content(p.u8string(), "application/octet-stream");
+      if (fs::file_size(real, fe) > cap) return text(res, 400, "error: the file is over --max-mb " + std::to_string(maxMb) + "\n");
+      return res.set_file_content(real.u8string(), "application/octet-stream");
     }
     if (!fs::is_directory(p, fe)) return text(res, 404, "error: no such file or folder: " + arg + "\n");
     std::string files;
     size_t count = 0, bytes = 0;
-    // no dot or __MACOSX entries (the Model panel skips them too); directory symlinks and junctions are not followed
+    // no dot or __MACOSX entries (the Model panel skips them too); directory symlinks and junctions are not followed, and
+    // file symlinks are left out (they may point anywhere)
     for (fs::recursive_directory_iterator it(p, fs::directory_options::skip_permission_denied, fe), done; !fe && it != done; it.increment(fe)) {
       const std::string leaf = it->path().filename().u8string();
       if (leaf.rfind('.', 0) == 0 || leaf == "__MACOSX") { it.disable_recursion_pending(); continue; }
       std::error_code ee;   // a broken link skips its entry, not the rest of the folder
-      if (!it->is_regular_file(ee) || !served_ext(it->path().extension().u8string())) continue;
+      if (it->is_symlink(ee) || !it->is_regular_file(ee) || !served_ext(it->path().extension().u8string())) continue;
       const uintmax_t size = it->file_size(ee);
       if (ee) continue;
       bytes += static_cast<size_t>(size);
@@ -918,7 +946,13 @@ int main(int argc, char** argv) {
     if (S.browser.empty()) return text(res, 500, "error: no Chrome or Edge found to print the PDF: start daylight_server with --browser PATH\n");
     std::lock_guard<std::mutex> lock(S.pdfMu);
     fs::remove(tmp, fe);   // a stale one would pass the %PDF- check below
-    if (!write_file(page, req.body)) return text(res, 500, "error: cannot write " + page.u8string() + "\n");
+    // The browser opens the page as file:// with scripts on, where a frame, an object or a script could put any local file
+    // into the PDF: a CSP in front lets it load only what it carries inline (styles, data: images and fonts). Its own
+    // doctype comes after it and is ignored, its <html> attributes still apply.
+    // A <meta http-equiv="refresh"> would navigate it to a file:// URL all the same, and the app's page carries none.
+    if (lower(req.body).find("http-equiv") != std::string::npos) return text(res, 400, "error: the page carries an http-equiv tag (a refresh would print another file)\n");
+    const std::string csp = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:\">";
+    if (!write_file(page, csp + req.body)) return text(res, 500, "error: cannot write " + page.u8string() + "\n");
     const std::string url = file_url(page.u8string());   // ASCII: every other byte is percent-encoded
     std::string err;
     const HANDLE p = spawn(S.browser, {L"--headless", L"--no-first-run", L"--no-default-browser-check", L"--no-pdf-header-footer", L"--virtual-time-budget=10000",

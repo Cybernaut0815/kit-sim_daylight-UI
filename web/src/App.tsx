@@ -131,6 +131,15 @@ export default function App() {
   const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, every view, never in a file
   const choices = useRef<Record<number, AppModel['choices']>>({}); // per slot, the variant choices made since its file opened: [the file's own, chosen]
   const [reports, setReports] = useState<Stored[] | null>(null); // the stored reports (null: none here: no agent routes, a LAN tab, mock mode)
+  // whether this tab may use the agent routes (GET /health: --mcp, and this machine): only then the bridge and the reports
+  // (a server without them would log a 404 for each request, on every load and window focus)
+  const [agents, setAgents] = useState(false);
+  useEffect(() => { // asked again every 3 s while the server cannot be reached: a tab opened while it was down connects once it is up
+    let timer = 0;
+    const ask = () => void fetch('/health').then((r) => r.json()).then((h: { agents?: unknown }) => setAgents(h.agents === true), () => { timer = window.setTimeout(ask, 3000); });
+    ask();
+    return () => clearTimeout(timer);
+  }, []);
   const listed = useRef(''); // GET /reports' last answer
   /** The reports fetched again and set (`always`: also when unchanged, for a generation's state to show). */
   const refreshReports = useCallback(async (always = true) => {
@@ -143,22 +152,27 @@ export default function App() {
     flushSync(() => setReports(list)); // committed when this resolves: a tool reads the new list right after
   }, []);
   useEffect(() => {
+    if (!agents) return;
     const onFocus = () => void refreshReports(false);
     onFocus();
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [refreshReports]);
+  }, [agents, refreshReports]);
   const variants = useCallback((slot: number) => choices.current[slot] ?? {}, []);
   // A report changed here (a chart's settings in Results, a view's Update in Views): one change at a time with the tool
-  // calls, on the report as stored now, saved with a later updated, so that a save_report made before it is refused.
-  const [reportError, setReportError] = useState<{ title: string; message: string } | null>(null); // the last change or delete that failed
-  const editReport = useCallback((id: string, edit: (r: Report) => Report | null) => exclusive(async () => {
+  // calls, on the report as stored now, saved with a later updated, so that a save_report made before it is refused. A
+  // failure shows where the change was made: under the report's charts in Results, and in the Reports menu, which opens
+  // for a view's (its Views menu has closed).
+  const [reportError, setReportError] = useState<{ id?: string; title: string; message: string } | null>(null); // the last change or delete that failed
+  const editReport = useCallback((id: string, edit: (r: Report) => Report | null, menu = false) => exclusive(async () => {
     setReportError(null);
     try {
       const old = (await storedReport(id)).spec, next = edit(old);
       if (next) await putReport(next, old);
     } catch (e) {
-      setReportError({ title: 'Report not changed', message: (e as Error).message.replace(/^(id|spec): /, '') });
+      setReportError({ id, title: 'Report not changed', message: (e as Error).message.replace(/^(id|spec): /, '') });
+      const m = menu ? document.getElementById('reports-menu') : null;
+      if (m && !m.matches(':popover-open')) m.showPopover();
     }
     await refreshReports();
   }), [refreshReports]);
@@ -176,7 +190,7 @@ export default function App() {
     const [p, q] = [dir(view), dir(b.view)], turned = p[0] * q[0] + p[1] * q[1] + p[2] * q[2] < Math.cos(Math.PI / 90) * Math.hypot(...p) * Math.hypot(...q);
     const near = was === undefined || turned ? 0 : roundNum(was + reach(view) - reach(b.view));
     return { ...r, blocks: r.blocks.with(i, { ...rest, view, ...(near > 0 ? { near } : {}) }) };
-  }), [editReport]);
+  }, true), [editReport]);
   const onReportDelete = useCallback(async (id: string) => {
     setReportError(null);
     const r = await fetch(`/reports/${id}`, { method: 'DELETE' }).catch(() => null); // 404: gone already
@@ -510,7 +524,8 @@ export default function App() {
   const reportApp = useMemo(() => (reports?.length ? appView({ shown, state, panes, per, variants }) : null), [reports, shown, state.models, s.viz.ranges, panes, keys]); // eslint-disable-line react-hooks/exhaustive-deps -- state and per by the parts appView reads
 
   // The app as the tools in mcp/tools.ts drive it, rewritten on every commit, which also wakes the tools waiting for one;
-  // the bridge polls the server for their calls while the page lives, after picking up a hidden session.
+  // where the agent routes answer this tab, the bridge polls the server for their calls while the page lives, after
+  // picking up a hidden session.
   const ctl = useRef<Ctl>(null!);
   useLayoutEffect(() => {
     ctl.current = {
@@ -521,7 +536,7 @@ export default function App() {
     };
     settled();
   });
-  useEffect(() => connect(() => ctl.current), []);
+  useEffect(() => (agents ? connect(() => ctl.current) : undefined), [agents]);
 
   return (
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
@@ -611,7 +626,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} reports={reports} onReportChart={onReportChart} />
+              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} reports={reports} reportError={reportError} onReportChart={onReportChart} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

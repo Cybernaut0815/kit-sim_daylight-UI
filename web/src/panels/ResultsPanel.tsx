@@ -25,6 +25,7 @@ interface Props {
   scale: Scale | null; domain: [number, number]; viz: Settings['viz']; charts: Settings['charts']; auto: boolean; // domain: the data range, every model's
   weightsFor: WeightsFor; dispatch: Dispatch<Action>;
   reports: Stored[] | null; onReportChart: (id: string, e: ChartEdit) => void; // the stored reports; a report chart's settings changed
+  reportError: { id?: string; title: string; message: string } | null; // a report change that failed: shown under that report's charts
 }
 
 const cacheLine = (c: Record<string, string> | undefined) =>
@@ -36,7 +37,7 @@ const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of share
 
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
 
-export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, weightsFor, dispatch, reports, onReportChart }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, weightsFor, dispatch, reports, onReportChart, reportError }: Props) {
   // what the tables and charts read of each model, kept across a selection or a run's status (each makes new models)
   const inputs = [0, 1, 2, 3].flatMap((k) => { const m = models.find((x) => x.slot === k); return [m?.objects, m?.result, m?.col]; }); // fixed length: memo deps
   const runs = useMemo(() => models.map(({ slot, objects, result, col }) => ({ slot, objects, result, col })), inputs); // eslint-disable-line react-hooks/exhaustive-deps
@@ -138,13 +139,15 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
          * keep their Absolute / Relative switch.
          */
         const group = (specs: readonly ChartSpec[], onChart: (e: ChartEdit) => void, idp = 'chart', H: 'h3' | 'h4' = 'h3', fig?: ReadonlyMap<string, number>) => specs.map((c) => {
-          const d = drawn.get(c)!, at = c.column ?? shown, live = at === shown, title = `${fig ? `Figure ${fig.get(c.id)}. ` : ''}${chartTitle(c, at)}`;
+          const d = drawn.get(c)!, at = c.column ?? shown, live = at === shown, title = `${fig ? `Figure ${fig.get(c.id)}. ` : ''}${chartTitle(c, at)}`, built = BUILT_IN.some((b) => b.id === c.id);
           return (
             <Fragment key={c.id}>
-              <div className="cluster cluster--between">
+              {/* a built-in's short title and its range switch wrap in a narrow panel; another chart's long title wraps
+                  beside its settings button (chart-head) */}
+              <div className={`cluster cluster--between${built ? '' : ' chart-head'}`}>
                 <H>{title}</H>
                 <div className="cluster">
-                  {BUILT_IN.some((b) => b.id === c.id) && <Segmented name={`${c.id}-range`} label={`${title} range`} title={RANGE_HELP} value={Array.isArray(c.range) ? null : c.range ?? 'relative'} options={RANGE_OPTIONS} onChange={(range) => onChart({ spec: { ...c, range } })} />}
+                  {built && <Segmented name={`${c.id}-range`} label={`${title} range`} title={RANGE_HELP} value={Array.isArray(c.range) ? null : c.range ?? 'relative'} options={RANGE_OPTIONS} onChange={(range) => onChart({ spec: { ...c, range } })} />}
                   <ChartSettings id={`${idp}:${c.id}`} title={title} spec={c} d={d} column={at} viz={viz} many={many} dispatch={dispatch} onChart={onChart} />
                 </div>
               </div>
@@ -306,6 +309,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             {groups.map((g) => (
               <section key={g.id} className="stack" aria-labelledby={`h-report-${g.id}`}>
                 <h3 id={`h-report-${g.id}`}>Report: {g.title}</h3>
+                {reportError?.id === g.id && <Alert title={reportError.title}>{reportError.message}</Alert>}
                 {group(g.specs, (e) => onReportChart(g.id, e), `report-${g.id}`, 'h4', g.fig)}
               </section>
             ))}

@@ -37,6 +37,9 @@ int main() {
   CHECK(skip("}", 0) == std::string::npos && skip(",", 0) == std::string::npos && skip("true]", 0) == 4);
   CHECK(is_object(" {\"content\": [], \"isError\": true}\n") && is_object("{}"));
   CHECK(!is_object("{\"a\": 1") && !is_object("{} x") && !is_object("[]") && !is_object(""));
+  CHECK((elements(" [1, \"a,]\" ,{\"b\": [2]}]") == std::vector<std::string>{"1", "\"a,]\"", "{\"b\": [2]}"}));   // the tool list's names
+  CHECK(elements("[]").empty() && elements("[ ]").empty() && elements("{}").empty() && elements("").empty());
+  CHECK(elements("[1, 2").empty() && elements("[1 2]").empty() && elements("[1,").empty());   // cut off, or no comma
 
   // ---- local_request: who may use the agent routes
   auto ok = [](const std::string& peer, const Hdrs& h, bool json = false) { return local_request(peer, h, json); };
@@ -55,6 +58,8 @@ int main() {
   CHECK(!ok("127.0.0.1", {{"Host", "localhost:8080"}, {"Sec-Fetch-Site", "same-site"}}));
   CHECK(!ok("127.0.0.1", {{"Host", "localhost:8080"}, {"X-Forwarded-For", "192.168.1.20"}}));
   CHECK(!ok("127.0.0.1", {{"Host", "localhost:8080"}, {"Forwarded", "for=192.168.1.20"}}));
+  CHECK(!ok("127.0.0.1", {{"Host", "localhost:8080"}, {"X-Real-IP", "192.168.1.20"}}));   // nginx's usual line
+  CHECK(!ok("127.0.0.1", {{"Host", "localhost:8080"}, {"Via", "1.1 proxy"}}));           // Squid's
   CHECK(!ok("192.168.1.20", {{"Host", "localhost:8080"}}));   // a LAN peer
   CHECK(!ok("127.0.0.1", {}) && !ok("127.0.0.1", {{"Host", ""}}));
   CHECK(!ok("127.0.0.1", {{"Host", "localhost:8080"}}, true));   // a JSON route without Content-Type

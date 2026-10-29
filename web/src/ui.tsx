@@ -15,6 +15,7 @@ const ICONS = {
   close: <path d="M6 6l12 12M18 6 6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,
   tune: <><path d="M4 8h8M16 8h4M4 16h4M12 16h8" /><circle cx="14" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>,
+  report: <><path d="M6 3h8l4 4v14H6Z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {
@@ -27,8 +28,8 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 
 
 /**
  * A button opening a zha-ui menu below or above it, on the side with more room: a native popover, so Esc and a click
- * elsewhere close it; JS owns its place, as the menu primitive asks. `icon`: a ghost icon button, `label` its name.
- * `children` get `close`.
+ * elsewhere close it; JS owns its place, as the menu primitive asks. `icon`: a ghost icon button, `label` its name (and
+ * its tooltip unless `title` gives one). `children` get `close`.
  */
 export function MenuButton({ id, label, title, icon, disabled, busy, children }: { id: string; label: string; title?: string; icon?: keyof typeof ICONS; disabled?: boolean; busy?: boolean; children: (close: () => void) => ReactNode }) {
   const menu = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null);
@@ -62,7 +63,7 @@ export function MenuButton({ id, label, title, icon, disabled, busy, children }:
     <>
       <button
         ref={button} className={icon ? 'icon-btn icon-btn--ghost' : 'btn btn--secondary'} type="button" popoverTarget={id} disabled={disabled} aria-busy={busy}
-        aria-label={icon && label} title={icon ? label : title}
+        aria-label={icon && label} title={title ?? (icon ? label : undefined)}
       >
         {icon ? <Icon name={icon} /> : <>{label}<Icon name="chevronDown" /></>}
       </button>
