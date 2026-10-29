@@ -25,10 +25,12 @@ export interface ChartSpec {
 
 /** Each kind's look fields, in the order the settings button shows them. */
 export const FIELDS: Record<ChartKind, readonly ('range' | 'bins' | 'markers' | 'grid' | 'height' | 'metric')[]> = {
-  histogram: ['range', 'bins', 'markers', 'grid', 'height'], curve: ['range', 'markers', 'grid', 'height'], parts: ['metric', 'grid'],
+  histogram: ['range', 'bins', 'markers', 'grid', 'height'], curve: ['range', 'markers', 'grid', 'height'], parts: ['metric', 'range', 'grid'],
 };
 export const MARKERS: Record<ChartKind, readonly Marker[]> = { histogram: ['mean', 'median', 'p10', 'p90'], curve: ['p10', 'median', 'p90'], parts: [] };
 export const METRICS: readonly Metric[] = ['mean', 'median', 'p10', 'p90', 'min', 'max', 'below', 'within', 'above'];
+/** The metrics that are area shares of the problem range: their axis is always 0 to 100 %. */
+export const isShare = (m: Metric) => m === 'below' || m === 'within' || m === 'above';
 /** The Results panel's own charts, Distribution and Cumulative area: always there, their look editable. */
 export const BUILT_IN: readonly ChartSpec[] = [{ id: 'hist', kind: 'histogram' }, { id: 'curve', kind: 'curve' }];
 const KINDS = Object.keys(FIELDS);
@@ -40,7 +42,7 @@ const span = (v: unknown): v is [number, number] =>
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(Math.round(v), lo), hi);
 // field, its clean value (undefined: junk), what it has to be
 const RULES: [keyof ChartSpec, (v: unknown, kind: ChartKind) => unknown, string][] = [
-  ['title', (v) => (typeof v === 'string' && v.length <= 120 ? v : undefined), 'text, at most 120 characters'],
+  ['title', (v) => (typeof v === 'string' && v.length <= 120 ? (v.trim() ? v : null) : undefined), 'text, at most 120 characters'], // blank: the default
   ['column', (v) => (typeof v === 'string' && /^[a-z]+_(front|back)$/.test(v) ? v : undefined), "a result column such as 'radiation_front'"],
   ['models', (v) => (Array.isArray(v) && v.length && v.every((k) => [0, 1, 2, 3].includes(k)) ? [...new Set<number>(v)].sort((a, b) => a - b) : undefined), 'model slots 0 to 3 (A to D), at least one'],
   ['parts', (v, kind) => (Array.isArray(v) && v.length && v.length <= (kind === 'parts' ? 24 : 50) && v.every((p) => typeof p === 'string' && p.startsWith('/') && p.length <= 512) ? [...new Set<string>(v)] : undefined), '1 to 50 prim paths (a parts chart: 24), each starting with /'],
@@ -54,8 +56,8 @@ const RULES: [keyof ChartSpec, (v: unknown, kind: ChartKind) => unknown, string]
 
 /**
  * A chart spec from outside (the agent, a stored record, a report file) -> a clean one, or what is wrong with it, named
- * by its field. Fields of another kind and unknown ones are dropped, null = the default, numbers are clamped (a curve
- * has no mean marker).
+ * by its field. Fields of another kind and unknown ones are dropped, null (and a blank title) = the default, numbers are
+ * clamped (a curve has no mean marker).
  */
 export function cleanSpec(raw: unknown): ChartSpec | string {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'chart: an object with an id and a kind';
@@ -67,7 +69,7 @@ export function cleanSpec(raw: unknown): ChartSpec | string {
     if (!keep.includes(k) || r[k] === undefined || r[k] === null) continue;
     const v = clean(r[k], kind);
     if (v === undefined) return `${k}: ${what}`;
-    out[k] = v;
+    if (v !== null) out[k] = v;
   }
   return out as unknown as ChartSpec;
 }
@@ -126,40 +128,45 @@ export interface ChartInput {
   weightsFor: WeightsFor;
 }
 type Common = { scale: Scale; unit: string; grid: boolean };
-/** What a chart draws, its look's defaults filled in; several models: a series / curve / bar per model by slot. */
+/** What a chart draws, its look's defaults filled in; several of its models open: a series / curve / bar per model with
+ *  values, by slot. */
 export type Drawn =
   | (Common & { kind: 'histogram'; edges: number[]; shares: number[]; counts: number[]; below: number; above: number; markers: Markers; show: Marker[]; series?: { slot: number; shares: number[] }[]; height: number })
   | (Common & { kind: 'curve'; cum: Cumulative; domain: [number, number]; show: Marker[]; curves?: { slot: number; cum: Cumulative }[]; height: number })
-  | (Common & { kind: 'parts'; metric: Metric; groups: { name: string; path: string; bars: { slot: number; v: number }[] }[] }) // v NaN: no value
+  | (Common & { kind: 'parts'; metric: Metric; domain: [number, number]; more: number; groups: { name: string; path: string; bars: { slot: number; v: number }[] }[] }) // v NaN: no value; more: the parts past the 24 drawn
   | { kind: 'empty'; reason: string };
 
 /** A chart's numbers: its models' receivers (or those under its parts) in its column, on that column's colour scale. */
 export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
   const column = spec.column ?? input.column, results = input.models.flatMap((m) => (m.result ? [m.result] : []));
   const scale = scaleFor(column, unionRange(results, column), input.viz), unit = unitFor(column).value, grid = spec.grid ?? true;
-  const ms = input.models.filter((m) => m.result?.columns.includes(column) && (!spec.models || spec.models.includes(m.slot)));
+  const mine = input.models.filter((m) => !spec.models || spec.models.includes(m.slot)), ms = mine.filter((m) => m.result?.columns.includes(column));
   if (!ms.length) return { kind: 'empty', reason: 'No result for this column' };
   const data = (m: (typeof ms)[number], ids?: readonly string[]) => dataOf(m.result!, m.result!.columns.indexOf(column), m.objects, input.weightsFor, ids);
 
   if (spec.kind === 'parts') { // a row per prim path (matched across models), a bar per model
     const metric = spec.metric ?? 'mean', all = ms.map((m) => ({ m, d: data(m) })), pathOf = new Map(ms.flatMap((m) => m.objects.map((o) => [o.id, o.path] as const)));
-    const paths = (spec.parts ?? [...new Set(all.flatMap(({ d }) => d.rows.flatMap((x) => pathOf.get(x.id) ?? [])))]).slice(0, 24); // ponytail: the first 24 parts; a top-N by metric if models have more
-    const names = rowNames(paths);
-    return {
-      kind: 'parts', scale, unit, grid, metric,
-      groups: paths.map((path, i) => ({
-        name: names[i] || path, path,
-        bars: all.map(({ m, d }) => {
-          const under = new Set(idsUnder([path], m.objects)), rows = d.rows.filter((x) => under.has(x.id));
-          return { slot: m.slot, v: rows.length ? summarize(d.r.values, d.col, rows.map((x) => x.g), rows.map((x) => x.w), scale.lo, scale.hi)[metric] : NaN };
-        }),
-      })),
-    };
+    const every = spec.parts ?? [...new Set(all.flatMap(({ d }) => d.rows.flatMap((x) => pathOf.get(x.id) ?? [])))];
+    const paths = every.slice(0, 24), names = rowNames(paths); // ponytail: the first 24 parts; a top-N by metric if models have more
+    const groups = paths.map((path, i) => ({
+      name: names[i] || path, path,
+      bars: all.map(({ m, d }) => {
+        const under = new Set(idsUnder([path], m.objects)), rows = d.rows.filter((x) => under.has(x.id));
+        return { slot: m.slot, v: rows.length ? summarize(d.r.values, d.col, rows.map((x) => x.g), rows.map((x) => x.w), scale.lo, scale.hi)[metric] : NaN };
+      }),
+    }));
+    // the value axis: shares 0 to 1; else as set, the colour scale, or from 0 to the largest bar (absolute, and the
+    // relative one's fallback when the scale is empty)
+    const vs = groups.flatMap((g) => g.bars.map((b) => b.v)).filter(Number.isFinite), want = spec.range ?? 'relative';
+    const bars: [number, number] = vs.length ? [Math.min(0, ...vs), Math.max(...vs)] : [0, 1];
+    const domain: [number, number] = isShare(metric) ? [0, 1] : Array.isArray(want) ? want : want === 'relative' && scale.vmax > scale.vmin ? [scale.vmin, scale.vmax] : bars;
+    return { kind: 'parts', scale, unit, grid, metric, domain, more: every.length - paths.length, groups };
   }
 
   const ds = ms.flatMap((m) => { const d = data(m, spec.parts && idsUnder(spec.parts, m.objects)); return d.cum.v.length ? [{ slot: m.slot, d }] : []; });
   if (!ds.length) return { kind: 'empty', reason: 'No values under these parts' };
-  const many = ds.length > 1, first = ds[0].d, want = spec.range ?? 'relative', show = [...(spec.markers ?? MARKERS[spec.kind])];
+  // several models open (of the chart's): a series each with values, a comparison also before the others' results land
+  const many = mine.length > 1, first = ds[0].d, want = spec.range ?? 'relative', show = [...(spec.markers ?? MARKERS[spec.kind])];
   const seen: [number, number] = [Math.min(...ds.map(({ d }) => d.cum.v[0])), Math.max(...ds.map(({ d }) => d.cum.v[d.cum.v.length - 1]))]; // absolute: the data's
   const range: [number, number] = Array.isArray(want) ? want : want === 'relative' && scale.vmax > scale.vmin ? [scale.vmin, scale.vmax] : seen;
   if (spec.kind === 'curve') return { kind: 'curve', scale, unit, grid, show, height: spec.height ?? 170, cum: first.cum, domain: range, curves: many ? ds.map(({ slot, d }) => ({ slot, cum: d.cum })) : undefined };

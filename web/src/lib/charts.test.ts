@@ -26,7 +26,8 @@ describe('cleanSpec', () => {
       .toEqual({ id: 'c1', kind: 'curve', title: 'Sun', range: [0, 8], markers: ['p10', 'p90'], height: 400 }); // a curve has no mean
     expect(cleanSpec({ id: 'h', kind: 'histogram', bins: 2.4, height: 10, grid: false, metric: 'mean', models: [1, 0, 1], parts: ['/A', '/A'], range: 'absolute' }))
       .toEqual({ id: 'h', kind: 'histogram', models: [0, 1], parts: ['/A'], range: 'absolute', bins: 4, grid: false, height: 100 });
-    expect(cleanSpec({ id: 'p-1', kind: 'parts', metric: 'below', bins: 'auto', range: 'relative', column: 'sunhours_back' })).toEqual({ id: 'p-1', kind: 'parts', column: 'sunhours_back', metric: 'below' });
+    expect(cleanSpec({ id: 'p-1', kind: 'parts', metric: 'below', bins: 'auto', range: 'relative', markers: ['mean'], column: 'sunhours_back' })).toEqual({ id: 'p-1', kind: 'parts', column: 'sunhours_back', range: 'relative', metric: 'below' });
+    expect(cleanSpec({ id: 'c', kind: 'curve', title: ' ' })).toEqual({ id: 'c', kind: 'curve' }); // a blank title: the default heading
   });
   it('names the field of anything else', () => {
     const junk: [unknown, string][] = [
@@ -62,6 +63,13 @@ describe('chartData', () => {
     expect(draw('histogram', { models: [1] }, [A, B]).edges).toHaveLength(31);
     expect(draw('histogram', { bins: 5 }, [A, B]).edges).toHaveLength(6);
   });
+  it("several of the chart's models open: a comparison, also before a second result lands; one of them: not", () => {
+    const none = { slot: 1, objects: [], result: null }; // B open, not run
+    expect(draw('histogram', {}, [A, none]).series?.map((s) => s.slot)).toEqual([0]);
+    expect(draw('curve', {}, [A, none]).curves?.map((c) => c.slot)).toEqual([0]);
+    expect(draw('histogram', { models: [0] }, [A, B]).series).toBeUndefined();
+    expect(draw('curve', { models: [0, 3] }, [A, B]).curves).toBeUndefined(); // D is not open
+  });
   it('relative = the colour scale over every model, absolute = the drawn data, a set range wins', () => {
     const viz = defaultSettings().viz;
     expect(draw('histogram', { models: [0] }, [A, B]).edges[0]).toBe(0); // relative: B's values colour A's chart too
@@ -95,5 +103,21 @@ describe('chartData', () => {
     const viz = defaultSettings().viz;
     viz.ranges.radiation = { lo: 5, hi: null };
     expect(draw('parts', { parts: ['/S/N'], metric: 'below' }, [P, Q], viz).groups[0].bars.map((b) => b.v)).toEqual([1, 0.5]); // 3 of 3, 5
+  });
+  it('parts: the value axis as set, the colour scale (empty: from 0, as absolute), from 0 to the largest bar; shares 0 to 1', () => {
+    const P = { slot: 0, objects: [obj('a1', '/S/N'), obj('a2', '/S/S')], result: result(['a1', 'a2'], [[1, 2], [10, 20, 30]]) }; // means 1.5, 20
+    const Q = { slot: 1, objects: [obj('b1', '/S/N')], result: result(['b1'], [[3, 5]]) }; // mean 4
+    expect(draw('parts', {}, [P, Q]).domain).toEqual([1, 30]); // relative: the scale over every model's values
+    expect(draw('parts', { range: 'absolute' }, [P, Q]).domain).toEqual([0, 20]);
+    expect(draw('parts', { range: [5, 50], metric: 'max' }, [P, Q]).domain).toEqual([5, 50]);
+    expect(draw('parts', { range: [5, 50], metric: 'within' }, [P, Q]).domain).toEqual([0, 1]);
+    const viz = defaultSettings().viz;
+    viz.scales.radiation = { min: 10, max: 100 };
+    expect(draw('parts', {}, [P, Q], viz).domain).toEqual([10, 100]);
+    viz.scales.radiation = { min: 7, max: 7 }; // an empty scale
+    expect(draw('parts', { metric: 'min' }, [P, Q], viz).domain).toEqual([0, 10]);
+    const many = Array.from({ length: 30 }, (_, i) => obj(`r${i}`, `/S/R${i}`));
+    const M = { slot: 0, objects: many, result: result(many.map((o) => o.id), many.map((_, i) => [i])) };
+    expect([draw('parts', {}, [M]).groups.length, draw('parts', {}, [M]).more, draw('parts', {}, [P]).more]).toEqual([24, 6, 0]);
   });
 });

@@ -2,18 +2,22 @@
 // problem range tinted, P10 / P50 / P90 marked and the cursor value's percentile. It spans the colour scale: the curve
 // starts at the share below the range and ends at the share up to its top. Several models (`curves`): one line each in
 // its colour, the cursor's share on each.
+import { MARKERS, type Marker } from '../lib/charts';
 import { type Scale } from '../lib/gradients';
 import { fmtNum, percentile, shareBelow, type Cumulative } from '../lib/result';
 import { pct } from '../ui';
 import { AXIS, FONT, GRID, STRONG, TEXT, fmtTick, niceTicks } from './axes';
 
-const W = 320, H = 170, L = 34, R = 8, TOP = 10, BOTTOM = 30;
+const L = 34, R = 8, TOP = 10, BOTTOM = 30;
+const AT: Partial<Record<Marker, number>> = { p10: 0.1, median: 0.5, p90: 0.9 }; // the marked percentiles
 
-export function AreaCurve({ cum, domain, scale, unit, probe, curves }: {
+/** `width` / `height`: the viewBox (the drawing scales to its box); `show`: the percentiles marked (one model). */
+export function AreaCurve({ cum, domain, scale, unit, probe, curves, show = MARKERS.curve, grid = true, width = 320, height = 170 }: {
   cum: Cumulative; domain: [number, number]; scale: Scale; unit: string; probe: number | null;
   curves?: { color: string; cum: Cumulative }[]; // several models: one line each
+  show?: readonly Marker[]; grid?: boolean; width?: number; height?: number;
 }) {
-  const [dmin, dmax] = domain, plotW = W - L - R, plotH = H - TOP - BOTTOM, base = TOP + plotH;
+  const [dmin, dmax] = domain, plotW = width - L - R, plotH = height - TOP - BOTTOM, base = TOP + plotH;
   const x = (v: number) => L + Math.min(Math.max((v - dmin) / (dmax - dmin || 1), 0), 1) * plotW;
   const y = (share: number) => base - share * plotH;
   const inside = (v: number) => Number.isFinite(v) && v >= dmin && v <= dmax;
@@ -33,13 +37,13 @@ export function AreaCurve({ cum, domain, scale, unit, probe, curves }: {
   const p = probe !== null && inside(probe) ? { x: x(probe), share: shareBelow(cum, probe) } : null;
   const xTicks = niceTicks(dmin, dmax, 6);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={curves ? `Cumulative share of area by ${unit} value, one line per model` : `Cumulative share of area by ${unit} value; P10 ${fmtNum(percentile(cum, 0.1))}, median ${fmtNum(percentile(cum, 0.5))}, P90 ${fmtNum(percentile(cum, 0.9))}`}>
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label={curves ? `Cumulative share of area by ${unit} value, one line per model` : `Cumulative share of area by ${unit} value; P10 ${fmtNum(percentile(cum, 0.1))}, median ${fmtNum(percentile(cum, 0.5))}, P90 ${fmtNum(percentile(cum, 0.9))}`}>
       {scale.lo !== null && scale.lo > dmin && <rect x={L} y={TOP} width={x(scale.lo) - L} height={plotH} fill={scale.below} opacity={0.12} />}
       {scale.hi !== null && scale.hi < dmax && <rect x={x(scale.hi)} y={TOP} width={L + plotW - x(scale.hi)} height={plotH} fill={scale.above} opacity={0.12} />}
-      {[0.25, 0.5, 0.75, 1].map((s) => <line key={s} x1={L} x2={L + plotW} y1={y(s)} y2={y(s)} stroke={GRID} />)}
+      {grid && [0.25, 0.5, 0.75, 1].map((s) => <line key={s} x1={L} x2={L + plotW} y1={y(s)} y2={y(s)} stroke={GRID} />)}
       {[0, 0.25, 0.5, 0.75, 1].map((s) => <text key={s} x={L - 4} y={y(s) + 3} fontSize={FONT} textAnchor="end" fill={TEXT}>{`${100 * s} %`}</text>)}
       {(curves ?? [{ color: STRONG, cum }]).map((c, k) => <polyline key={k} points={line(c.cum)} fill="none" stroke={c.color} strokeWidth={curves ? 2 : 1.5} />)}
-      {!curves && [0.1, 0.5, 0.9].map((q) => {
+      {!curves && show.flatMap((m) => AT[m] ?? []).map((q) => {
         const v = percentile(cum, q), right = x(v) > L + plotW * 0.7; // labels near the right edge turn inwards
         return inside(v) && (
           <g key={q}>
@@ -65,7 +69,7 @@ export function AreaCurve({ cum, domain, scale, unit, probe, curves }: {
       {xTicks.map((t) => (
         <g key={t}>
           <line x1={x(t)} x2={x(t)} y1={base} y2={base + 3} stroke={AXIS} />
-          <text x={x(t)} y={base + 14} fontSize={FONT} textAnchor="middle" fill={TEXT}>{fmtTick(t)}</text>
+          <text x={x(t)} y={base + 14} fontSize={FONT} textAnchor={x(t) > L + plotW - 10 ? 'end' : 'middle'} fill={TEXT}>{fmtTick(t)}</text>
         </g>
       ))}
       <text x={L + plotW} y={base + 26} fontSize={FONT} textAnchor="end" fill={TEXT}>{unit}</text>

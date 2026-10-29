@@ -1,17 +1,19 @@
-// Results: what the column means, run summary, colour scale and problem range (with resets), legend / histogram /
-// cumulative area curve in the result colours, the cursor readout, the range split, and the per-mesh table. With
-// several models every output compares them: a run line, a column and a group of rows per model, a series per model in
-// its colour, and each value's difference to the first model. Every region keeps its size whatever the data or the
-// hover state, and a model keeps its place before its result lands, so the panel does not jump.
-import { memo, useMemo, useState, type Dispatch } from 'react';
-import { AreaCurve } from '../charts/AreaCurve';
+// Results: what the column means, run summary, colour scale and problem range (with resets), legend, the charts in the
+// result colours (Distribution, Cumulative area, then one's own; each with its settings menu), the cursor readout, the
+// range split, and the per-mesh table. With several models every output compares them: a run line, a column and a group
+// of rows per model, a series per model in its colour, and each value's difference to the first model. Every region
+// keeps its size whatever the data or the hover state, and a model keeps its place before its result lands, so the
+// panel does not jump.
+import { Fragment, memo, useMemo, type Dispatch } from 'react';
+import { Chart, chartTitle } from '../charts/Chart';
+import { ChartSettings, RANGE_HELP, ScaleFields, type ChartEdit } from '../charts/ChartSettings';
 import { Donut } from '../charts/Donut';
-import { Histogram, type Markers } from '../charts/Histogram';
 import { Legend } from '../charts/Legend';
-import { GRADIENTS, hexAt, type Scale } from '../lib/gradients';
-import { QUANTITY_HELP, SIDE_HELP, columnLabel, columnStats, cumulative, fmtDiff, fmtNum, histogram, percentile, rangeShares, shareBelow, unitFor, type Cumulative } from '../lib/result';
-import { inFlight, type Action, type Model, type ObjectRow, type Probe, type RunResult, type Settings } from '../store';
-import { Alert, ColorQuad, Illustration, LETTERS, NumberField, ResetButton, Segmented, Swatch, Tag, cat, pct, rowKeys } from '../ui';
+import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row, type WeightsFor } from '../lib/charts';
+import { hexAt, type Scale } from '../lib/gradients';
+import { QUANTITY_HELP, SIDE_HELP, columnLabel, fmtDiff, fmtNum, rangeShares, shareBelow, unitFor } from '../lib/result';
+import { inFlight, type Action, type Model, type Probe, type RunResult, type Settings } from '../store';
+import { Alert, Illustration, LETTERS, Segmented, Swatch, Tag, pct, rowKeys } from '../ui';
 
 /** A model as the panel compares it: its result's column for the one shown (by name; -1: none) and whether that result
  *  is out of date. */
@@ -19,8 +21,8 @@ export type Compared = Model & { col: number; stale: boolean };
 
 interface Props {
   models: Compared[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; probe: Probe | null; bin: [number, number] | null;
-  scale: Scale | null; domain: [number, number]; viz: Settings['viz']; auto: boolean; // domain: the data range, every model's
-  weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined; dispatch: Dispatch<Action>;
+  scale: Scale | null; domain: [number, number]; viz: Settings['viz']; charts: Settings['charts']; auto: boolean; // domain: the data range, every model's
+  weightsFor: WeightsFor; dispatch: Dispatch<Action>;
 }
 
 const cacheLine = (c: Record<string, string> | undefined) =>
@@ -28,47 +30,16 @@ const cacheLine = (c: Record<string, string> | undefined) =>
     : `Scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}.`;
 const timingOf = (r: RunResult) => `${r.manifest.run_s !== undefined && r.cache?.response !== 'hit' ? `${r.manifest.run_s.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip`;
 
-const orNull = (v: number) => (Number.isFinite(v) ? v : null);
 const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of shares: percentage points
 
-type ChartRange = 'absolute' | 'relative';
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
-const RANGE_HELP = 'Absolute: the whole range of the data. Relative: the colour scale, Min to Max (the data range where they are blank).';
 
-interface Row { id: string; name: string; g: RunResult['manifest']['meshes'][number]; w: ArrayLike<number>; stats: ReturnType<typeof columnStats> }
-interface Data { r: RunResult; col: number; rows: Row[]; total: number; cum: Cumulative; markers: Markers; bins: number }
-
-// One per result: cumulative() sorts every element, and a selection or a run status re-renders the panel; a result's
-// rows never change while it lives (a load, a re-read or a role change drops it).
-const cache = new WeakMap<RunResult, { col: number; d: Data }>();
-function dataOf(r: RunResult, col: number, objects: ObjectRow[], weightsFor: Props['weightsFor']): Data {
-  const hit = cache.get(r);
-  if (hit?.col === col) return hit.d;
-  const groups = r.manifest.meshes, weights = r.receivers.map((id, i) => weightsFor(id, r.on) ?? new Float64Array(groups[i].count).fill(1));
-  const rows = r.receivers.map((id, i) => {
-    const o = objects.find((x) => x.id === id), g = groups[i];
-    return { id, name: o?.name ?? g.name, g, w: weights[i], stats: columnStats(r.values, col, g, weights[i]) };
-  });
-  const total = rows.reduce((s, x) => s + x.stats.total, 0), area = rows.reduce((s, x) => s + x.stats.area, 0);
-  const cum = cumulative(r.values, col, groups, weights);
-  const bins = Math.min(64, Math.max(12, Math.round(1.5 * Math.sqrt(cum.v.length)))); // more detail with more elements
-  const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
-  const d = { r, col, rows, total, cum, markers, bins };
-  cache.set(r, { col, d });
-  return d;
-}
-
-export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, auto, weightsFor, dispatch }: Props) {
-  const datas = useMemo(() => models.map((m) => (m.result && m.col >= 0 ? dataOf(m.result, m.col, m.objects, weightsFor) : null)), [models, weightsFor]);
+export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, weightsFor, dispatch }: Props) {
+  // what the tables and charts read of each model, kept across a selection or a run's status (each makes new models)
+  const inputs = [0, 1, 2, 3].flatMap((k) => { const m = models.find((x) => x.slot === k); return [m?.objects, m?.result, m?.col]; }); // fixed length: memo deps
+  const runs = useMemo(() => models.map(({ slot, objects, result, col }) => ({ slot, objects, result, col })), inputs); // eslint-disable-line react-hooks/exhaustive-deps
+  const datas = useMemo(() => runs.map((m) => (m.result && m.col >= 0 ? dataOf(m.result, m.col, m.objects, weightsFor) : null)), [runs, weightsFor]);
   const many = models.length > 1;
-  // the Distribution and Cumulative area charts, each: relative = the colour scale (Min / Max when set), absolute = the
-  // data range (every model's)
-  const [ranges, setRanges] = useState<Record<'hist' | 'curve', ChartRange>>({ hist: 'relative', curve: 'relative' });
-  const [vmin, vmax] = scale && scale.vmax > scale.vmin ? [scale.vmin, scale.vmax] : [NaN, NaN];
-  const rangeOf = (chart: 'hist' | 'curve'): [number, number] => (ranges[chart] === 'relative' && vmax > vmin ? [vmin, vmax] : domain);
-  const [hlo, hhi] = rangeOf('hist');
-  const bins = Math.min(...datas.map((d) => d?.bins ?? Infinity)); // the same bins for every model: a hovered bin lines up
-  const hists = useMemo(() => datas.map((d) => d && histogram(d.r.values, d.col, d.rows.map((x) => x.g), d.rows.map((x) => x.w), bins, [hlo, hhi])), [datas, bins, hlo, hhi]);
   const lo = scale?.lo ?? null, hi = scale?.hi ?? null;
   const within = useMemo(() => datas.map((d) => d && d.rows.map((x) => { // each mesh's share of its area inside the problem range
     if (lo === null && hi === null) return 1;
@@ -76,7 +47,10 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
     for (let i = 0; i < x.g.count; i++) { const v = d.r.values[x.g.first + i][d.col]; if (Number.isFinite(v) && (lo === null || v >= lo) && (hi === null || v <= hi)) w += x.w[i]; }
     return x.stats.area ? w / x.stats.area : 0;
   })), [datas, lo, hi]);
-  const k0 = datas.findIndex(Boolean), ref = k0 < 0 ? null : datas[k0]!, hist = k0 < 0 ? null : hists[k0]!; // the first result: the column list, quantity and unit
+  const k0 = datas.findIndex(Boolean), ref = k0 < 0 ? null : datas[k0]!; // the first result: the column list, quantity and unit
+  const shown = ref ? ref.r.columns[ref.col] : null;
+  // every chart's numbers, once per result, column, colour scale or chart: never per hover or cursor move
+  const drawn = useMemo(() => new Map(shown ? charts.map((c) => [c, chartData(c, { models: runs, column: shown, viz, weightsFor })] as const) : []), [charts, runs, shown, viz, weightsFor]);
   const running = models.some((m) => inFlight(m.run)), failed = models.filter((m) => m.error);
   const one = models[0];
   /** A model's run line: a job on its way (an Auto run refreshes silently, unless other users' jobs are ahead), else what it holds. */
@@ -115,8 +89,8 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
       {failed.length > 0 && (
         <Alert title="Run failed">{many ? failed.map((m) => <div key={m.slot}><Tag slot={m.slot} /> {m.error}</div>) : failed[0].error}</Alert>
       )}
-      {ref && hist && scale && (() => {
-        const { r, col } = ref, [quantity, side] = r.columns[col].split('_'), unit = unitFor(r.columns[col]);
+      {ref && shown && scale && (() => {
+        const { r, col } = ref, [quantity, side] = shown.split('_'), unit = unitFor(shown);
         const A = datas[0]; // the differences: to the first model (A, or the first left after a removal)
         const owner = (id: string | null) => (id === null ? -1 : datas.findIndex((d) => d?.rows.some((x) => x.id === id)));
         const kp = probe ? owner(probe.id) : -1, kh = owner(hovered);
@@ -132,8 +106,6 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
               ? `${letter(kh)}${hov.name}: ${fmtNum(hov.stats.mean)} ${unit.value} mean, ${fmtNum(hov.stats.min)} to ${fmtNum(hov.stats.max)}, ${pct(datas[kh]!.total ? hov.stats.total / datas[kh]!.total : 0)} of ${many ? `model ${LETTERS[models[kh].slot]}'s` : 'the'} total.`
               : '';
         const select = (slot: number, id: string, additive: boolean) => dispatch({ type: 'SELECT', slot, ids: [id], additive });
-        const inUnit = unit.value ? ` (${unit.value})` : ''; // the unit once per group: the labels stay one short word
-        const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
         const splits = datas.map((d) => d && rangeShares(d.cum, scale.lo, scale.hi));
         /** A comparison cell: the value, then (under it) its difference to the first model; '–' where there is none. */
         const cell = (k: number, get: (d: Data, k: number) => number, fmt: (v: number) => string = fmtNum, diff: (v: number) => string = fmtNum) => {
@@ -145,9 +117,30 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
           );
         };
         const heads = models.map((m) => <th key={m.slot} scope="col" className="num" title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`}><Tag slot={m.slot} /></th>);
-        const keyOf = <div className="cluster text-muted">{models.map((m) => <span key={m.slot} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`}><Tag slot={m.slot} /></span>)}</div>;
-        const series = models.flatMap((m, k) => (hists[k] ? [{ color: cat(m.slot), label: LETTERS[m.slot], shares: hists[k]!.shares }] : []));
-        const curves = models.flatMap((m, k) => (datas[k] ? [{ color: cat(m.slot), cum: datas[k]!.cum }] : []));
+        /** A comparison chart's key: its models that are open, with a result or not. */
+        const keyOf = (c: ChartSpec) => <div className="cluster text-muted">{models.filter((m) => !c.models || c.models.includes(m.slot)).map((m) => <span key={m.slot} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`}><Tag slot={m.slot} /></span>)}</div>;
+        /**
+         * Charts, each under its heading with its settings menu (ids `${idp}:${id}`, ':' being in no chart id): the panel's
+         * own (CHART), and so each report's group later, headed "Report: TITLE" with its own `onChart` (its specs drawn into
+         * `drawn` too). A chart of the shown column takes the cursor and bin hover as the views do; the built-ins keep their
+         * Absolute / Relative switch.
+         */
+        const group = (specs: readonly ChartSpec[], onChart: (e: ChartEdit) => void, idp = 'chart') => specs.map((c) => {
+          const d = drawn.get(c)!, at = c.column ?? shown, live = at === shown, title = chartTitle(c, at);
+          return (
+            <Fragment key={c.id}>
+              <div className="cluster cluster--between">
+                <h3>{title}</h3>
+                <div className="cluster">
+                  {BUILT_IN.some((b) => b.id === c.id) && <Segmented name={`${c.id}-range`} label={`${title} range`} title={RANGE_HELP} value={Array.isArray(c.range) ? null : c.range ?? 'relative'} options={RANGE_OPTIONS} onChange={(range) => onChart({ spec: { ...c, range } })} />}
+                  <ChartSettings id={`${idp}:${c.id}`} title={title} spec={c} d={d} column={at} viz={viz} many={many} dispatch={dispatch} onChart={onChart} />
+                </div>
+              </div>
+              <Chart d={d} probe={live ? probe?.value ?? null : null} bin={live ? bin : null} dispatch={live ? dispatch : undefined} />
+              {((d.kind === 'histogram' && d.series) || (d.kind === 'curve' && d.curves)) && keyOf(c)}
+            </Fragment>
+          );
+        });
         const meshRow = (slot: number, selected: Set<string>, x: Row, w: number, total: number) => (
           <tr
             key={x.id} tabIndex={0} aria-selected={selected.has(x.id)}
@@ -233,51 +226,9 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             )}
             <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
             <div className="readout" role="status" aria-live="polite">{readout}</div>
-            {/* the colour scale and the problem range: one row of five controls when the panel is wide enough, else two */}
-            <div className="scale-row">
-              <fieldset className="field" aria-labelledby="lg-scale">
-                <div className="cluster cluster--between"><legend id="lg-scale">Colour scale{inUnit}<span className="sr-only">. Min or Max left blank: the range of the data (the placeholder){many ? ', every model\'s' : ''}</span></legend><ResetButton what="the colour scale" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'scale' })} /></div>
-                <div className="scale-row__cols">
-                  <div className="field">
-                    <label className="field__label" htmlFor="gradient">Gradient</label>
-                    <select className="select" id="gradient" value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
-                      {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
-                    </select>
-                  </div>
-                  {/* blank: the data's own bound, shown as the placeholder */}
-                  <NumberField id="scale-min" label="Min" value={viz.scales[quantity]?.min ?? NaN} placeholder={fmtNum(domain[0])} onCommit={(v) => setViz({ min: orNull(v) })} />
-                  <NumberField id="scale-max" label="Max" value={viz.scales[quantity]?.max ?? NaN} placeholder={fmtNum(domain[1])} onCommit={(v) => setViz({ max: orNull(v) })} />
-                </div>
-              </fieldset>
-              <fieldset className="field" aria-labelledby="lg-range">
-                <div className="cluster cluster--between"><legend id="lg-range">Problem range{inUnit}<span className="sr-only">. Below or Above left blank: no bound</span></legend><ResetButton what="the problem range and its colours" onClick={() => dispatch({ type: 'VIZ_RESET', quantity, what: 'range' })} /></div>
-                <div className="scale-row__cols">
-                  <NumberField
-                    id="range-lo" label="Below" value={scale.lo ?? NaN} placeholder="none" onCommit={(v) => setViz({ lo: orNull(v) })}
-                    adorn={<ColorQuad id="colour-below" label="Colour below the range" value={scale.below} onChange={(below) => setViz({ below })} />}
-                  />
-                  <NumberField
-                    id="range-hi" label="Above" value={scale.hi ?? NaN} placeholder="none" onCommit={(v) => setViz({ hi: orNull(v) })}
-                    adorn={<ColorQuad id="colour-above" label="Colour above the range" value={scale.above} onChange={(above) => setViz({ above })} />}
-                  />
-                </div>
-              </fieldset>
-            </div>
-            <div className="cluster cluster--between">
-              <h3>Distribution</h3>
-              <Segmented name="hist-range" label="Distribution range" title={RANGE_HELP} value={ranges.hist} options={RANGE_OPTIONS} onChange={(h) => setRanges((x) => ({ ...x, hist: h }))} />
-            </div>
-            <Histogram
-              edges={hist.edges} shares={hist.shares} counts={hist.counts} below={hist.below} above={many ? Math.max(...hists.map((h) => h?.above ?? 0)) : hist.above} scale={scale} unit={unit.value}
-              probe={probe?.value ?? null} bin={bin} markers={ref.markers} series={many ? series : undefined} dispatch={dispatch}
-            />
-            {many && keyOf}
-            <div className="cluster cluster--between">
-              <h3>Cumulative area</h3>
-              <Segmented name="curve-range" label="Cumulative area range" title={RANGE_HELP} value={ranges.curve} options={RANGE_OPTIONS} onChange={(curve) => setRanges((x) => ({ ...x, curve }))} />
-            </div>
-            <AreaCurve cum={ref.cum} domain={rangeOf('curve')} scale={scale} unit={unit.value} probe={probe?.value ?? null} curves={many ? curves : undefined} />
-            {many && keyOf}
+            <ScaleFields quantity={quantity} scale={scale} viz={viz} many={many} dispatch={dispatch} />
+            {/* the settings' charts in order: Distribution and Cumulative area, then one's own */}
+            {group(charts, (e) => dispatch({ type: 'CHART', ...e }))}
             <h3>Problem range split</h3>
             {many ? (
               <div className="table-wrap">

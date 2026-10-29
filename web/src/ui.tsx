@@ -14,6 +14,7 @@ const ICONS = {
   chevronDown: <path d="m6 9 6 6 6-6" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  tune: <><path d="M4 8h8M16 8h4M4 16h4M12 16h8" /><circle cx="14" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {
@@ -25,29 +26,46 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 
 }
 
 /**
- * A button opening a zha-ui menu above it (the run bar sits at the bottom of the view): a native popover, so Esc and a
- * click elsewhere close it; JS owns its place, as the menu primitive asks. `children` get `close`.
+ * A button opening a zha-ui menu below or above it, on the side with more room: a native popover, so Esc and a click
+ * elsewhere close it; JS owns its place, as the menu primitive asks. `icon`: a ghost icon button, `label` its name.
+ * `children` get `close`.
  */
-export function MenuButton({ id, label, title, disabled, busy, children }: { id: string; label: string; title?: string; disabled?: boolean; busy?: boolean; children: (close: () => void) => ReactNode }) {
+export function MenuButton({ id, label, title, icon, disabled, busy, children }: { id: string; label: string; title?: string; icon?: keyof typeof ICONS; disabled?: boolean; busy?: boolean; children: (close: () => void) => ReactNode }) {
   const menu = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const m = menu.current, b = button.current;
     if (!m || !b) return;
-    const place = () => {
-      const r = b.getBoundingClientRect();
+    const place = () => { // inside the window: its own height cap, or the room on its side when that is less
+      const r = b.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, down = below > above;
+      m.style.left = '0px'; // its width measured where nothing squeezes it (a fitted width follows its place)
       m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
-      m.style.bottom = `${innerHeight - r.top + 4}px`;
+      m.style.top = down ? `${r.bottom + 4}px` : '';
+      m.style.bottom = down ? '' : `${innerHeight - r.top + 4}px`;
+      m.style.maxBlockSize = '';
+      if (m.offsetHeight > (down ? below : above)) m.style.maxBlockSize = `${down ? below : above}px`;
     };
-    const onToggle = (e: Event) => { if ((e as ToggleEvent).newState === 'open') place(); };
+    const onToggle = (e: Event) => {
+      if ((e as ToggleEvent).newState === 'open') place();
+      // closing with the focus inside (Esc, an item's close()): a NumberField commits on its blur; the focus goes back to
+      // the button, as the browser does
+      else if (e.type === 'beforetoggle' && m.contains(document.activeElement)) { (document.activeElement as HTMLElement).blur(); b.focus(); }
+    };
+    const onScroll = (e: Event) => { if (m.matches(':popover-open') && !m.contains(e.target as Node)) place(); }; // a panel scrolled under it
     m.addEventListener('beforetoggle', onToggle); // before it shows: no frame at the old place
-    m.addEventListener('toggle', onToggle); // shown: its width is known, keep it inside the window
+    m.addEventListener('toggle', onToggle); // shown: its size is known, keep it inside the window
     window.addEventListener('resize', place);
-    return () => { m.removeEventListener('beforetoggle', onToggle); m.removeEventListener('toggle', onToggle); window.removeEventListener('resize', place); };
+    window.addEventListener('scroll', onScroll, true);
+    return () => { m.removeEventListener('beforetoggle', onToggle); m.removeEventListener('toggle', onToggle); window.removeEventListener('resize', place); window.removeEventListener('scroll', onScroll, true); };
   }, []);
   const close = () => { if (menu.current?.matches(':popover-open')) menu.current.hidePopover(); };
   return (
     <>
-      <button ref={button} className="btn btn--secondary" type="button" popoverTarget={id} disabled={disabled} aria-busy={busy} title={title}>{label}<Icon name="chevronDown" /></button>
+      <button
+        ref={button} className={icon ? 'icon-btn icon-btn--ghost' : 'btn btn--secondary'} type="button" popoverTarget={id} disabled={disabled} aria-busy={busy}
+        aria-label={icon && label} title={icon ? label : title}
+      >
+        {icon ? <Icon name={icon} /> : <>{label}<Icon name="chevronDown" /></>}
+      </button>
       <div ref={menu} id={id} className="menu" popover="auto" data-density="compact">{children(close)}</div>
     </>
   );
@@ -127,9 +145,9 @@ export function NumberField({ id, label, value, onCommit, step = 'any', min, max
   );
 }
 
-/** The .segmented radio track; option ids are `${name}-${value}` so validation can focus one. */
+/** The .segmented radio track; option ids are `${name}-${value}` so validation can focus one; `value` null: none checked. */
 export function Segmented<T extends string>({ name, label, title, value, options, onChange }: {
-  name: string; label: string; title?: string; value: T; options: readonly (readonly [T, string])[]; onChange: (v: T) => void;
+  name: string; label: string; title?: string; value: T | null; options: readonly (readonly [T, string])[]; onChange: (v: T) => void;
 }) {
   return (
     <div className="segmented" role="radiogroup" aria-label={label} title={title}>
