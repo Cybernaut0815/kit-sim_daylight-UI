@@ -955,7 +955,7 @@ int main(int argc, char** argv) {
   // The hidden instance's record (its settings and the steps it took), in memory, for the app to pick up when it opens.
   svr.Get("/session", [&](const httplib::Request&, httplib::Response& res) {
     std::lock_guard<std::mutex> lock(S.mcpMu);
-    if (S.session.empty()) return text(res, 404, "error: no session\n");
+    if (S.session.empty()) { res.status = 204; return; }   // the usual answer to every app load: no console error
     json(res, 200, S.session);
   });
   svr.Put("/session", [&](const httplib::Request& req, httplib::Response& res) {

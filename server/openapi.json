@@ -397,10 +397,8 @@
         "description": "Claude-only mode: with no app tab open, the server runs the app hidden in headless Chrome (`--web` or `--app-url`; its profile in `<cache>/agent-profile`) and the agent works there. That instance records here, in memory, its settings, the state-changing tool calls it made and whether it ran. An app tab opening later reads the record, replays it (same models, roles, settings, camera and results) and deletes it (`deleteSession`), which ends the hidden instance.",
         "responses": {
           "200": { "description": "The record, as the hidden instance stored it.", "content": { "application/json": { "schema": { "type": "object" }, "example": { "settings": "{\"site\":{\"lat\":52.52,\"lon\":13.41,\"place\":\"Berlin\"},...}", "steps": [{ "name": "open_model", "arguments": { "paths": ["C:\\models\\house.usdz"], "model": "A" } }, { "name": "set_roles", "arguments": { "paths": ["/Site/Block"], "role": "receiver" } }], "ran": true } } } },
-          "404": { "description": "No session (no hidden instance, or picked up already), or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
-            "none": { "value": "error: no session\n" },
-            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
-          } } } },
+          "204": { "description": "No session: no hidden instance, or picked up already (not an error, so an app tab's console stays clean)." },
+          "404": { "description": "Agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: agent routes are off (start daylight_server with --mcp)\n" } } },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
       },
