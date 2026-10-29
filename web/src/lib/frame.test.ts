@@ -1,7 +1,7 @@
 import { Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { camera } from '../viewer/capture';
-import { boxToWorld, compass, describeView, findCritical, frameView, meanNormal, toModel, toWorld, viewDir, type Box, type CriticalMesh, type Lens, type Vec3 } from './frame';
+import { boxToWorld, compass, cornersOf, describeView, findCritical, frameView, meanNormal, toModel, toWorld, viewDir, type Box, type CriticalMesh, type Lens, type Vec3 } from './frame';
 import { faceAreas, vertexAreas } from './result';
 
 const close = (a: ArrayLike<number>, b: ArrayLike<number>, eps = 1e-9) => Array.from(a).every((x, i) => Math.abs(x - b[i]) < eps);
@@ -25,15 +25,27 @@ describe('frameView', () => {
   for (const projection of ['perspective', 'orthographic'] as const) {
     for (const aspect of [5, 0.5]) {
       it(`${projection} at aspect ${aspect}: every corner in the frame, the widest on its edge (1 / margin); the cut clips none`, () => {
-        const { view, cut } = frameView(facade, viewDir('SW', 0), { fov: 45, aspect, projection }), cam = camera(view, aspect);
+        const { view, cut } = frameView(cornersOf(facade), viewDir('SW', 0), { fov: 45, aspect, projection }), cam = camera(view, aspect);
         const ndc = corners(facade).map((q) => q.clone().project(cam));
         expect(Math.max(...ndc.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))))).toBeCloseTo(1 / 1.08, 9);
         expect(Math.min(...corners(facade).map((q) => -q.applyMatrix4(cam.matrixWorldInverse).z))).toBeGreaterThan(cut);
       });
     }
   }
+  it('a wall at 30° to the axes is fitted and cut by its own points: a slab 6 m in front is cut away, the wall is not', () => {
+    const a = Math.PI / 6, n: Vec3 = [Math.sin(a), 0, Math.cos(a)], t: Vec3 = [Math.cos(a), 0, -Math.sin(a)]; // world: facing n, along t
+    const at = (s: number, h: number, d: number) => new Vector3(s * t[0] + d * n[0], h, s * t[2] + d * n[2]);
+    const wall = [at(-10, 0, 0), at(10, 0, 0), at(10, 10, 0), at(-10, 10, 0)]; // 20 × 10 m
+    const slab = [-29, 29].flatMap((s) => [0, 28].flatMap((h) => [6, 18].map((d) => at(s, h, d)))); // 58 × 28 m, 12 m deep
+    const e = (20 * Math.PI) / 180, dir: Vec3 = [n[0] * Math.cos(e), Math.sin(e), n[2] * Math.cos(e)];
+    const { view, cut } = frameView((f) => wall.forEach((p) => f(p.x, p.y, p.z)), dir, LENS), cam = camera(view, LENS.aspect);
+    const depth = (q: Vector3) => -q.clone().applyMatrix4(cam.matrixWorldInverse).z;
+    expect(Math.min(...wall.map(depth))).toBeGreaterThan(cut);
+    expect(Math.max(...slab.map(depth))).toBeLessThan(cut);
+    expect(Math.max(...wall.map((q) => Math.abs(q.clone().project(cam).x)))).toBeCloseTo(1 / 1.08, 9); // its width fills the frame
+  });
   it('a top view at north 30°: north up the image, east to the right', () => {
-    const { view } = frameView(facade, viewDir('top', 30), LENS), cam = camera(view, LENS.aspect), { N, E } = compass(30);
+    const { view } = frameView(cornersOf(facade), viewDir('top', 30), LENS), cam = camera(view, LENS.aspect), { N, E } = compass(30);
     const at = (d: Vec3) => new Vector3(...view.target).add(new Vector3(...toWorld(d))).project(cam);
     expect([at(N).x, at(E).y].map((v) => Math.abs(v) < 1e-9)).toEqual([true, true]);
     expect(at(N).y).toBeGreaterThan(0.01);
@@ -105,11 +117,13 @@ describe('spaces and words', () => {
     expect(close(toModel([0, 1, 0]), [0, 0, 1])).toBe(true);
   });
   it('describeView names the side the eye stands on, its height, where it looks, the lens and the aim in metres', () => {
-    const block = boxToWorld({ min: [0, 0, 0], max: [10, 20, 6] }, 0.01); // a stage in centimetres
+    const block = cornersOf(boxToWorld({ min: [0, 0, 0], max: [10, 20, 6] }, 0.01)); // a stage in centimetres
     expect(describeView(frameView(block, viewDir('SW', 0), LENS).view, 0, 0.01)).toBe('seen from the SW (225°), 20° above the horizon, looking NE; perspective 45° vertical; aimed at (5.0, 10.0, 3.0) m');
     expect(describeView(frameView(block, viewDir('S', 90), { ...LENS, projection: 'orthographic' }).view, 90, 0.01)).toMatch(/^seen from the S \(180°\), 20° above the horizon, looking N; orthographic [\d.]+ m high; aimed at \(5\.0, 10\.0, 3\.0\) m$/);
+    expect(describeView({ eye: [0, 5, 10], target: [-0.004, 0, 0.004], fov: 45, projection: 'perspective', height: 1 }, 0, 1)).toMatch(/aimed at \(0\.0, 0\.0, 0\.0\) m$/); // no -0.0
   });
-  it('refuses a box with no extent (a shot of it would come out blank)', () => {
-    expect(() => frameView({ min: [1, 2, 3], max: [1, 2, 3] }, viewDir('S', 0), LENS)).toThrow(/^box: /);
+  it('refuses a box with no extent, or no points (a shot of it would come out blank)', () => {
+    expect(() => frameView(cornersOf({ min: [1, 2, 3], max: [1, 2, 3] }), viewDir('S', 0), LENS)).toThrow(/^box: /);
+    expect(() => frameView(() => {}, viewDir('S', 0), LENS)).toThrow(/^box: /);
   });
 });

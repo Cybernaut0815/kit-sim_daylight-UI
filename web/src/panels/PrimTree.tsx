@@ -8,7 +8,7 @@
 // the meshes). Hiding and variants go to the session layer: never saved.
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type MouseEvent } from 'react';
 import { modifySelect, selectUpWithSubtree, type PrimInfo, type PrimSummary, type UsdSessionEventMap, type UsdViewerElement } from 'usd-viewer';
-import { meshAt, underIndex } from '../lib/tree';
+import { meshAt, primQuery, underIndex } from '../lib/tree';
 import type { Action, ObjectRow, Role, Selection } from '../store';
 import { Icon } from '../ui';
 
@@ -103,7 +103,7 @@ export const PrimTree = memo(function PrimTree({ usd, objects, selection, select
     if (!query.trim()) return void setResults(null);
     let live = true;
     const t = window.setTimeout(async () => {
-      const type = /(?:^|\s)type:(\S+)/.exec(query)?.[1] ?? '', text = query.replace(/(?:^|\s)type:\S+/, '').trim();
+      const [text, type] = primQuery(query);
       const found = await usd.usd.find(text, type).catch(() => []);
       if (live) setResults(found);
     }, 200);

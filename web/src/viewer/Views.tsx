@@ -4,9 +4,8 @@
 //   model's cameras cannot). Saved views serve every view, last this session and never go into a file.
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
 import { useEffect, useState } from 'react';
-import { Box3, Sphere } from 'three';
 import type { UsdViewerElement } from 'usd-viewer';
-import { cameraView, type SavedView, type StageCamera } from '../lib/views';
+import { stageView, type SavedView, type StageCamera } from '../lib/views';
 import { Alert, Icon, MenuButton } from '../ui';
 import { FORMATS, isUsd, type ExportMode, type Format } from './download';
 
@@ -22,12 +21,6 @@ export function ViewsMenu({ usd, model, disabled, views, onSave, onRemove }: { u
     usd.addEventListener('cameraschange', update);
     return () => usd.removeEventListener('cameraschange', update);
   }, [usd]);
-  /** A camera of the model as the free view: the orbit target where the model's centre is along its view. */
-  const jump = (c: StageCamera) => {
-    usd.three.root.updateMatrixWorld();
-    const s = new Box3().setFromObject(usd.three.root).getBoundingSphere(new Sphere());
-    usd.view = cameraView(c, usd.three.root.matrixWorld, s.center, Math.max(s.radius, 1e-6));
-  };
   const save = () => {
     onSave({ id: crypto.randomUUID(), name: name.trim() || nextName(views), view: usd.view });
     setName('');
@@ -40,7 +33,7 @@ export function ViewsMenu({ usd, model, disabled, views, onSave, onRemove }: { u
           <div className="menu__separator" />
           <div className="menu__section">In the model</div>
           {cameras.length
-            ? cameras.map((c) => <button key={c.path} className="menu__item" type="button" title={c.path} onClick={() => { jump(c); close(); }}><span>{c.path.slice(c.path.lastIndexOf('/') + 1)}</span></button>)
+            ? cameras.map((c) => <button key={c.path} className="menu__item" type="button" title={c.path} onClick={() => { usd.view = stageView(usd.three.root, c); close(); }}><span>{c.path.slice(c.path.lastIndexOf('/') + 1)}</span></button>)
             : <p className="views__note text-muted">No cameras</p>}
           <div className="menu__separator" />
           <div className="menu__section">Saved</div>

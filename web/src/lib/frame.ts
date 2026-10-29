@@ -96,25 +96,34 @@ function axes(d: Vec3): [Vec3, Vec3, Vec3] {
   return [x, cross(z, x), z];
 }
 
+/** Points (world) as frameView reads them: calls `f` with each one; frameView calls it twice. */
+export type Points = (f: (x: number, y: number, z: number) => void) => void;
+/** A box's 8 corners. */
+export const cornersOf = (b: Box): Points => (f) => {
+  for (let i = 0; i < 8; i++) f(i & 1 ? b.max[0] : b.min[0], i & 2 ? b.max[1] : b.min[1], i & 4 ? b.max[2] : b.min[2]);
+};
+
 /**
- * The view along `dir` (target to eye, world, unit) that fits `box` (world) into a shot of the lens's aspect: every
- * corner inside the frame shrunk by `margin`, the widest on its edge. A box fit: a 60 × 12 m facade fills a 5:1 shot,
- * where the viewer's sphere fit fills 16 % of it. Aimed at the box centre; an orthographic view stands 2 R back (R: half
- * the box diagonal). `cut`: a near plane just in front of the box (5 % of R), a cutaway that clips what stands between.
+ * The view along `dir` (target to eye, world, unit) that fits `pts` (world) into a shot of the lens's aspect: every
+ * point inside the frame shrunk by `margin`, the widest on its edge. A tight fit: a 60 × 12 m facade fills a 5:1 shot,
+ * where the viewer's sphere fit fills 16 % of it, and a facade at an angle to the axes is fitted by its own points, not
+ * its axis-aligned box. Aimed at the points' box centre; an orthographic view stands 2 R back (R: half that box's
+ * diagonal). `cut`: a near plane just in front of the nearest point (5 % of R), a cutaway that clips what stands between.
  */
-export function frameView(box: Box, dir: Vec3, { fov, aspect, projection, margin = 1.08 }: Lens): { view: ViewState; cut: number } {
-  const [x, y, z] = axes(dir), c: Vec3 = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
-  const R = Math.hypot(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]) / 2;
-  if (!(R > 0)) throw new Error('box: no extent; give min < max on at least one axis');
+export function frameView(pts: Points, dir: Vec3, { fov, aspect, projection, margin = 1.08 }: Lens): { view: ViewState; cut: number } {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  pts((...p) => { for (let j = 0; j < 3; j++) { lo[j] = Math.min(lo[j], p[j]); hi[j] = Math.max(hi[j], p[j]); } });
+  const [x, y, z] = axes(dir), c: Vec3 = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+  const R = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2;
+  if (!(R > 0 && R < Infinity)) throw new Error('box: no extent; give min < max on at least one axis');
   const tV = Math.tan((fov * RAD) / 2), tH = tV * aspect, ortho = projection === 'orthographic';
-  let D = 0, h = 0, front = -Infinity; // eye distance, half-height, the nearest corner's depth towards the eye
-  for (let i = 0; i < 8; i++) {
-    const q: Vec3 = [(i & 1 ? box.max[0] : box.min[0]) - c[0], (i & 2 ? box.max[1] : box.min[1]) - c[1], (i & 4 ? box.max[2] : box.min[2]) - c[2]];
-    const px = Math.abs(dot(q, x)), py = Math.abs(dot(q, y)), pz = dot(q, z);
+  let D = 0, h = 0, front = -Infinity; // eye distance, half-height, the nearest point's depth towards the eye
+  pts((...p) => {
+    const q: Vec3 = [p[0] - c[0], p[1] - c[1], p[2] - c[2]], px = Math.abs(dot(q, x)), py = Math.abs(dot(q, y)), pz = dot(q, z);
     front = Math.max(front, pz);
     if (ortho) h = Math.max(h, margin * py, (margin * px) / aspect);
     else D = Math.max(D, pz + (margin * px) / tH, pz + (margin * py) / tV);
-  }
+  });
   if (ortho) D = 2 * R;
   else h = D * tV;
   return { view: { eye: [c[0] + D * z[0], c[1] + D * z[1], c[2] + D * z[2]], target: c, fov, projection, height: h }, cut: Math.max(D - front - 0.05 * R, 1e-3 * R) };
@@ -137,7 +146,7 @@ export function describeView(v: ViewState, north: number, mpu: number): string {
     from = `seen from the ${point(b)} (${Math.round(b) % 360}°), ${Math.round(Math.abs(up))}° ${up < 0 ? 'below' : 'above'} the horizon, looking ${point(b + 180)}`;
   }
   const lens = v.projection === 'orthographic' ? `orthographic ${fmtNum(2 * v.height * mpu)} m high` : `perspective ${fmtNum(v.fov)}° vertical`;
-  return `${from}; ${lens}; aimed at (${toModel(v.target, mpu).map((t) => t.toFixed(1)).join(', ')}) m`;
+  return `${from}; ${lens}; aimed at (${toModel(v.target, mpu).map((t) => (Math.round(10 * t) / 10 + 0).toFixed(1)).join(', ')}) m`; // + 0: no -0.0
 }
 
 /** A receiver as findCritical reads it: its rows [first, first + count) of the result, its ObjMesh (model metres) and
@@ -150,6 +159,13 @@ export interface Cluster {
   view: ViewState; near: number; // a 16:10 shot of it from where it faces (world, as the views); near: its cutaway
 }
 const SHOT: Lens = { fov: 45, aspect: 16 / 10, projection: 'perspective' }; // the viewer's lens, the default 1280 × 800 shot
+/** An element's points (model metres): a face's corners; a vertex stands for its patch, ± half its side on each axis. */
+function pointsOf(m: CriticalMesh, i: number, vertex: boolean): Vec3[] {
+  const P = m.positions, at = (v: number): Vec3 => [P[3 * v], P[3 * v + 1], P[3 * v + 2]];
+  if (!vertex) return [at(m.indices[3 * i]), at(m.indices[3 * i + 1]), at(m.indices[3 * i + 2])];
+  const p = at(i), r = Math.sqrt(m.w[i]) / 2;
+  return [0, 1, 2].flatMap((j) => [-r, r].map((s) => p.map((t, k) => (k === j ? t + s : t)) as Vec3));
+}
 
 /**
  * Where a result is out of range: the elements of one column under `below` or over `above`, grouped by mesh × the way
@@ -163,13 +179,13 @@ export function findCritical(o: {
   values: Float64Array[]; col: number; column: string; on: 'faces' | 'vertices'; meshes: readonly CriticalMesh[];
   north: number; mpu: number; below?: number; above?: number; limit?: number;
 }): { problemArea: number; problemShare: number; clusters: Cluster[] } {
-  const flip = o.column.endsWith('_back') ? -1 : 1, all = new Map<string, number>(); // area per mesh × facing
-  const groups = new Map<string, { m: CriticalMesh; key: string; facing: Facing; side: 'below' | 'above'; n: number; a: number; av: number; worst: number; ap: Vec3; an: Vec3; lo: Vec3; hi: Vec3 }>();
+  const flip = o.column.endsWith('_back') ? -1 : 1, all = new Map<string, number>(), vertex = o.on === 'vertices'; // area per mesh × facing
+  const groups = new Map<string, { m: CriticalMesh; key: string; facing: Facing; side: 'below' | 'above'; els: number[]; a: number; av: number; worst: number; ap: Vec3; an: Vec3; lo: Vec3; hi: Vec3 }>();
   let total = 0, problem = 0;
   o.meshes.forEach((m, k) => {
-    const P = m.positions, I = m.indices, at = (v: number): Vec3 => [P[3 * v], P[3 * v + 1], P[3 * v + 2]];
+    const P = m.positions, I = m.indices;
     let vn: Float64Array | null = null; // per vertex: Σ of its faces' crosses
-    if (o.on === 'vertices') {
+    if (vertex) {
       vn = new Float64Array(P.length);
       for (let f = 0; f < I.length / 3; f++) {
         const n = faceCross(P, I, f);
@@ -185,11 +201,10 @@ export function findCritical(o: {
       const side = o.below !== undefined && v < o.below ? 'below' : o.above !== undefined && v > o.above ? 'above' : null;
       if (!side) continue;
       problem += a;
-      // a face's corners; a vertex stands for its patch: ± half its side as a square
-      const pts = vn ? [at(i)] : [at(I[3 * i]), at(I[3 * i + 1]), at(I[3 * i + 2])], r = vn ? Math.sqrt(a) / 2 : 0;
+      const pts = pointsOf(m, i, vertex);
       let g = groups.get(key + side);
-      if (!g) groups.set(key + side, (g = { m, key, facing, side, n: 0, a: 0, av: 0, worst: v, ap: [0, 0, 0], an: [0, 0, 0], lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity] }));
-      g.n++;
+      if (!g) groups.set(key + side, (g = { m, key, facing, side, els: [], a: 0, av: 0, worst: v, ap: [0, 0, 0], an: [0, 0, 0], lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity] }));
+      g.els.push(i);
       g.a += a;
       g.av += a * v;
       g.worst = side === 'below' ? Math.min(g.worst, v) : Math.max(g.worst, v);
@@ -197,19 +212,22 @@ export function findCritical(o: {
         g.an[j] += a * n[j];
         for (const p of pts) {
           g.ap[j] += (a * p[j]) / pts.length;
-          g.lo[j] = Math.min(g.lo[j], p[j] - r);
-          g.hi[j] = Math.max(g.hi[j], p[j] + r);
+          g.lo[j] = Math.min(g.lo[j], p[j]);
+          g.hi[j] = Math.max(g.hi[j], p[j]);
         }
       }
     }
   });
   const clusters = [...groups.values()].filter((g) => g.a >= 0.005 * problem).sort((p, q) => q.a - p.a).slice(0, o.limit ?? 12).map((g): Cluster => {
-    const box: Box = { min: g.lo, max: g.hi }, mean: Vec3 = [g.an[0] / g.a, g.an[1] / g.a, g.an[2] / g.a];
-    const { view, cut } = frameView(boxToWorld(box, o.mpu), viewDir('auto', o.north, mean), SHOT);
+    const mean: Vec3 = [g.an[0] / g.a, g.an[1] / g.a, g.an[2] / g.a];
+    // framed by the group's own points: a box around a wall at an angle to the axes juts out in front of it, and its
+    // cutaway would stop short of what stands close in front
+    const each: Points = (f) => { for (const i of g.els) for (const p of pointsOf(g.m, i, vertex)) f(...toWorld(p, o.mpu)); };
+    const { view, cut } = frameView(each, viewDir('auto', o.north, mean), SHOT);
     return {
       mesh: g.m.id, name: g.m.name, path: g.m.path, facing: g.facing, side: g.side,
-      elements: g.n, area: g.a, share: g.a / all.get(g.key)!, mean: g.av / g.a, worst: g.worst,
-      centroid: [g.ap[0] / g.a, g.ap[1] / g.a, g.ap[2] / g.a], box, normal: unit(g.an), view, near: cut,
+      elements: g.els.length, area: g.a, share: g.a / all.get(g.key)!, mean: g.av / g.a, worst: g.worst,
+      centroid: [g.ap[0] / g.a, g.ap[1] / g.a, g.ap[2] / g.a], box: { min: g.lo, max: g.hi }, normal: unit(g.an), view, near: cut,
     };
   });
   return { problemArea: problem, problemShare: total ? problem / total : 0, clusters };

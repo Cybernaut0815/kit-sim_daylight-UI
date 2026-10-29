@@ -3,7 +3,7 @@
 // `three.root` (rotated for Z-up stages).
 // Lens conventions: Hydra hands camera lenses over at 0.1 × the authored value (scene units); only ratios matter for a
 // perspective field of view.
-import { Matrix4, Vector3 } from 'three';
+import { Box3, Matrix4, Sphere, Vector3, type Object3D } from 'three';
 import type { CameraParams, ViewState } from 'usd-viewer';
 
 /** A view saved in the app: a free view under a name. */
@@ -30,6 +30,14 @@ export function cameraView(camera: StageCamera, root: Matrix4, centre: Vector3, 
     projection: ortho ? 'orthographic' : 'perspective',
     height: ortho ? p.verticalAperture / 2 : depth * (lens ? ratio : 0.4),
   };
+}
+
+/** A camera of the stage under `root` (a viewer's three.root) as that viewer's free view: the orbit target where the
+ *  model's centre is along its view (the Views menu, set_camera). */
+export function stageView(root: Object3D, camera: StageCamera): ViewState {
+  root.updateMatrixWorld();
+  const s = new Box3().setFromObject(root).getBoundingSphere(new Sphere());
+  return cameraView(camera, root.matrixWorld, s.center, Math.max(s.radius, 1e-6));
 }
 
 /** A view as link() sees it: a <usd-viewer>'s free view and its per-frame hooks. */

@@ -2,7 +2,7 @@
 // its own USD viewer, its meshes converted once), the per-mesh conversion cache, the runs (one batch per click or Auto,
 // the models one after another), the comparison (one colour scale over every model), the theme mode and the view
 // preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras).
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Object3D } from 'three';
 import { runRemote, type ObjMesh, type RemoteManifest } from 'daylight-mesh';
 import type { LocalFile } from 'usd-viewer';
@@ -17,6 +17,8 @@ import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, unionRange, unitFor, vertexAreas } from './lib/result';
 import { link, type SavedView } from './lib/views';
+import { settled } from './mcp/bridge';
+import { UUID, connect, type Ctl } from './mcp/tools';
 import { InfoButton } from './panels/InfoPanel';
 import { LocationPanel } from './panels/LocationPanel';
 import { MaterialsPanel } from './panels/MaterialsPanel';
@@ -42,9 +44,9 @@ const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: '
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3; every model alike), two or three views
 // side by side or stacked, linked cameras.
 const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true }, MIN_W = 240, MAX_W = 640;
+export type UiPrefs = typeof UI;
 // Which page this is: index.html declares data-kit (kit-ui), zha.html data-brand (zha-ui).
 const KIT = !!document.documentElement.dataset.kit;
-const UUID = /[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -57,7 +59,7 @@ const objOf = (c: Conv) => (c.obj ??= c.make!());
 /** A view's model as the app holds it: the viewer's object per row id, the model's own names by prim path (glb / gltf /
  *  obj), a load in progress or its problem, and the open counter (bumped per opened model: the tree resets and the camera
  *  frames; a variant switch keeps both). */
-interface Pane { meshes: ReadonlyMap<string, Object3D>; names: ReadonlyMap<string, string>; loading: boolean; loadError: string | null; stage: number }
+export interface Pane { meshes: ReadonlyMap<string, Object3D>; names: ReadonlyMap<string, string>; loading: boolean; loadError: string | null; stage: number }
 const NO_PANE: Pane = { meshes: new Map(), names: new Map(), loading: false, loadError: null, stage: 0 };
 const NO_STATS: ReadonlyMap<string, TextureStats | null> = new Map();
 
@@ -107,10 +109,10 @@ export default function App() {
   }, [mode]);
 
   const nextMode: ThemeMode = mode === 'auto' ? 'light' : mode === 'light' ? 'dark' : 'auto';
-  const cycleTheme = () => {
-    document.documentElement.dataset.theme = nextMode === 'auto' ? system : nextMode; // before React paints, so cssVar() reads the new tokens in the same commit
-    try { if (nextMode === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, nextMode); } catch { /* storage blocked */ }
-    setMode(nextMode);
+  const setTheme = (m: ThemeMode) => {
+    document.documentElement.dataset.theme = m === 'auto' ? system : m; // before React paints, so cssVar() reads the new tokens in the same commit
+    try { if (m === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, m); } catch { /* storage blocked */ }
+    setMode(m);
   };
 
   // Of each open stage, by slot: what a re-read needs, and the files as picked (a USD download packs them).
@@ -263,6 +265,7 @@ export default function App() {
     const { positions, indices } = objOf(c);
     return on === 'faces' ? (c.areas ??= faceAreas(positions, indices)) : (c.vareas ??= vertexAreas(positions, indices));
   }, []);
+  const meshOf = useCallback((id: string) => { const c = conv.current.get(id); return c && objOf(c); }, []); // a row's mesh as run (model metres, Z up)
 
   const s = state.settings;
   // Each run mesh's optics per face slot, and the textures its materials still wait for (the diffuse ones only while the
@@ -434,6 +437,19 @@ export default function App() {
     : null;
   const busyBar = state.models.some((m) => inFlight(m.run)) && !autoOn; // a click batch: the button waits and Cancel shows; Auto runs do not flash them
 
+  // The app as the tools in mcp/tools.ts drive it, rewritten on every commit, which also wakes the tools waiting for one;
+  // the bridge polls the server for their calls while the page lives, after picking up a hidden session.
+  const ctl = useRef<Ctl>(null!);
+  useLayoutEffect(() => {
+    ctl.current = {
+      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, views, setViews, optics, materialsReady, per, shown, scale, domain,
+      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, weightsFor, meshOf,
+      busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
+    };
+    settled();
+  });
+  useEffect(() => connect(() => ctl.current), []);
+
   return (
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
       <header className="app-bar">
@@ -446,7 +462,7 @@ export default function App() {
         <span className="app-bar__spacer" />
         <InfoButton />
         <a className="btn btn--ghost" href="/docs" target="_blank" rel="noreferrer" title="API documentation (Swagger UI); machine-readable at /openapi.json">API</a>
-        <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={cycleTheme}>
+        <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={() => setTheme(nextMode)}>
           <Icon name="contrast" />
         </button>
       </header>

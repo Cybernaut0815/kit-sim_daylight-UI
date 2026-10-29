@@ -46,6 +46,9 @@ export function underIndex(rows: readonly Pathed[]): Map<string, string[]> {
   return new Map([...index].map(([path, ids]) => [path, [...ids]]));
 }
 
+/** A prim search as typed ('type:Mesh roof') -> the core's find() arguments: the name words, the prim type ('' = any). */
+export const primQuery = (q: string): [text: string, type: string] => [q.replace(/(?:^|\s)type:\S+/, '').trim(), /(?:^|\s)type:(\S+)/.exec(q)?.[1] ?? ''];
+
 /** Prim path -> the id of the row that is exactly that prim (or one of its copies). */
 export function meshAt(rows: readonly Pathed[]): Map<string, string> {
   return new Map(rows.flatMap((r) => (r.paths ?? [r.path]).map((path) => [path, r.id] as const)));
