@@ -16,7 +16,7 @@
     "@gitzhacode/zha-ui-css": "github:GitZHACODE/zha-ui#css-v0.1.4",
     "@gltf-transform/core": "^4.5.0",
     "@photostructure/tz-lookup": "^11.7.0",
-    "kit-ui": "github:Cybernaut0815/kit-UI_template#v0.2.0",
+    "kit-ui": "github:Cybernaut0815/kit-UI_template#v0.2.1",
     "maplibre-gl": "^6.14.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -194,6 +194,8 @@ if (on) await part('walk', async () => {
   const specs = [...guide.text.matchAll(/```json([\s\S]*?)```/g)]
     .flatMap((m) => { try { return [JSON.parse(m[1])]; } catch { return []; } }).filter((s) => Array.isArray(s.models) && Array.isArray(s.blocks));
   check("guide 'report' -> two example specs", specs.length === 2, specs.map((s) => `${s.id} (${s.models.join(', ')})`).join('; '));
+  check("guide 'report' carries the kit-report skill", /^# kit-report$/m.test(guide.text), `${guide.text.length} characters`);
+  await step("guide 'kit-ui' -> the skill and the class reference", 'guide', { topic: 'kit-ui' }, (r) => !r.err && /^# kit-ui$/m.test(r.text) && /^# kit-ui reference$/m.test(r.text));
   for (const spec of specs) {
     await step(`save_report ${spec.id} -> valid, ready`, 'save_report', { spec }, (r) => !r.err && r.json?.ready === true);
     const gen = await again('generate_report', { id: spec.id }, (r) => r.json?.status === 'generating'), p = gen.json ?? {}, u = p.url && new URL(p.url);
