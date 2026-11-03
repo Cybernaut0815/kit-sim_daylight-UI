@@ -18,7 +18,7 @@ import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, pho
 import { gradientFor, type Scale } from '../lib/gradients';
 import { DEFAULT_KEY, GLASS_KEY, PRESETS, editOptics, type Optics, type resolveOptics } from '../lib/optics';
 import { QUANTITY_HELP, SIDE_HELP, fmtNum, roundNum, roundPct, summarize, unitFor, type Summary } from '../lib/result';
-import { NONE, toStage, type Section } from '../lib/section';
+import { NONE, describe, given, toStage, type Bounds, type Section } from '../lib/section';
 import { dayBounds, parseHoy, sunAt } from '../lib/sun';
 import { fmtClock, fmtTime, yearOf } from '../lib/time';
 import { idsUnder, primQuery, underIndex } from '../lib/tree';
@@ -28,13 +28,14 @@ import { changed, outcome, type Pdf } from '../report/generate';
 import { parseReports, readiness, validateSpec, type AppModel, type AppView, type Draft, type Report, type Stored } from '../report/spec';
 import { QUANTITIES, inFlight, parseSettings, reducer, serializeSettings, type Action, type Model, type ObjectRow, type RunResult, type Settings, type State, type Station, type TimePoint } from '../store';
 import { selectionFill } from '../viewer/Viewer';
+import { boundsOf } from '../viewer/Views';
 import { capture } from '../viewer/capture';
 import type { ExportMode, Format } from '../viewer/download';
 import type { Slot } from '../viewer/usd';
-import mcp from '../../../server/mcp.json';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
 import { HEADLESS, exclusive, fail, startBridge, until, type CallToolResult } from './bridge';
+import { TOOLS, check } from './schema';
 // kit-ui's skills as its package ships them (from v0.2.1; none in an older one): the 'report' and 'kit-ui' topics
 const SKILLS = import.meta.glob<string>('/node_modules/kit-ui/skills/*/*.md', { query: '?raw', import: 'default', eager: true, exhaustive: true });
 const skill = (file: string) => Object.entries(SKILLS).find(([k]) => k.endsWith(`/skills/${file}`))?.[1];
@@ -116,58 +117,6 @@ export function connect(c: () => Ctl): () => void {
   return startBridge((name, args) => call(name, args, c));
 }
 
-// ---------------------------------------------------------------------------------------------- arguments
-interface Schema {
-  type?: string | string[]; enum?: unknown[]; anyOf?: Schema[]; pattern?: string; minimum?: number; maximum?: number;
-  minLength?: number; maxLength?: number; minItems?: number; maxItems?: number; items?: Schema;
-  properties?: Record<string, Schema>; required?: string[]; additionalProperties?: boolean;
-}
-export const TOOLS = mcp.tools as unknown as { name: string; inputSchema: Schema; annotations?: { readOnlyHint?: boolean } }[];
-const is = (t: string, v: unknown) =>
-  t === 'integer' ? Number.isInteger(v) : t === 'number' ? Number.isFinite(v) : t === 'array' ? Array.isArray(v)
-    : t === 'object' ? !!v && typeof v === 'object' && !Array.isArray(v) : t === 'null' ? v === null : typeof v === t;
-/** Each inputSchema pattern in words (mcp.test.ts: every pattern of mcp.json has them). */
-export const WORDS: Record<string, string> = {
-  '^\\d{4}-\\d{2}-\\d{2}$': 'a date, YYYY-MM-DD', '^\\d{2}:\\d{2}$': "a time, 'HH:MM'", '^/': 'a prim path, starting with /', '^[a-z0-9-]{1,64}$': '1 to 64 lowercase letters, digits or -',
-  '^#[0-9A-Fa-f]{6}$': "a colour, '#rrggbb'", '^[A-Za-z0-9_-]{1,64}$': '1 to 64 letters, digits, _ or -',
-  '^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$': "a result column such as 'sunhours_front'",
-};
-const span = (lo?: number, hi?: number) => (lo === hi ? `${lo}` : lo !== undefined && hi !== undefined ? `${lo} to ${hi}` : lo !== undefined ? `at least ${lo}` : `at most ${hi}`);
-/** A span of a count, its noun agreeing with the last number: 'at least 1 item', '1 to 4 items'. */
-const count = (lo: number | undefined, hi: number | undefined, noun: string) => `${span(lo, hi)} ${noun}${(hi ?? lo) === 1 ? '' : 's'}`;
-
-/** What is wrong with `v` under a tool's inputSchema (the parts mcp.json uses), by its path, e.g. 'time.step: one of
- *  10, 15, 30, 60'; '' when nothing. */
-export function check(s: Schema, v: unknown, at = 'arguments'): string {
-  const no = (what: string) => `${at}: ${what}`, types = s.type === undefined ? [] : [s.type].flat();
-  if (types.length && !types.some((t) => is(t, v))) return no(s.enum ? `one of ${s.enum.join(', ')}` : types.join(' or '));
-  if (s.enum && !s.enum.includes(v)) return no(`one of ${s.enum.join(', ')}`);
-  if (s.anyOf) {
-    const why = s.anyOf.map((x) => check(x, v, at)); // the alternative of the value's type says what is wrong
-    if (why.every(Boolean)) return why.find((_, i) => [s.anyOf![i].type ?? []].flat().some((t) => is(t, v))) ?? why[0];
-  }
-  if (typeof v === 'string') {
-    if (s.pattern && !new RegExp(s.pattern).test(v)) return no(WORDS[s.pattern] ?? `as ${s.pattern}`);
-    if (v.length < (s.minLength ?? 0) || v.length > (s.maxLength ?? Infinity)) return no(count(s.minLength, s.maxLength, 'character'));
-  }
-  if (typeof v === 'number' && (v < (s.minimum ?? -Infinity) || v > (s.maximum ?? Infinity))) return no(span(s.minimum, s.maximum));
-  if (Array.isArray(v)) {
-    if (v.length < (s.minItems ?? 0) || v.length > (s.maxItems ?? Infinity)) return no(count(s.minItems, s.maxItems, 'item'));
-    for (const [i, x] of v.entries()) { const w = s.items && check(s.items, x, `${at}[${i}]`); if (w) return w; }
-  }
-  if (s.properties && is('object', v)) {
-    const o = v as Record<string, unknown>, sub = (k: string) => (at === 'arguments' ? k : `${at}.${k}`);
-    for (const k of s.required ?? []) if (o[k] === undefined) return `${sub(k)}: required`;
-    for (const [k, x] of Object.entries(o)) {
-      const p = Object.hasOwn(s.properties, k) ? s.properties[k] : undefined;
-      if (!p && s.additionalProperties === false) return `${sub(k)}: not an argument here (${Object.keys(s.properties).join(', ') || 'none'})`;
-      const w = p && check(p, x, sub(k));
-      if (w) return w;
-    }
-  }
-  return '';
-}
-
 // ---------------------------------------------------------------------------------------------- helpers
 /** The model in slot `l` (default the active one); a refusal names `field`, the argument that gave the letter. */
 function modelOf(x: Ctl, l?: string, field = 'model'): Model {
@@ -189,6 +138,20 @@ const display = (x: Ctl) => ({
   active: letter(x.state.active), column: x.shown, colourBy: x.state.colourBy, highlight: x.state.bin, theme: x.theme,
   sunPath: x.ui.sunPath, sunScale: x.sunScale, split: x.ui.split, link: x.ui.link, auto: x.ui.auto, section: x.section,
 });
+/** Section boxes round prims: the bounds (model metres) of what is drawn at or under them in model `l` (default the
+ *  active one). */
+const boundsIn = (x: Ctl, l?: string): Bounds => (paths, at) => {
+  const m = loadedOf(x, l, at), { el } = x.viewer(m.slot), objs = paths.map((p) => el.three.objectsFor(p)), k = objs.findIndex((o) => !o.length);
+  if (k >= 0) return `${at}[${k}]: nothing drawn at or under ${paths[k]} in model ${letter(m.slot)}, the active one; find prims with model_tree`;
+  return boundsOf(objs.flat(), el.stage?.metersPerUnit ?? 1) ?? `${at}: what is drawn there has no extent`;
+};
+/** set_display's and screenshot's section (its schema checked) as the app keeps it, boxes round prims of model `l`
+ *  (default the active one); a problem throws, naming its path. */
+function sectionArg(x: Ctl, v: Args, l?: string): Section {
+  const s = given(v, 'section', boundsIn(x, l));
+  if (Array.isArray(s)) throw new Error(s.join('; '));
+  return s;
+}
 
 export const UUID = /[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g;
 /** A run key with its mesh ids (new per page load and per re-read) as the rows' prim paths: equal inputs, equal key. */
@@ -939,6 +902,7 @@ export const HANDLERS: Record<string, Handler> = {
       if (a.column && !ref!.columns.includes(a.column)) throw new Error(`column: not in the result (${ref!.columns.join(', ')})`);
       if (a.highlight && !(a.highlight[0] < a.highlight[1])) throw new Error('highlight: [lo, hi] with lo < hi');
       const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
+      const section = a.section && sectionArg(x, a.section, a.active); // a view's look: no run key holds it, results stay fresh
       flushSync(() => {
         if (a.active) x.dispatch({ type: 'ACTIVE', slot: LETTERS.indexOf(a.active) });
         if (a.column) x.dispatch({ type: 'COLUMN', column: ref!.columns.indexOf(a.column) });
@@ -947,6 +911,7 @@ export const HANDLERS: Record<string, Handler> = {
         if (a.theme) x.setTheme(a.theme);
         if (a.sunScale !== undefined) x.setSunScale(a.sunScale);
         if (Object.keys(ui).length) x.setUi((u) => ({ ...u, ...ui }));
+        if (section) x.setSection(section);
       });
       return ok(display(c()));
     });
@@ -996,8 +961,9 @@ export const HANDLERS: Record<string, Handler> = {
     return exclusive(async () => {
       const x = c(), ms = ((a.models ?? [letter(x.state.active)]) as string[]).map((l, i) => loadedOf(x, l, a.models ? `models[${i}]` : 'models')), ref = x.state.models.find((m) => m.result)?.result;
       if (a.column && !ref?.columns.includes(a.column)) throw new Error(`column: ${ref ? `not in the results (${ref.columns.join(', ')})` : 'no result yet; run first'}`);
-      // the shot's own column, colouring, sun path and grid, restored after it
-      return staged(c, ms.map((m) => m.slot), { column: a.column, colourBy: a.colourBy, sunPath: a.sunPath, grid: a.grid }, async () => {
+      const section: Section | null | undefined = a.section && sectionArg(x, a.section), words = describe(section === undefined ? x.section : section ?? NONE);
+      // the shot's own column, colouring, sun path, grid and section, restored after it
+      return staged(c, ms.map((m) => m.slot), { column: a.column, colourBy: a.colourBy, sunPath: a.sunPath, grid: a.grid, section }, async () => {
         const y = c(), sc = y.scale, north = y.state.settings.sim.north, out: CallToolResult['content'] = [];
         for (const m of ms) {
           const { el } = y.viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1, L = letter(m.slot);
@@ -1020,7 +986,7 @@ export const HANDLERS: Record<string, Handler> = {
             : `${y.shown} in ${unit}, ${sc!.gradient.label} from ${fmtNum(sc!.vmin)} (low) to ${fmtNum(sc!.vmax)} (high)${sc!.lo !== null ? `; under ${fmtNum(sc!.lo)} ${sc!.below}` : ''}${sc!.hi !== null ? `; over ${fmtNum(sc!.hi)} ${sc!.above}` : ''}; meshes without a value plain grey`;
           out.push({ type: 'image', data, mimeType: 'image/jpeg' }, {
             type: 'text',
-            text: `Model ${L} (${m.name}): ${w} x ${h} px${w !== W || h !== H ? ` (${W} x ${H} asked; images come at most ${LONG} px on the long side${size.reshaped ? ' and at least 16 px on the short one, so the aspect differs' : ''}${w !== size.width ? ', fewer to keep the reply under 800 KB' : ''})` : ''}, JPEG quality ${q.toFixed(2)}. Camera: ${describeView(view, north, mpu)}; ${fmtNum(reach(view, mpu))} m away${a.near !== undefined ? `; geometry nearer than ${fmtNum(a.near)} m cut away` : fr ? `; near ${roundNum(fr.cut * mpu)} would cut away what stands in front of the frame` : ''}. Colours: ${colours}.`,
+            text: `Model ${L} (${m.name}): ${w} x ${h} px${w !== W || h !== H ? ` (${W} x ${H} asked; images come at most ${LONG} px on the long side${size.reshaped ? ' and at least 16 px on the short one, so the aspect differs' : ''}${w !== size.width ? ', fewer to keep the reply under 800 KB' : ''})` : ''}, JPEG quality ${q.toFixed(2)}. Camera: ${describeView(view, north, mpu)}; ${fmtNum(reach(view, mpu))} m away${a.near !== undefined ? `; geometry nearer than ${fmtNum(a.near)} m cut away` : fr ? `; near ${roundNum(fr.cut * mpu)} would cut away what stands in front of the frame` : ''}. Colours: ${colours}. Section: ${words}.`,
           });
         }
         return { content: out };
@@ -1056,7 +1022,7 @@ export const HANDLERS: Record<string, Handler> = {
 
   async save_report(a, c) {
     return exclusive(async () => {
-      const d = validateSpec(a.spec, appView(c()));
+      const d = validateSpec(a.spec, appView(c()), boundsIn(c()));
       if (Array.isArray(d)) return fail(`spec: ${d.length} problem${d.length > 1 ? 's' : ''}; fix ${d.length > 1 ? 'them' : 'it'} and save again:\n${d.join('\n')}`);
       const old = (await storedReports()).find((e) => e.id === d.id)?.spec, since: unknown = a.updated ?? a.spec.updated; // get_report's spec carries its updated
       if (old && since !== old.updated) {
@@ -1110,14 +1076,15 @@ const textOf = (r: CallToolResult) => r.content.flatMap((b) => (b.type === 'text
 
 /** The hidden instance, after a call that changed something: a step kept so that it replays alike (the model it acted on
  *  named, as the active one may differ then; set_camera as the view it gave, as a frame fits this page's view and the
- *  app's has another shape), and the session sent (PUT /session) before the reply. */
+ *  app's has another shape; set_display's section as it gave it, boxes round prims as footprints), and the session sent
+ *  (PUT /session) before the reply. */
 async function record(name: string, args: Args, res: CallToolResult, active: number, c: () => Ctl): Promise<void> {
   const tool = TOOLS.find((t) => t.name === name);
   if (res.isError || !tool || tool.annotations?.readOnlyHint) return;
   if (STEPS.has(name)) {
-    const reply = JSON.parse(textOf(res)) as { model?: string; view?: unknown };
+    const reply = JSON.parse(textOf(res)) as { model?: string; view?: unknown; section?: unknown };
     const model: string | undefined = name === 'open_model' ? reply.model : args.model ?? (tool.inputSchema.properties?.model ? letter(active) : undefined);
-    steps.push({ name, arguments: { ...(name === 'set_camera' ? { view: reply.view } : args), ...(model ? { model } : {}) } });
+    steps.push({ name, arguments: { ...(name === 'set_camera' ? { view: reply.view } : args.section ? { ...args, section: reply.section } : args), ...(model ? { model } : {}) } });
   }
   const s = c().state, w = s.settings.weather, epw = w.source === 'upload' && w.file ? pathOf.get(w.file) : undefined;
   const session: Session = { settings: serializeSettings(s.settings), subdiv: c().ui.subdiv, ...(epw ? { epw } : {}), steps, ran: s.models.some((m) => m.result || inFlight(m.run)) };

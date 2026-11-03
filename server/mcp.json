@@ -1,5 +1,5 @@
 {
-  "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, or in a hidden instance when no tab is open (opening the app takes that session over). Start with app_state. Read guide 'daylight' before interpreting results. Conventions: models by letter A-D (up to four design options sharing site, weather, time and settings; default the active model); building parts by USD prim path ('/' = all; find them with model_tree); times 'HH:MM' local standard time, dates YYYY-MM-DD; azimuth in degrees clockwise from true north; lengths in m and areas in m² in model coordinates (metres, Z up). Numbers come rounded as the app shows them: quote numbers only from tool output. Changed inputs make results stale: run. Long steps answer 'running' or 'generating': call again. Reports: read guide 'report', then save_report, then generate_report; the user edits report charts and cameras in the app and regenerates the PDF from its Reports menu.",
+  "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, or in a hidden instance when no tab is open (opening the app takes that session over). Start with app_state. Read guide 'daylight' before interpreting results. Conventions: models by letter A-D (up to four design options sharing site, weather, time and settings; default the active model); building parts by USD prim path ('/' = all; find them with model_tree); times 'HH:MM' local standard time, dates YYYY-MM-DD; azimuth in degrees clockwise from true north; lengths in m and areas in m² in model coordinates (metres, Z up). Sections (set_display section: clipping planes and boxes) only cut the views: runs and results always use the whole model. Numbers come rounded as the app shows them: quote numbers only from tool output. Changed inputs make results stale: run. Long steps answer 'running' or 'generating': call again. Reports: read guide 'report', then save_report, then generate_report; the user edits report charts and cameras in the app and regenerates the PDF from its Reports menu.",
   "tools": [
     {
       "name": "app_state",
@@ -359,7 +359,7 @@
     {
       "name": "set_display",
       "title": "Set the display",
-      "description": "Change what the views show, as the run bar, Results panel and app bar do. Only the given fields change. active: the model the Model and Materials panels, Views and Download act on. column and colourBy: the result shown and whether surfaces are coloured by value or plain. highlight: fade everything outside [lo, hi] in the column's unit (null clears it; a run clears it too). Also the theme, the sun path and its size, two or three views side by side or stacked, linked cameras, and Run on every change (auto: every input change starts a run). Returns the display state.",
+      "description": "Change what the views show, as the run bar, Results panel and app bar do. Only the given fields change. active: the model the Model and Materials panels, Views and Download act on. column and colourBy: the result shown and whether surfaces are coloured by value or plain. highlight: fade everything outside [lo, hi] in the column's unit (null clears it; a run clears it too). Also the theme, the sun path and its size, two or three views side by side or stacked, linked cameras, and Run on every change (auto: every input change starts a run). section: the clipping planes and boxes every view shows, as the Section menu does, replacing the whole section ({planes: [], boxes: []} clears it); a box comes as its footprint with bottom and top, as a box (e.g. a find_critical group's, turned by rotation) or round prims of the active model. View only: runs, results, find_critical, charts and downloads use the whole model, and results stay fresh. Returns the display state, its section with every box as a footprint (set_display takes it back as it is).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -372,7 +372,58 @@
           "sunScale": { "type": "number", "minimum": 0.25, "maximum": 4, "description": "Sun path size over the fitted one (1 = fitted)." },
           "split": { "type": "string", "enum": ["side", "stacked"], "description": "Two or three views side by side or stacked (four always show 2 x 2)." },
           "link": { "type": "boolean", "description": "Linked cameras: every view follows the active one." },
-          "auto": { "type": "boolean", "description": "Run on every change." }
+          "auto": { "type": "boolean", "description": "Run on every change." },
+          "section": {
+            "type": "object",
+            "description": "Clipping planes and boxes every view shows (model coordinates, m, Z up), replacing the whole section. A point shows when every plane keeps it, no 'outside' box holds it and, with 'inside' boxes, one of them does.",
+            "properties": {
+              "on": { "type": "boolean", "description": "false keeps the planes and boxes but shows everything (default true)." },
+              "planes": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "Planes, each keeping the side its normal points to.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "point": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "A point on the plane [x, y, z]." },
+                    "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Towards the side kept [x, y, z]; [0, 0, -1] keeps what is below." }
+                  },
+                  "required": ["point", "normal"],
+                  "additionalProperties": false
+                }
+              },
+              "boxes": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "Vertical prisms, each by footprint with bottom and top, by box, or by paths.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "keep": { "type": "string", "enum": ["inside", "outside"], "description": "inside: show only what is in it; outside: cut it away." },
+                    "footprint": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 4, "maxItems": 4, "description": "4 corners [x, y] in order round it (any quad that does not cross itself)." },
+                    "bottom": { "type": "number", "description": "With footprint: its lowest z." },
+                    "top": { "type": "number", "description": "With footprint: its highest z." },
+                    "box": {
+                      "type": "object",
+                      "description": "Or a box, e.g. a find_critical group's.",
+                      "properties": {
+                        "min": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Lowest corner [x, y, z]." },
+                        "max": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Highest corner [x, y, z]." }
+                      },
+                      "required": ["min", "max"],
+                      "additionalProperties": false
+                    },
+                    "rotation": { "type": "number", "description": "With box: degrees counter-clockwise, seen from above, about its vertical centre line." },
+                    "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Or round what is drawn at or under these prims of the active model." },
+                    "margin": { "type": "number", "minimum": 0, "description": "With box or paths: added on every side, m (default: box 0, paths 1 % of their diagonal). A find_critical box round a wall or a roof is flat: give one." }
+                  },
+                  "required": ["keep"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "additionalProperties": false
       },
@@ -447,7 +498,7 @@
     {
       "name": "screenshot",
       "title": "Take a screenshot",
-      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). column, colourBy, sunPath and grid apply to this shot only. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side, and comes at a lower JPEG quality, then with fewer pixels, when the reply would pass about 800 KB (shared by the models' images). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours) and the size.",
+      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). column, colourBy, sunPath, grid and section apply to this shot only; section: clipping planes and boxes as set_display takes them, null for none, by default the views' own. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side, and comes at a lower JPEG quality, then with fewer pixels, when the reply would pass about 800 KB (shared by the models' images). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours), the size and the section.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -493,7 +544,58 @@
           "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column to colour by; default the shown one." },
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "Result colours or the model's own look; default the current." },
           "sunPath": { "type": "boolean", "description": "Draw the sun path; default as shown." },
-          "grid": { "type": "boolean", "description": "Draw the ground grid; default as shown." }
+          "grid": { "type": "boolean", "description": "Draw the ground grid; default as shown." },
+          "section": {
+            "type": ["object", "null"],
+            "description": "This shot's clipping planes and boxes, as set_display's section (model coordinates, m, Z up); null = none; default the views' own.",
+            "properties": {
+              "on": { "type": "boolean", "description": "false keeps the planes and boxes but shows everything (default true)." },
+              "planes": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "Planes, each keeping the side its normal points to.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "point": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "A point on the plane [x, y, z]." },
+                    "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Towards the side kept [x, y, z]; [0, 0, -1] keeps what is below." }
+                  },
+                  "required": ["point", "normal"],
+                  "additionalProperties": false
+                }
+              },
+              "boxes": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "Vertical prisms, each by footprint with bottom and top, by box, or by paths.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "keep": { "type": "string", "enum": ["inside", "outside"], "description": "inside: show only what is in it; outside: cut it away." },
+                    "footprint": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 4, "maxItems": 4, "description": "4 corners [x, y] in order round it (any quad that does not cross itself)." },
+                    "bottom": { "type": "number", "description": "With footprint: its lowest z." },
+                    "top": { "type": "number", "description": "With footprint: its highest z." },
+                    "box": {
+                      "type": "object",
+                      "description": "Or a box, e.g. a find_critical group's.",
+                      "properties": {
+                        "min": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Lowest corner [x, y, z]." },
+                        "max": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Highest corner [x, y, z]." }
+                      },
+                      "required": ["min", "max"],
+                      "additionalProperties": false
+                    },
+                    "rotation": { "type": "number", "description": "With box: degrees counter-clockwise, seen from above, about its vertical centre line." },
+                    "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Or round what is drawn at or under these prims of the active model." },
+                    "margin": { "type": "number", "minimum": 0, "description": "With box or paths: added on every side, m (default: box 0, paths 1 % of their diagonal). A find_critical box round a wall or a roof is flat: give one." }
+                  },
+                  "required": ["keep"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "additionalProperties": false
       },
@@ -516,7 +618,7 @@
     {
       "name": "save_report",
       "title": "Save a report",
-      "description": "Create or replace a report stored in the app, from a ReportSpec: read guide 'report' first (fields, rules, two examples). One model gives a report on that option, 2 to 4 models a comparison (the first is the reference). Blocks: text that quotes numbers copied from tool output, charts (ChartSpec), views (a camera from find_critical or set_camera, with near and aspect) and tables. The spec is validated (each problem names its path, e.g. blocks[3].caption) and stored with each model's current run: after a run with other inputs, save it again. When replacing, pass the `updated` you got from get_report: the save is refused when the user changed the report in the app since (re-read it and merge). Returns the id, updated and whether it is ready to generate; then call generate_report.",
+      "description": "Create or replace a report stored in the app, from a ReportSpec: read guide 'report' first (fields, rules, two examples). One model gives a report on that option, 2 to 4 models a comparison (the first is the reference). Blocks: text that quotes numbers copied from tool output, charts (ChartSpec), views (a camera from find_critical or set_camera, with near, aspect and a section of their own, as set_display takes one) and tables. The spec is validated (each problem names its path, e.g. blocks[3].caption) and stored with each model's current run: after a run with other inputs, save it again. When replacing, pass the `updated` you got from get_report: the save is refused when the user changed the report in the app since (re-read it and merge). Returns the id, updated and whether it is ready to generate; then call generate_report.",
       "inputSchema": {
         "type": "object",
         "properties": {

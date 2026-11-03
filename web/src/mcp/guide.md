@@ -126,6 +126,9 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
   not modelled, or set to none, does not shade.
 - sim.north (degrees counter-clockwise from the model's +Y axis to true north) turns the sun for every result and sets
   the N / E / S / W of results by 'facing' and of find_critical. Check it before discussing orientation.
+- Sections (set_display section; a screenshot and a report figure take their own) cut the views only: runs, results,
+  find_critical, charts and downloads always use the whole model, results stay fresh, and what a section hides still
+  casts its shade.
 
 ### Surfaces and light
 
@@ -301,6 +304,13 @@ Each is an approximation: say so, and what it leaves out.
 - Quote area and share, not only the worst value: the worst element of a large triangle is one sensor.
 - Show: screenshot with the group's view and near (near cuts away what stands in front, often the cause: say it is cut
   away, and add a wider shot that shows it), or set_camera with the view to show the user in the app.
+- Sections cut away what no camera position avoids (model metres, Z up; set_display section for the views, screenshot
+  section for one shot). A plan cut 1.2 m above a floor at height z_f: the plane {point: [x, y, z_f + 1.2], normal:
+  [0, 0, -1]} keeps what is below it. From a find_critical group: the plane {point: centre + d × normal, normal:
+  -normal}, d short of what stands in front, keeps the inside and cuts away what stands in front, from any camera;
+  {keep: 'inside', box: its box, margin: 1} shows about that part alone. The box is square to the model axes: round a
+  turned facade it holds some of what stands in front, and round a wall or a roof along the axes it is flat (the margin
+  gives it room).
 - set_display highlight fades everything outside a band; screenshot sunPath draws the sun path of the time setting
   (the simulation's sun positions).
 - Explain the cause with evidence: site_info sun altitude and azimuth at the period's times, direct against diffuse,

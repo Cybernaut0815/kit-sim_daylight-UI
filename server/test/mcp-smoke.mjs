@@ -1,7 +1,8 @@
 // Smoke test of daylight_server --mcp in Claude-only mode (no app tab): the agent routes off without --mcp; the
 // local-only gate; the MCP handshake; the fixture (building.usda) walked through tools/call in the hidden instance the
-// server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, a parts chart, and guide 'report''s two
-// example reports generated to PDF; then Claude Desktop's stdio relay (mcp-stdio.mjs). Node 18+, no packages.
+// server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only), a parts chart, and
+// guide 'report''s two example reports generated to PDF (one with a sectioned figure); then Claude Desktop's stdio relay
+// (mcp-stdio.mjs). Node 18+, no packages.
 // Run: node server/test/mcp-smoke.mjs --web <app dist dir> [--exe <daylight_server.exe>] [--port 18100]
 // It starts its own servers on --port (no --mcp) and --port + 1 (--mcp --web), each with a cache in a fresh temporary
 // folder (kept when a check fails: server logs, reports), and needs the GPU and Chrome or Edge. One PASS / FAIL line per
@@ -178,6 +179,20 @@ if (on) await part('walk', async () => {
   const shot = await tool('screenshot', { width: 2400, height: 600, column: 'sunhours_front' }), img = shot.images[0];
   const size = img && imageSize(Buffer.from(img.data, 'base64'));
   check('screenshot 2400 x 600 -> 4:1', !!size && Math.abs(size.w / size.h - 4) < 0.01, size ? `${img.mimeType} ${size.w} x ${size.h}` : brief(shot.text));
+  // sections: view only, so the result stays fresh; a shot through one differs from one without
+  const said = (r) => brief(r.text.slice(r.text.indexOf('Section:'))), plan = { on: true, planes: [{ point: [0, 0, 5], normal: [0, 0, -1] }], boxes: [] };
+  const plain = await tool('screenshot', { width: 640, height: 400, section: null });
+  await step('set_display section: a plan cut at 5 m', 'set_display', { section: { planes: plan.planes } }, (r) => JSON.stringify(r.json?.section) === JSON.stringify(plan));
+  const after = await tool('app_state');
+  check('a section leaves the result fresh', after.json?.models?.[0]?.result === 'fresh' && JSON.stringify(after.json.display?.section) === JSON.stringify(plan), `result ${after.json?.models?.[0]?.result}, section ${JSON.stringify(after.json?.display?.section)}`);
+  const cut = await tool('screenshot', { width: 640, height: 400 }), [whole, through] = [plain.images[0]?.data, cut.images[0]?.data];
+  check('a sectioned screenshot differs from the unsectioned one', !!whole && !!through && whole !== through && /Section: none\./.test(plain.text) && /Section: horizontal at 5\.00 m, keeps below\./.test(cut.text),
+    `${said(plain)} | ${said(cut)} | images ${whole === through ? 'equal' : 'different'}`);
+  if (g) {
+    const boxed = await tool('set_display', { section: { boxes: [{ keep: 'inside', box: g.box, margin: 1 }, { keep: 'outside', paths: [FAC[4]] }] } }), bs = boxed.json?.section?.boxes ?? [];
+    check("set_display section: find_critical's box and a box round the roof -> footprints", !boxed.err && bs.length === 2 && bs.every((b) => b.footprint?.length === 4 && b.top > b.bottom), brief(boxed.text));
+  }
+  await step('set_display section {planes: [], boxes: []} clears it', 'set_display', { section: { planes: [], boxes: [] } }, (r) => JSON.stringify(r.json?.section) === JSON.stringify({ on: true, planes: [], boxes: [] }));
   await step('update_settings adds a parts chart', 'update_settings', { charts: [{ id: 'facades', kind: 'parts', column: 'sunhours_front', parts: FAC, metric: 'mean', range: 'absolute' }] });
   const charts = (await tool('app_state')).json?.settings?.charts ?? [];
   check('app_state lists it', charts.some((c) => c.id === 'facades' && c.kind === 'parts'), charts.map((c) => `${c.id} (${c.kind})`).join(', '));
@@ -196,12 +211,17 @@ if (on) await part('walk', async () => {
   check("guide 'report' -> two example specs", specs.length === 2, specs.map((s) => `${s.id} (${s.models.join(', ')})`).join('; '));
   check("guide 'report' carries the kit-report skill", /^# kit-report$/m.test(guide.text), `${guide.text.length} characters`);
   await step("guide 'kit-ui' -> the skill and the class reference", 'guide', { topic: 'kit-ui' }, (r) => !r.err && /^# kit-ui$/m.test(r.text) && /^# kit-ui reference$/m.test(r.text));
+  const sectioned = specs.filter((s) => s.blocks.some((b) => b.type === 'view' && b.section)).map((s) => s.id);
+  check("guide 'report' -> one example with a sectioned figure", sectioned.length === 1, sectioned.join(', ') || 'none');
   for (const spec of specs) {
     await step(`save_report ${spec.id} -> valid, ready`, 'save_report', { spec }, (r) => !r.err && r.json?.ready === true);
     const gen = await again('generate_report', { id: spec.id }, (r) => r.json?.status === 'generating'), p = gen.json ?? {}, u = p.url && new URL(p.url);
     const pdf = u ? await http(Number(u.port), 'GET', u.pathname) : null, head = pdf?.body.subarray(0, 5).toString();
-    check(`generate_report ${spec.id} -> PDF`, !gen.err && p.pages >= 1 && Array.isArray(p.fallback) && !p.fallback.length && pdf?.status === 200 && head === '%PDF-',
+    check(`generate_report ${spec.id}${sectioned.includes(spec.id) ? ' (a sectioned figure)' : ''} -> PDF`, !gen.err && p.pages >= 1 && Array.isArray(p.fallback) && !p.fallback.length && pdf?.status === 200 && head === '%PDF-',
       gen.err ? brief(gen.text) : `${p.pages} pages, ${p.bytes} bytes, fonts ${p.fonts}, fallback [${p.fallback}]; GET ${p.url} -> ${pdf?.status} ${head}`);
+    if (!sectioned.includes(spec.id) || gen.err) continue;
+    const page = readFileSync(join(cache, `${ON}`, 'reports', spec.id, 'index.html'), 'utf8').replace(/<!-- -->/g, ''), words = /[^.>]*is sectioned[^<]*/.exec(page)?.[0];
+    check(`${spec.id}: the Method says its figure is sectioned, its values of the whole model`, /is sectioned \(1 plane\); values are of the whole model\./.test(page), words ?? 'not said');
   }
   const one = specs.find((s) => s.models.length === 1);
   if (!one) return;

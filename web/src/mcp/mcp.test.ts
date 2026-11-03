@@ -1,12 +1,17 @@
+import { BoxGeometry, Mesh } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import mcp from '../../../server/mcp.json';
 import type { Summary } from '../lib/result';
+import { NONE, type Section } from '../lib/section';
 import { glyphs } from '../report/spec';
 import { defaultSettings, initialState, reducer, type Action, type State, type Station } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
-import { HANDLERS, TOOLS, WORDS, bySide, check, connect, difference, publicSettings, settingsActions, shotSize } from './tools';
+import { SECTION, TOOLS, WORDS, check } from './schema';
+import { HANDLERS, bySide, connect, difference, publicSettings, settingsActions, shotSize, type Ctl } from './tools';
+
+vi.mock('../viewer/capture', () => ({ capture: async () => new Blob([new Uint8Array(8)], { type: 'image/jpeg' }) })); // no GPU here
 
 const schema = (name: string) => TOOLS.find((t) => t.name === name)!.inputSchema;
 
@@ -15,6 +20,16 @@ describe('the tool list', () => {
     const names = mcp.tools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     expect(Object.keys(HANDLERS).sort()).toEqual([...names].sort());
+  });
+  it('the instructions and each description stay under 4096 characters', () => {
+    expect(mcp.instructions.length).toBeLessThan(4096);
+    for (const t of mcp.tools) expect(t.description.length, t.name).toBeLessThan(4096);
+  });
+  it("screenshot's section is set_display's, or null; a report's view block takes set_display's", () => {
+    const shot = schema('screenshot').properties!.section;
+    expect(shot.type).toEqual(['object', 'null']);
+    expect({ ...shot, type: 'object', description: '' }).toEqual({ ...SECTION, description: '' });
+    expect(SECTION).toBe(schema('set_display').properties!.section);
   });
   it('each inputSchema is a closed object whose fields say what they take', () => {
     const fields = (s: Record<string, unknown>, at: string): string[] => {
@@ -169,6 +184,88 @@ describe('screenshot size', () => {
     expect(shotSize(8192, 82)).toEqual({ width: 1568, height: 16, reshaped: false }); // 15.7 rounds to 16
     expect(shotSize(8192, 16)).toEqual({ width: 1568, height: 16, reshaped: true });
     expect(() => shotSize(4000, 2001)).toThrow(/^width: 4000 x 2001 px is over 8 megapixels/);
+  });
+});
+
+describe('sections', () => {
+  /** The app with model A loaded: a 2 x 6 x 4 m block at /Site/Block (drawn in three world, Y up, from a Z-up stage in
+   *  metres), the section every view shows, and what its view was given (`shown`). */
+  function app() {
+    const block = new Mesh(new BoxGeometry(2, 4, 6)), shown: unknown[] = [];
+    let own: unknown = { on: true, planes: [], boxes: [] };
+    const el = {
+      stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, 8, 16], target: [0, 0, 0], fov: 45, projection: 'perspective', height: 1 }, sectionGizmo: null,
+      get section() { return own; }, set section(s) { shown.push(s); own = s; },
+      three: { objectsFor: (p: string) => (p === '/Site/Block' ? [block] : []), overlay: { children: [] } },
+    };
+    let x = {
+      state: { active: 0, models: [{ slot: 0, name: 'block', objects: [{ id: 'b', path: '/Site/Block' }] }], colourBy: 'plain', bin: null, settings: { sim: { north: 0 } } },
+      panes: { 0: { loading: false } }, ui: {}, section: NONE, dispatch: () => {}, setUi: () => {}, viewer: () => ({ el }),
+      setSection: (s: Section) => { x = { ...x, section: s }; },
+    } as unknown as Ctl;
+    return { c: () => x, shown };
+  }
+  /** A call as the bridge makes it: its arguments checked, then its handler; its text, or the refusal. */
+  const call = async (c: () => Ctl, name: string, args: Record<string, unknown>) => {
+    const why = check(schema(name), args);
+    if (why) return why;
+    try {
+      return (await HANDLERS[name](args, c, Date.now() + 5e3)).content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  const put = async (c: () => Ctl, section: unknown) => JSON.parse(await call(c, 'set_display', { section })).section;
+
+  it('set_display takes each box form and answers footprints, which it takes back as they are; no planes and boxes clear it', async () => {
+    const { c } = app(), plan = { point: [0, 0, 1.2], normal: [0, 0, -1] }, quad = { keep: 'outside', footprint: [[0, 0], [4, 0], [4, 2], [1, 3]], bottom: 0, top: 3 };
+    const s = await put(c, {
+      planes: [plan],
+      boxes: [quad, { keep: 'inside', box: { min: [0, 0, 0], max: [2, 1, 3] }, rotation: 90 }, { keep: 'inside', paths: ['/Site/Block'] }, { keep: 'outside', paths: ['/Site/Block'], margin: 0.5 }],
+    });
+    expect(s).toEqual({
+      on: true, planes: [plan], boxes: [
+        quad,
+        { keep: 'inside', footprint: [[1.5, -0.5], [1.5, 1.5], [0.5, 1.5], [0.5, -0.5]], bottom: 0, top: 3 }, // turned a quarter about (1, 0.5)
+        { keep: 'inside', footprint: [[-1.075, -3.075], [1.075, -3.075], [1.075, 3.075], [-1.075, 3.075]], bottom: -2.075, top: 2.075 }, // 1 % of the diagonal larger
+        { keep: 'outside', footprint: [[-1.5, -3.5], [1.5, -3.5], [1.5, 3.5], [-1.5, 3.5]], bottom: -2.5, top: 2.5 },
+      ],
+    });
+    expect(c().section).toEqual(s);
+    expect(await put(c, s)).toEqual(s);
+    expect(await put(c, { ...s, on: false })).toEqual({ ...s, on: false });
+    expect(await put(c, { planes: [], boxes: [] })).toEqual(NONE);
+  });
+
+  it('names the path of what is wrong, from the schema or the forms, and applies nothing then', async () => {
+    const { c } = app(), say = (section: unknown) => call(c, 'set_display', { section }), unit = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    expect(await say({ planes: [{ point: [0, 0], normal: [0, 0, 1] }] })).toBe('section.planes[0].point: 3 items');
+    expect(await say({ boxes: [{ footprint: unit, bottom: 0, top: 1 }] })).toBe('section.boxes[0].keep: required');
+    expect(await say({ boxes: Array(9).fill({ keep: 'inside', footprint: unit, bottom: 0, top: 1 }) })).toBe('section.boxes: at most 8 items');
+    expect(await say({ boxes: [{ keep: 'inside', box: { min: [0, 0, 0], max: [1, 1, 1] }, paths: ['/Site/Block'] }] })).toBe('section.boxes[0]: one of footprint (with bottom and top), box or paths');
+    expect(await say({ boxes: [{ keep: 'inside', footprint: unit, bottom: 0, top: 1, rotation: 45 }] })).toBe('section.boxes[0].rotation: not with footprint, which takes bottom and top');
+    expect(await say({ boxes: [{ keep: 'inside', box: { min: [0, 0, 0], max: [10, 0, 3] } }] })).toMatch(/^section\.boxes\[0\]\.box: flat, nothing fits in it; give a margin/); // a wall's box
+    expect(await say({ boxes: [{ keep: 'inside', paths: ['/Site/Block', '/Nope'] }] })).toBe('section.boxes[0].paths[1]: nothing drawn at or under /Nope in model A, the active one; find prims with model_tree');
+    expect(await say({ planes: [{ point: [0, 0, 0], normal: [0, 0, 0] }], boxes: [{ keep: 'inside', footprint: [[0, 0], [1, 1], [1, 0], [0, 1]], bottom: 1, top: 1 }] })).toBe(
+      'section.planes[0].normal: not zero: it points to the side the plane keeps; section.boxes[0].footprint: crosses itself or has no area; give the corners in order round the box; section.boxes[0].top: above the bottom (1 m)',
+    );
+    expect(c().section).toEqual(NONE);
+    expect(await put(c, { boxes: [{ keep: 'inside', box: { min: [0, 0, 0], max: [10, 0, 3] }, margin: 0.5 }] })).toEqual({
+      on: true, planes: [], boxes: [{ keep: 'inside', footprint: [[-0.5, -0.5], [10.5, -0.5], [10.5, 0.5], [-0.5, 0.5]], bottom: -0.5, top: 3.5 }],
+    });
+  });
+
+  it("screenshot shows its own section (null: none; left out: the views'), says which, and gives each view its own back", async () => {
+    const { c, shown } = app(), said = async (args: Record<string, unknown>) => (await call(c, 'screenshot', args)).replace(/^.*Section: /s, '');
+    expect(await said({})).toBe('none.');
+    expect(shown).toEqual([]); // the views' own: left as it is
+    const plan = { on: true, planes: [{ point: [0, 0, 1.2], normal: [0, 0, -1] }], boxes: [] };
+    expect(await said({ section: { planes: plan.planes } })).toBe('horizontal at 1.20 m, keeps below.');
+    expect(shown).toEqual([plan, NONE]); // the shot's (a Z-up stage in metres takes it as it is), then the view's own
+    await put(c, { boxes: [{ keep: 'outside', paths: ['/Site/Block'] }] });
+    expect(await said({})).toBe('1 box cutting out.');
+    expect(await said({ section: null })).toBe('none.');
+    expect(shown.slice(2)).toEqual([NONE, NONE]);
   });
 });
 

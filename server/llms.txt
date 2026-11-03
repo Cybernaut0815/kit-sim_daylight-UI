@@ -65,8 +65,9 @@ putSession, deleteSession.
 ## Agents (MCP)
 
 With --mcp, an agent on this machine works with the web app itself instead of the routes above: it opens models by
-path, sets roles, settings and cameras, runs, reads results and critical areas, takes screenshots of any size, edits
-charts, writes PDF reports (one option, or 2-4 compared) and discusses what the results mean.
+path, sets roles, settings and cameras, runs, reads results and critical areas, takes screenshots of any size, sections
+the views with clipping planes and boxes (view only: runs use the whole model), edits charts, writes PDF reports (one
+option, or 2-4 compared) and discusses what the results mean.
 - Endpoint: POST /mcp (mcpMessage), JSON-RPC over HTTP, revisions 2025-11-25, 2025-06-18 and 2025-03-26, JSON answers
   (no SSE). Claude Code: claude mcp add --transport http daylight http://127.0.0.1:8080/mcp (if it does not connect,
   set MCP_PROTOCOL_NEGOTIATION=legacy). Claude Desktop: the stdio relay server/mcp-stdio.mjs, with an absolute node.exe

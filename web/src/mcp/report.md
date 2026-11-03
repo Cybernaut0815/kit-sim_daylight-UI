@@ -14,8 +14,8 @@ generates the PDF (generate_report). Read guide 'daylight' first: its writing ru
   of tool output.
 - The app writes the rest itself: the title block and status line, Inputs (site, coordinates, time zone, north,
   weather, period, quantities, mode, surfaces, sensors, each model's file, variant choices and roles), Method and
-  assumptions (per result column, sky, surfaces, statistics, problem range, the cutaway of each view) and the Appendix
-  (Table A1. Provenance: job ids, times, run arguments, weather reference, versions). Do not repeat them.
+  assumptions (per result column, sky, surfaces, statistics, problem range, the cutaway and section of each view) and
+  the Appendix (Table A1. Provenance: job ids, times, run arguments, weather reference, versions). Do not repeat them.
 - save_report also stores each report model's run: its file (and the paths open_model opened it from), the variant
   choices made in the app, its receivers and shades, and the run's settings; and the problem range of each quantity
   the report shows (its shares and range colours depend on it). generate_report refuses when a model or a range no
@@ -88,14 +88,17 @@ Blocks, by `type`:
   of the caption, and the chart's heading in the app). A field of another kind is refused. A comparison draws a series,
   curve or bar per model in its colour (the reference solid, the others dashed), with a key. Give a parts chart of
   values range 'absolute': its bars then start at 0 (on 'relative' they start where the colour scale does).
-- view: {name (1-60), view, near?, column, aspect?, caption}. `view` is a camera {eye, target, fov, projection,
-  height} copied from find_critical, set_camera or app_state; `near` (m, more than 0) cuts away what stands closer to
-  the camera; `column` is a result column, or null for the models' own colours (no legend); `aspect` is width /
-  height, 0.25-4, default 1.6. One image per report model from the same camera: side by side for two, 2 x 2 for three
-  or four, each labelled with its letter and name, the colour legend and unit under them, on one colour scale over the
-  report's models (Min and Max of the colour scale, where set, hold). The images show the models as the app shows them
-  at generation: prims hidden in the app (set_visibility hide or isolate) stay hidden; the selection and a bin
-  highlight do not show.
+- view: {name (1-60), view, near?, column, aspect?, section?, caption}. `view` is a camera {eye, target, fov,
+  projection, height} copied from find_critical, set_camera or app_state; `near` (m, more than 0) cuts away what stands
+  closer to the camera; `column` is a result column, or null for the models' own colours (no legend); `aspect` is
+  width / height, 0.25-4, default 1.6; `section` is the figure's own clipping planes and boxes as set_display section
+  takes them (model metres, Z up; boxes round prims are found in the active model and kept as footprints). A section is
+  view only: the values stay those of the whole model, and the Method says which figures are sectioned. Without one a
+  figure shows no section, whatever the views show. One image per report model from the same camera: side by side for
+  two, 2 x 2 for three or four, each labelled with its letter and name, the colour legend and unit under them, on one
+  colour scale over the report's models (Min and Max of the colour scale, where set, hold). The images show the models
+  as the app shows them at generation: prims hidden in the app (set_visibility hide or isolate) stay hidden; the
+  selection and a bin highlight do not show.
 - table: {column, by?, parts?, metrics, caption}. `by`: 'parts' (default: one row per prim path in `parts`, 1-50),
   'mesh' (one row per receiver mesh, the 50 largest by area) or 'facing' (N, E, S, W, up, down; `parts`, when given,
   limits the rows to the receivers under them). A comparison gives each row a line per model. 1-6 metrics, one
@@ -116,6 +119,11 @@ The whole spec as stored must stay under 1 MB (it lists every receiver and shade
 - find_critical: each group has `view` and `near` (m). Copy both into a view block: the cutaway clears what stands in
   front of the group (often its cause): say so in the caption or a text block, and add a second view without `near`
   to show it.
+- Or a section, which cuts the same from any camera: the plane {point: centre + d × normal, normal: -normal} from the
+  group's centre and normal, d short of what stands in front, keeps the building side; {keep: 'inside', box: the
+  group's box, margin: 1} keeps about that part (the box is square to the model axes, so loose round a turned facade).
+  The comparison below cuts the neighbouring slab with such a plane, 3 m in front of the south facade. Check a section
+  with screenshot section before you save it.
 - set_camera with frame {paths: [...]} (and direction, elevation, aspect, projection) frames prims for any aspect;
   copy the `view` and `near` it answers, and give the block the same `aspect`.
 - app_state gives each model's current camera (`view`): what the user looks at now.
@@ -165,7 +173,7 @@ facade):
   "blocks": [
     {"type": "chart", "chart": {"id": "facades-ab", "kind": "parts", "column": "sunhours_front", "range": "absolute", "parts": ["/Site/Block/Facade_N", "/Site/Block/Facade_E", "/Site/Block/Facade_S", "/Site/Block/Facade_W", "/Site/Block/Roof"], "metric": "mean"}, "caption": "Mean sun hours per facade and the roof on 21 March, 08:00 to 18:00, clear sky, models A (base) and B (overhang), in h."},
     {"type": "chart", "chart": {"id": "spread-ab", "kind": "curve", "column": "sunhours_front"}, "caption": "Share of the receiver area at or below each number of sun hours on 21 March, models A and B."},
-    {"type": "view", "name": "South facade", "view": {"eye": [17.12, 11.16, 9.65], "target": [8.66, 5, -5], "fov": 45, "projection": "perspective", "height": 7.46}, "near": 15.7, "column": "sunhours_front", "aspect": 1.6, "caption": "Sun hours on the south facade on 21 March, 08:00 to 18:00, in h, models A (base) and B (overhang) from the same camera; the neighbouring slab is cut away."},
+    {"type": "view", "name": "South facade", "view": {"eye": [17.12, 11.16, 9.65], "target": [8.66, 5, -5], "fov": 45, "projection": "perspective", "height": 7.46}, "column": "sunhours_front", "aspect": 1.6, "section": {"planes": [{"point": [10.16, 2.4, 5], "normal": [-0.5, 0.866, 0]}]}, "caption": "Sun hours on the south facade on 21 March, 08:00 to 18:00, in h, models A (base) and B (overhang) from the same camera; a section plane 3 m in front of the facade cuts the neighbouring slab away."},
     {"type": "table", "column": "sunhours_front", "by": "facing", "metrics": ["mean", "p10", "below"], "caption": "Sun hours by the side the receivers face on 21 March, 08:00 to 18:00, per model: mean and P10 in h, share under 2 h."}
   ]
 }

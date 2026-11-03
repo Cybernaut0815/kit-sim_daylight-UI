@@ -71,12 +71,12 @@ the CPU sky model, plus about 20 ms).
 
 **Agents (MCP).** Started with `--mcp`, the server lets Claude Code (over HTTP) or Claude Desktop (through
 `server/mcp-stdio.mjs`) work with the app: open models by path, set roles, settings and cameras, run, read and discuss
-the results, find critical areas, take screenshots of any shape, set up the Results charts, and write PDF reports on one
-option or 2 to 4 compared, in the kit-ui report layout. The app has no chat: the agent drives the open tab and every
-change shows there; with no tab open the server runs the app hidden in headless Chrome, and opening the app picks that
-session up. Report charts and cameras stay editable in the app (the chart settings button, the Views menu), and the
-Reports menu generates the PDF again. The agent routes answer only on this machine; setup in
-[server/README.md](server/README.md#agents-mcp).
+the results, find critical areas, take screenshots of any shape, section the views with clipping planes and boxes (view
+only: runs use the whole model), set up the Results charts, and write PDF reports on one option or 2 to 4 compared, in
+the kit-ui report layout. The app has no chat: the agent drives the open tab and every change shows there; with no tab
+open the server runs the app hidden in headless Chrome, and opening the app picks that session up. Report charts and
+cameras stay editable in the app (the chart settings button, the Views menu), and the Reports menu generates the PDF
+again. The agent routes answer only on this machine; setup in [server/README.md](server/README.md#agents-mcp).
 
 - [server/README.md](server/README.md): documentation endpoints, multi-user behaviour (queue, limits, cancel), caching, flags.
 - `kit-sim_daylight/`: the core as a git submodule (`git submodule update --init`); its `bindings/ts` is imported by

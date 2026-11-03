@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import mcp from '../../../server/mcp.json';
+import type { Box } from '../lib/frame';
 import guide from '../mcp/report.md?raw';
 import { chartSpec, chosenOf, editChart, glyphs, imageSize, inApp, parseReports, readiness, validateSpec, type AppModel, type AppView, type Block, type Draft, type Report } from './spec';
 
@@ -67,15 +68,28 @@ describe('validateSpec', () => {
     expect(validateSpec({ ...examples[0], id: 'nul' }, app(model('A')))).toEqual(['id: a name Windows keeps for a device; choose another id']);
   });
 
-  it("keeps a view's own section (its own fields; on unless off), and names what is wrong in it", () => {
+  it("keeps a view's own section as set_display takes it, its boxes as footprints, and names what is wrong in it", () => {
     const plan = { planes: [{ point: [10, 6, 1.2], normal: [0, 0, -1] }] }, viewed = (section: unknown) => ({ ...examples[0], blocks: examples[0].blocks.with(1, { ...examples[0].blocks[1], section }) });
     const d = validateSpec(viewed(plan), app(model('A'))) as Draft;
     expect(d.blocks[1]).toMatchObject({ type: 'view', section: { on: true, ...plan, boxes: [] } });
     expect(parseReports([{ id: d.id, pdf: false, spec: JSON.stringify(stamp(d)) }])).toHaveLength(1);
-    expect(validateSpec(viewed({ ...plan, boxes: [{ keep: 'inside', footprint: [[0, 0], [1, 1], [1, 0], [0, 1]], bottom: 0, top: 1, name: 'b' }] }), app(model('A')))).toEqual([
-      'blocks[1].section.boxes[0].name: not a field of a box (keep, footprint, bottom, top)',
+    // a box, and one round prims where the app finds them
+    const bounds = (paths: string[], at: string) => (paths[0] === '/Site/Block' ? { min: [0, 0, 0], max: [20, 12, 10] } as Box : `${at}[0]: nothing drawn there`);
+    const boxed = validateSpec(viewed({ boxes: [{ keep: 'outside', box: { min: [8, 4, 0], max: [12, 8, 3] } }, { keep: 'inside', paths: ['/Site/Block'], margin: 1 }] }), app(model('A')), bounds) as Draft;
+    expect((boxed.blocks[1] as Extract<Block, { type: 'view' }>).section?.boxes).toEqual([
+      { keep: 'outside', footprint: [[8, 4], [12, 4], [12, 8], [8, 8]], bottom: 0, top: 3 },
+      { keep: 'inside', footprint: [[-1, -1], [21, -1], [21, 13], [-1, 13]], bottom: -1, top: 11 },
+    ]);
+    // set_display's schema first (its first problem), then the forms and the shapes
+    const no = (section: unknown, b?: typeof bounds) => validateSpec(viewed(section), app(model('A')), b);
+    expect(no({ ...plan, boxes: [{ keep: 'inside', footprint: [[0, 0], [1, 1], [1, 0], [0, 1]], bottom: 0, top: 1, name: 'b' }] })).toEqual([
+      'blocks[1].section.boxes[0].name: not an argument here (keep, footprint, bottom, top, box, rotation, paths, margin)',
+    ]);
+    expect(no({ boxes: [{ keep: 'inside', footprint: [[0, 0], [1, 1], [1, 0], [0, 1]], bottom: 0, top: 1 }] })).toEqual([
       'blocks[1].section.boxes[0].footprint: crosses itself or has no area; give the corners in order round the box',
     ]);
+    expect(no({ boxes: [{ keep: 'inside', paths: ['/Site/Nope'] }] }, bounds)).toEqual(['blocks[1].section.boxes[0].paths[0]: nothing drawn there']);
+    expect(no({ boxes: [{ keep: 'inside', paths: ['/Site/Block'] }] })).toEqual(["blocks[1].section.boxes[0].paths: found in the app's models only; give footprint or box"]);
   });
 
   it('refuses a model without a result, a share without a problem range, a chart id twice', () => {

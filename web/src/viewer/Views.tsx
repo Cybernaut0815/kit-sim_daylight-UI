@@ -8,10 +8,10 @@
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
 // - Reports (only while there are any): a report's PDF generated from the current results, opened, or the report deleted.
 import { Fragment, useEffect, useState } from 'react';
-import { Box3 } from 'three';
+import { Box3, type Object3D } from 'three';
 import type { SectionGizmo, UsdViewerElement, ViewState } from 'usd-viewer';
-import { toModel, type Vec3 } from '../lib/frame';
-import { MAX, NONE, direction, mm, validate, type Section } from '../lib/section';
+import { toModel, type Box, type Vec3 } from '../lib/frame';
+import { MAX, NONE, boxOf, direction, mm, validate, type Section } from '../lib/section';
 import { stageView, type SavedView, type StageCamera } from '../lib/views';
 import { generation } from '../report/generate';
 import { inApp, readiness, type AppView, type Stored } from '../report/spec';
@@ -85,6 +85,21 @@ export function ViewsMenu({ usd, model, disabled, views, reports, onSave, onRemo
   );
 }
 
+/** Drawn objects' bounds in model metres (the stage `mpu` m per unit), for a section box round them (the Section menu's,
+ *  an agent's paths); null when they have no extent.
+ *  ponytail: square to the model axes, so loose round a turned building (Rotate turns it); fit the smallest turned
+ *  footprint of their points if tight boxes matter */
+export function boundsOf(objects: readonly Object3D[], mpu: number): Box | null {
+  const world = new Box3();
+  for (const o of objects) {
+    o.updateWorldMatrix(true, false); // a background tab may not have drawn since the model loaded
+    world.expandByObject(o);
+  }
+  if (world.isEmpty()) return null;
+  const a = toModel(world.min.toArray(), mpu), b = toModel(world.max.toArray(), mpu);
+  return { min: a.map((v, k) => Math.min(v, b[k])) as Vec3, max: a.map((v, k) => Math.max(v, b[k])) as Vec3 };
+}
+
 /** A point's or a direction's x, y (and z) as number fields under one legend; a blank field keeps its number. */
 function Coords({ id, legend, value, onCommit }: { id: string; legend: string; value: readonly number[]; onCommit: (v: number[]) => void }) {
   return (
@@ -112,16 +127,10 @@ export function SectionMenu({ usd, section, disabled, onChange }: { usd: UsdView
   };
   const target = () => toModel(usd.view.target, mpu).map(mm) as Vec3; // where the view orbits, model metres
   const facing = () => { const { eye, target: t } = usd.view; return direction(toModel([t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]])); };
-  /** The selected prims' bounds (the whole model's without), 1 % of their diagonal more all round: a box showing them.
-   *  ponytail: square to the model axes, so loose round a turned building (Rotate turns it); fit the smallest turned
-   *  footprint of the selection's points if tight boxes matter */
+  /** A box showing the selected prims (the whole model without), 1 % of their diagonal larger all round. */
   const around = () => {
-    const picked = usd.selection.flatMap((p) => usd.three.objectsFor(p)), world = new Box3();
-    for (const o of picked.length ? picked : [usd.three.root]) world.expandByObject(o);
-    if (world.isEmpty()) return;
-    const a = toModel(world.min.toArray(), mpu), b = toModel(world.max.toArray(), mpu), margin = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / 100;
-    const [x0, y0, z0] = a.map((v, k) => mm(Math.min(v, b[k]) - margin)), [x1, y1, z1] = a.map((v, k) => mm(Math.max(v, b[k]) + margin));
-    put({ boxes: [...boxes, { keep: 'inside', footprint: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], bottom: z0, top: z1 }] }, { box: boxes.length });
+    const picked = usd.selection.flatMap((p) => usd.three.objectsFor(p)), b = boundsOf(picked.length ? picked : [usd.three.root], mpu);
+    if (b) put({ boxes: [...boxes, { keep: 'inside', ...boxOf(b) }] }, { box: boxes.length });
   };
   /** Plane or box i goes: the gizmo lets go of it, or follows the entry it edits an index down. */
   const remove = (kind: 'plane' | 'box', i: number) => {

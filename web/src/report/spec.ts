@@ -1,12 +1,13 @@
 // A report as the app keeps it (the server's PUT /reports/{id}): the spec the agent saves (save_report), checked here and
 // completed with each report model's run at save time, so that a later generation can tell whether the results are still
 // the ones its text was written on (readiness); and the edits the app makes to its charts. Pure: the app comes in as a
-// plain view (tools.ts appView).
+// plain view (tools.ts appView), and where its prims are drawn as a function (a view's section round prims).
 import type { ViewState } from 'usd-viewer';
 import type { ChartEdit } from '../charts/ChartSettings';
 import { FIELDS as LOOK, cleanSpec, isShare, type ChartSpec, type Metric as ChartMetric } from '../lib/charts';
 import { fmtNum, unitFor } from '../lib/result';
-import { sectionOf, validate as sectionProblems, type Section } from '../lib/section';
+import { given, validate as sectionProblems, type Bounds, type Given, type Section } from '../lib/section';
+import { SECTION, check } from '../mcp/schema';
 import type { Settings } from '../store';
 
 const LETTERS = 'ABCD';
@@ -155,10 +156,11 @@ function rangeless(r: Pick<Draft, 'stats' | 'blocks'>, ranges: AppView['ranges']
 /**
  * A spec from the agent (save_report) checked against the app, or every problem, each naming its path ('blocks[3].caption:
  * empty'). Its models are letters (or get_report's model objects, whose letters alone count): each open with a fresh
- * result now, and stored with its run (ModelRef). A chart's column defaults to the one shown; created and updated are
- * the save's.
+ * result now, and stored with its run (ModelRef). A chart's column defaults to the one shown; a view's section is
+ * set_display's (its schema, boxes round prims where `bounds` finds them) and kept with footprints; created and updated
+ * are the save's.
  */
-export function validateSpec(raw: unknown, app: AppView): Draft | string[] {
+export function validateSpec(raw: unknown, app: AppView, bounds?: Bounds): Draft | string[] {
   const no: string[] = [];
   const bad = (at: string, what: string): undefined => { no.push(`${at}: ${what}`); return undefined; };
   const keys = (at: string, o: Obj, kind: string) => { for (const k of Object.keys(o)) if (!FIELDS[kind].includes(k)) bad(`${at}${at ? '.' : ''}${k}`, `not a field of ${kind === 'spec' ? 'a ReportSpec' : kind === 'stat' ? 'a stat' : `a ${kind} block`} (${FIELDS[kind].join(', ')})`); };
@@ -255,12 +257,13 @@ export function validateSpec(raw: unknown, app: AppView): Draft | string[] {
       if (b.near !== undefined && !(finite(b.near) && b.near > 0)) bad(`${at}.near`, "the cutaway in m, more than 0 (find_critical's near)");
       if (b.aspect !== undefined && !(finite(b.aspect) && b.aspect >= 0.25 && b.aspect <= 4)) bad(`${at}.aspect`, 'width / height, 0.25 to 4');
       const col = b.column === null ? null : b.column === undefined ? bad(`${at}.column`, "a result column, or null for the models' own colours") : column(`${at}.column`, b.column);
-      const cut = b.section === undefined ? [] : sectionProblems(b.section, `${at}.section`);
-      no.push(...cut);
+      const why = b.section === undefined ? '' : check(SECTION, b.section, `${at}.section`);
+      const cut = b.section === undefined ? undefined : why ? [why] : given(b.section as Given, `${at}.section`, bounds);
+      if (Array.isArray(cut)) no.push(...cut);
       blocks.push({
         type: 'view', name: text(`${at}.name`, b.name, 60)!, view: { eye: v.eye, target: v.target, fov: v.fov, projection: v.projection, height: v.height } as ViewState,
         ...(b.near !== undefined ? { near: b.near as number } : {}), column: col ?? null, ...(b.aspect !== undefined ? { aspect: b.aspect as number } : {}),
-        ...(b.section !== undefined && !cut.length ? { section: sectionOf(b.section as Section) } : {}), caption,
+        ...(cut && !Array.isArray(cut) ? { section: cut } : {}), caption,
       });
     } else {
       const by = b.by === undefined ? 'parts' : ['parts', 'mesh', 'facing'].includes(b.by as string) ? (b.by as 'parts') : bad(`${at}.by`, 'one of parts, mesh, facing');

@@ -1,9 +1,9 @@
 // Sections as the app keeps them: clipping planes and vertical clipping boxes (the USD viewer's section, view only) in
 // model metres, Z up (frame.ts), converted per stage for its viewer (toStage, and fromStage for the viewer's gizmo);
-// checked as data from an agent or a stored report (validate), and said in a few words (describe) for the views, reports
-// and agents. Never a run input. Pure: types only from the viewer.
+// taken from an agent in its forms (given) and checked as data from an agent or a stored report (validate), and said in
+// a few words (describe) for the views, reports and agents. Never a run input. Pure: types only from the viewer.
 import type { Section as StageSection } from 'usd-viewer';
-import { toModel, toWorld, type Vec3 } from './frame';
+import { toModel, toWorld, type Box, type Vec3 } from './frame';
 
 export type Vec2 = [number, number];
 /** A stage's up axis. */
@@ -115,6 +115,50 @@ export function validate(v: unknown, path: string): string[] {
     else if (finite(b.bottom) && !(b.top > b.bottom)) bad(`${at}.top`, `above the bottom (${b.bottom} m)`);
   });
   return no;
+}
+
+/**
+ * A box round `min`..`max` (model metres) for a section: `margin` m larger on every side (by default 1 % of its diagonal,
+ * as the Section menu's), turned `rotation` degrees counter-clockwise (seen from above) about its vertical centre line;
+ * its footprint counter-clockwise, lengths to 1 mm.
+ */
+export function boxOf({ min, max }: Box, margin = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 100, rotation = 0): Omit<Section['boxes'][number], 'keep'> {
+  const hx = Math.abs(max[0] - min[0]) / 2 + margin, hy = Math.abs(max[1] - min[1]) / 2 + margin, cx = (min[0] + max[0]) / 2, cy = (min[1] + max[1]) / 2;
+  const r = (rotation * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r), at = (u: number, v: number): Vec2 => [mm(cx + c * u - s * v), mm(cy + s * u + c * v)];
+  return { footprint: [at(-hx, -hy), at(hx, -hy), at(hx, hy), at(-hx, hy)], bottom: mm(Math.min(min[2], max[2]) - margin), top: mm(Math.max(min[2], max[2]) + margin) };
+}
+
+/** Where prims are drawn, for a box round them: their bounds (model metres), or what is wrong, naming its path `at`. */
+export type Bounds = (paths: string[], at: string) => Box | string;
+/** A section as agents give it (mcp.json's): each box as its footprint with bottom and top; as a box, turned by
+ *  `rotation`; or round prims (`paths`); the last two `margin` larger on every side. */
+export interface Given {
+  on?: boolean; planes?: Section['planes'];
+  boxes?: { keep: 'inside' | 'outside'; footprint?: Vec2[]; bottom?: number; top?: number; box?: Box; rotation?: number; paths?: string[]; margin?: number }[];
+}
+const FORMS = { footprint: ['bottom', 'top'], box: ['rotation', 'margin'], paths: ['margin'] } as const; // each form with its own fields
+
+/**
+ * A section as agents give it (set_display, screenshot, a report's view block; mcp.json's schema passed it) in the app's
+ * form, or every problem, each naming its path under `at`. A box given as a box (margin 0 by default) or round prims
+ * (where `bounds` finds them, the Section menu's margin by default; without `bounds` refused) becomes its footprint.
+ */
+export function given(v: Given, at: string, bounds?: Bounds): Section | string[] {
+  const no: string[] = [], refuse = (what: string) => { no.push(what); return null; };
+  const boxes = (v.boxes ?? []).map((b, i) => {
+    const here = `${at}.boxes[${i}]`, forms = (Object.keys(FORMS) as (keyof typeof FORMS)[]).filter((k) => b[k] !== undefined), form = forms[0];
+    if (forms.length !== 1) return refuse(`${here}: one of footprint (with bottom and top), box or paths`);
+    const stray = Object.keys(b).find((k) => k !== 'keep' && k !== form && !(FORMS[form] as readonly string[]).includes(k));
+    if (stray) return refuse(`${here}.${stray}: not with ${form}, which takes ${FORMS[form].join(' and ')}`);
+    if (form === 'footprint') return { keep: b.keep, footprint: b.footprint, bottom: b.bottom, top: b.top } as Section['boxes'][number];
+    const box = form === 'box' ? b.box! : bounds ? bounds(b.paths!, `${here}.paths`) : `${here}.paths: found in the app's models only; give footprint or box`;
+    if (typeof box === 'string') return refuse(box);
+    const out = boxOf(box, b.margin ?? (form === 'box' ? 0 : undefined), b.rotation);
+    return out.top > out.bottom && separates(out.footprint, 0) ? { keep: b.keep, ...out } : refuse(`${here}.${form}: flat, nothing fits in it; give a margin (m), as a find_critical box round a wall or a roof needs`);
+  });
+  if (no.length) return no;
+  const s = sectionOf({ on: v.on, planes: v.planes, boxes: boxes as Section['boxes'] }), wrong = validate(s, at);
+  return wrong.length ? wrong : s;
 }
 
 const metres = (v: number) => `${v.toFixed(2)} m`;
