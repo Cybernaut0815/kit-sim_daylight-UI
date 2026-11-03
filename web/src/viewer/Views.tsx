@@ -1,25 +1,31 @@
 // The run bar's menus, acting on the active model's view.
 // - Views: the model's own cameras, the reports' views and the views saved here. Picking one moves the 3D view there
-//   (linked cameras: every view), and orbiting goes on from it. The current view can be saved under a name, and a saved
-//   one removed again (the model's cameras cannot); a report's view takes the current view with Update. Saved views
-//   serve every view, last this session and never go into a file.
+//   (linked cameras: every view), and orbiting goes on from it; a report's view also brings its section (or none). The
+//   current view can be saved under a name, and a saved one removed again (the model's cameras cannot); a report's view
+//   takes the current view and section with Update. Saved views (cameras only) serve every view, last this session and
+//   never go into a file.
+// - Section: every view's clipping planes and boxes (view only), added and edited in the active view.
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
 // - Reports (only while there are any): a report's PDF generated from the current results, opened, or the report deleted.
 import { Fragment, useEffect, useState } from 'react';
-import type { UsdViewerElement, ViewState } from 'usd-viewer';
+import { Box3 } from 'three';
+import type { SectionGizmo, UsdViewerElement, ViewState } from 'usd-viewer';
+import { toModel, type Vec3 } from '../lib/frame';
+import { MAX, NONE, direction, mm, validate, type Section } from '../lib/section';
 import { stageView, type SavedView, type StageCamera } from '../lib/views';
 import { generation } from '../report/generate';
 import { inApp, readiness, type AppView, type Stored } from '../report/spec';
-import { Alert, Icon, MenuButton } from '../ui';
+import { Alert, Icon, MenuButton, NumberField, Segmented } from '../ui';
 import { FORMATS, isUsd, type ExportMode, type Format } from './download';
 
 /** The next free "View N" name. */
 const nextName = (views: SavedView[]) => `View ${Math.max(0, ...views.map((v) => Number(/^View (\d+)$/.exec(v.name)?.[1] ?? 0))) + 1}`;
 
-/** onReportView: report `id`'s view block `block` (named `name`) takes the camera `view`, in stage units of `mpu` m. */
-export function ViewsMenu({ usd, model, disabled, views, reports, onSave, onRemove, onReportView }: {
+/** onReportView: report `id`'s view block `block` (named `name`) takes the camera `view`, in stage units of `mpu` m (and
+ *  the section now); onSection: a report view picked, its section. */
+export function ViewsMenu({ usd, model, disabled, views, reports, onSave, onRemove, onReportView, onSection }: {
   usd: UsdViewerElement; model?: string; disabled: boolean; views: SavedView[]; reports: Stored[] | null; onSave: (v: SavedView) => void; onRemove: (id: string) => void;
-  onReportView: (id: string, block: number, name: string, view: ViewState, mpu: number) => void;
+  onReportView: (id: string, block: number, name: string, view: ViewState, mpu: number) => void; onSection: (s: Section) => void;
 }) {
   const [cameras, setCameras] = useState<StageCamera[]>(() => usd.cameras);
   const [name, setName] = useState('');
@@ -51,8 +57,8 @@ export function ViewsMenu({ usd, model, disabled, views, reports, onSave, onRemo
                 <div className="menu__section">Report: {r.spec.title}</div>
                 {vs.map(({ b, i }) => (
                   <div key={i} className="views__row">
-                    <button className="menu__item" type="button" title={b.caption} onClick={() => { usd.view = b.view; close(); }}><span>{b.name}</span></button>
-                    <button className="btn btn--ghost" type="button" aria-label={`Update ${b.name} of ${r.spec.title}`} title={`${b.name} of this report takes the current view, from its next PDF on`} onClick={() => { onReportView(r.id, i, b.name, usd.view, usd.stage?.metersPerUnit ?? 1); close(); }}>Update</button>
+                    <button className="menu__item" type="button" title={b.caption} onClick={() => { usd.view = b.view; onSection(b.section ?? NONE); close(); }}><span>{b.name}</span></button>
+                    <button className="btn btn--ghost" type="button" aria-label={`Update ${b.name} of ${r.spec.title}`} title={`${b.name} of this report takes the current view and section, from its next PDF on`} onClick={() => { onReportView(r.id, i, b.name, usd.view, usd.stage?.metersPerUnit ?? 1); close(); }}>Update</button>
                   </div>
                 ))}
               </Fragment>
@@ -75,6 +81,119 @@ export function ViewsMenu({ usd, model, disabled, views, reports, onSave, onRemo
           </form>
         </>
       )}
+    </MenuButton>
+  );
+}
+
+/** A point's or a direction's x, y (and z) as number fields under one legend; a blank field keeps its number. */
+function Coords({ id, legend, value, onCommit }: { id: string; legend: string; value: readonly number[]; onCommit: (v: number[]) => void }) {
+  return (
+    <fieldset className="field">
+      <legend>{legend}</legend>
+      <div className="scale-row__cols">
+        {value.map((v, k) => <NumberField key={k} id={`${id}-${'xyz'[k]}`} label={'xyz'[k]} value={v} onCommit={(n) => { if (Number.isFinite(n) && n !== v) onCommit(value.with(k, n)); }} />)}
+      </div>
+    </fieldset>
+  );
+}
+
+/**
+ * The section every view shows (lib/section.ts, model metres), view only: on or off, cleared; planes and boxes added from
+ * the pressed view `usd` (at its target, round its selection) and edited there with the viewer's gizmo, or here by the
+ * numbers. onChange: the whole section, and where the gizmo goes once the views have it (null: off; left out: it stays).
+ */
+export function SectionMenu({ usd, section, disabled, onChange }: { usd: UsdViewerElement; section: Section; disabled: boolean; onChange: (s: Section, gizmo?: SectionGizmo | null) => void }) {
+  const [refused, setRefused] = useState({ why: '', n: 0 }); // a number that would make an entry unusable: why; n puts the fields back on the numbers
+  const { planes, boxes } = section, mpu = usd.stage?.metersPerUnit ?? 1;
+  const put = (patch: Partial<Section>, gizmo?: SectionGizmo | null) => {
+    const next = { ...section, ...patch }, why = validate(next, 'section')[0]?.replace(/^section\.(planes|boxes)\[(\d+)\]\./, (_, k: string, i: string) => `${k === 'planes' ? 'Plane' : 'Box'} ${Number(i) + 1} `);
+    setRefused((r) => ({ why: why ?? '', n: r.n + (why ? 1 : 0) }));
+    if (!why) onChange(next, gizmo);
+  };
+  const target = () => toModel(usd.view.target, mpu).map(mm) as Vec3; // where the view orbits, model metres
+  const facing = () => { const { eye, target: t } = usd.view; return direction(toModel([t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]])); };
+  /** The selected prims' bounds (the whole model's without), 1 % of their diagonal more all round: a box showing them.
+   *  ponytail: square to the model axes, so loose round a turned building (Rotate turns it); fit the smallest turned
+   *  footprint of the selection's points if tight boxes matter */
+  const around = () => {
+    const picked = usd.selection.flatMap((p) => usd.three.objectsFor(p)), world = new Box3();
+    for (const o of picked.length ? picked : [usd.three.root]) world.expandByObject(o);
+    if (world.isEmpty()) return;
+    const a = toModel(world.min.toArray(), mpu), b = toModel(world.max.toArray(), mpu), margin = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / 100;
+    const [x0, y0, z0] = a.map((v, k) => mm(Math.min(v, b[k]) - margin)), [x1, y1, z1] = a.map((v, k) => mm(Math.max(v, b[k]) + margin));
+    put({ boxes: [...boxes, { keep: 'inside', footprint: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], bottom: z0, top: z1 }] }, { box: boxes.length });
+  };
+  /** Plane or box i goes: the gizmo lets go of it, or follows the entry it edits an index down. */
+  const remove = (kind: 'plane' | 'box', i: number) => {
+    const g = usd.sectionGizmo as { plane?: number; box?: number } | null, at = g?.[kind] ?? -1;
+    put(kind === 'plane' ? { planes: planes.toSpliced(i, 1) } : { boxes: boxes.toSpliced(i, 1) }, at < i ? undefined : at === i ? null : ({ ...g, [kind]: at - 1 } as SectionGizmo));
+  };
+  /** An entry's heading: its name, its buttons [label, tooltip, action], Remove. */
+  const head = (kind: 'plane' | 'box', i: number, buttons: [string, string, () => void][]) => (
+    <div className="cluster cluster--between">
+      <span className="menu__section">{kind === 'plane' ? 'Plane' : 'Box'} {i + 1}</span>
+      <span className="cluster">
+        {buttons.map(([label, help, act]) => <button key={label} className="btn btn--ghost" type="button" title={help} onClick={act}>{label}</button>)}
+        <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Remove ${kind} ${i + 1}`} title={`Remove ${kind} ${i + 1}`} onClick={() => remove(kind, i)}><Icon name="close" /></button>
+      </span>
+    </div>
+  );
+  return (
+    <MenuButton id="section-menu" label="Section" icon="section" disabled={disabled} title="Section: clipping planes and boxes">
+      {(close) => {
+        const edit = (g: SectionGizmo) => { usd.sectionGizmo = g; close(); }; // the gizmo in the view: its handles take the next drag
+        return (
+          <>
+            <div className="views__row">
+              <label className="menu__item"><input className="menu__check" type="checkbox" checked={section.on} disabled={!planes.length && !boxes.length} onChange={(e) => put({ on: e.target.checked })} /><span>Section on</span></label>
+              <button className="btn btn--ghost" type="button" disabled={!planes.length && !boxes.length} onClick={() => put(NONE)}>Clear</button>
+            </div>
+            <p className="views__note text-muted">View only: runs, results, charts and downloads use the whole model.</p>
+            {refused.why && <Alert title="Not applied">{refused.why}</Alert>}
+            <div className="menu__section">Add a plane</div>
+            <button className="menu__item" type="button" disabled={planes.length >= MAX} title="Level with the point the view orbits; keeps what lies below" onClick={() => put({ planes: [...planes, { point: target(), normal: [0, 0, -1] }] }, { plane: planes.length })}><span>Horizontal</span></button>
+            <button className="menu__item" type="button" disabled={planes.length >= MAX} title="Through the point the view orbits, square to the view; keeps what lies beyond it" onClick={() => put({ planes: [...planes, { point: target(), normal: facing() }] }, { plane: planes.length })}><span>Facing the view</span></button>
+            <div className="menu__section">Add a box</div>
+            <button className="menu__item" type="button" disabled={boxes.length >= MAX} title="Round the selected prims (the whole model when none is), a little larger; shows what is inside" onClick={around}><span>{usd.selection.length ? 'Around the selection' : 'Around the model'}</span></button>
+            <Fragment key={refused.n}>
+              {planes.map((p, i) => (
+                <Fragment key={`p${i}`}>
+                  <div className="menu__separator" />
+                  {head('plane', i, [
+                    ['Edit', 'Move it along its normal with the arrow in the view', () => edit({ plane: i })],
+                    ['Tilt', 'Tilt it with the rings in the view', () => edit({ plane: i, rotate: true })],
+                    ['Flip', 'Keep the other side', () => put({ planes: planes.with(i, { ...p, normal: p.normal.map((v) => -v + 0) as Vec3 }) })],
+                  ])}
+                  <div className="stack chart-menu">
+                    <Coords id={`section-p${i}-point`} legend="Point (m)" value={p.point} onCommit={(v) => put({ planes: planes.with(i, { ...p, point: v as Vec3 }) })} />
+                    <Coords id={`section-p${i}-normal`} legend="Normal, towards the side kept" value={p.normal} onCommit={(v) => put({ planes: planes.with(i, { ...p, normal: v as Vec3 }) })} />
+                  </div>
+                </Fragment>
+              ))}
+              {boxes.map((b, i) => {
+                const set = (patch: Partial<Section['boxes'][number]>) => put({ boxes: boxes.with(i, { ...b, ...patch }) });
+                return (
+                  <Fragment key={`b${i}`}>
+                    <div className="menu__separator" />
+                    {head('box', i, [
+                      ['Edit', 'Move the whole box with the arrows in the view; click a dot to move a corner (in plan) or a face (up and down) alone', () => edit({ box: i })],
+                      ['Rotate', 'Turn it about the vertical with the ring in the view', () => edit({ box: i, rotate: true })],
+                    ])}
+                    <div className="stack chart-menu">
+                      <Segmented name={`section-b${i}-keep`} label={`Box ${i + 1}`} value={b.keep} options={[['inside', 'Show inside'], ['outside', 'Cut out']] as const} onChange={(keep) => set({ keep })} />
+                      <div className="scale-row__cols">
+                        <NumberField id={`section-b${i}-bottom`} label="Bottom (m)" value={b.bottom} onCommit={(v) => { if (Number.isFinite(v) && v !== b.bottom) set({ bottom: v }); }} />
+                        <NumberField id={`section-b${i}-top`} label="Top (m)" value={b.top} onCommit={(v) => { if (Number.isFinite(v) && v !== b.top) set({ top: v }); }} />
+                      </div>
+                      {b.footprint.map((corner, c) => <Coords key={c} id={`section-b${i}-c${c}`} legend={`Corner ${c + 1} (m)`} value={corner} onCommit={(v) => set({ footprint: b.footprint.with(c, v as [number, number]) as Section['boxes'][number]['footprint'] })} />)}
+                    </div>
+                  </Fragment>
+                );
+              })}
+            </Fragment>
+          </>
+        );
+      }}
     </MenuButton>
   );
 }
@@ -116,6 +235,7 @@ export function DownloadMenu({ model, ready, exporting, error, onDownload }: { m
             </label>
           ))}
           <p className="views__note text-muted lines-5">{help(format, mode)}</p>
+          <p className="views__note text-muted">Sections are view only and not exported.</p>
           {error && <Alert title="Download failed">{error}</Alert>}
           <div className="menu__footer views__download">
             <span className="text-muted">{exporting ? <><span className="spinner" aria-hidden="true" /> {usdFormat ? `Packing${mode === 'variants' || format !== 'usdz' ? ', flattening first' : ''}` : 'Writing'}</> : null}</span>

@@ -1,5 +1,6 @@
-import { BufferGeometry, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, Texture, Vector3 } from 'three';
+import { BufferGeometry, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshPhysicalMaterial, Texture, Vector3, type Material } from 'three';
 import { texture, vec4 } from 'three/tsl';
+import { MeshPhysicalNodeMaterial } from 'three/webgpu';
 import { describe, expect, it } from 'vitest';
 import { exportMatrices, gltfScene, objText, resultGeometry, standard, textureOf, type Drawn } from './sceneexport';
 
@@ -37,6 +38,12 @@ describe('the viewer look for GLTFExporter', () => {
     expect([s.color.getHex(), s.metalness, s.roughness]).toEqual([0x336699, 0.5, 0.25]);
     expect(s.map).not.toBe(tex);
     expect(s.map?.flipY).toBe(true);
+  });
+  it('exports a sectioned material as it is: sections are view only', () => {
+    const m = new MeshPhysicalNodeMaterial({ color: 0x336699, roughness: 0.25 }), json = (x: Material) => { const { uuid: _, ...rest } = x.toJSON() as unknown as Record<string, unknown>; return rest; };
+    const before = json(standard(m));
+    (m as unknown as { section: boolean }).section = true; // as the viewer marks its materials once a section shows
+    expect(json(standard(m))).toEqual(before);
   });
   it('is transparent (BLEND) only with an alpha the export carries: through another texture alone (an MTL map_d) it is opaque', () => {
     expect(standard(new MeshPhysicalMaterial({ transparent: true })).transparent).toBe(false); // the viewer's opacity node: opacity 1, no base map

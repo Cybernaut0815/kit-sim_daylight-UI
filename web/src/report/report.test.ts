@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ViewState } from 'usd-viewer';
+import type { Section } from '../lib/section';
 import { defaultSettings, type ObjectRow, type RunResult } from '../store';
 import { renderReport, type ReportInput } from './Report';
 import type { Report } from './spec';
@@ -79,6 +80,17 @@ describe('renderReport', () => {
     const capped = renderReport(many);
     expect(capped).toContain('Per mesh. The 50 largest of 60 receiver meshes.');
     expect(capped.match(/<th scope="row"/g)).toHaveLength(50);
+  });
+  it('says which figures are sectioned, and that their values are of the whole model', () => {
+    const p = input(['A']), plan: Section = { on: true, planes: [{ point: [0, 0, 1.2], normal: [0, 0, -1] }], boxes: [] };
+    p.report.blocks = p.report.blocks.map((b) => (b.type === 'view' ? { ...b, section: plan } : b));
+    p.report.blocks.push({ type: 'view', name: 'Plan', view, column: null, section: { ...plan, boxes: [{ keep: 'inside', footprint: [[0, 0], [20, 0], [20, 12], [0, 12]], bottom: 0, top: 10 }] }, caption: 'The plan.' });
+    p.images.push(['data:image/png;base64,AAAA']);
+    const html = renderReport(p);
+    expect(html).toContain('so that what stands in front does not hide what it shows. It is sectioned (horizontal at 1.20 m, keeps below); values are of the whole model.');
+    expect(html).toContain('Figure 4 is sectioned (horizontal at 1.20 m, keeps below; 1 box showing inside); values are of the whole model.');
+    p.report.blocks = p.report.blocks.map((b) => (b.type === 'view' ? { ...b, section: { ...plan, on: false } } : b));
+    expect(renderReport(p)).not.toContain('sectioned');
   });
   it('a comparison reads model by model', () => {
     const two = renderReport(input(['A', 'B']));

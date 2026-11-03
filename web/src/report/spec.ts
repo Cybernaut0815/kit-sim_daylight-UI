@@ -6,6 +6,7 @@ import type { ViewState } from 'usd-viewer';
 import type { ChartEdit } from '../charts/ChartSettings';
 import { FIELDS as LOOK, cleanSpec, isShare, type ChartSpec, type Metric as ChartMetric } from '../lib/charts';
 import { fmtNum, unitFor } from '../lib/result';
+import { sectionOf, validate as sectionProblems, type Section } from '../lib/section';
 import type { Settings } from '../store';
 
 const LETTERS = 'ABCD';
@@ -18,7 +19,7 @@ export type ReportChart = Omit<ChartSpec, 'models'> & { models?: string[] };
 export type Block =
   | { type: 'text'; title?: string; text: string }
   | { type: 'chart'; chart: ReportChart; caption: string; saved?: ReportChart } // saved: the chart as save_report stored it (Reset in the app)
-  | { type: 'view'; name: string; view: ViewState; near?: number; column: string | null; aspect?: number; caption: string }
+  | { type: 'view'; name: string; view: ViewState; near?: number; column: string | null; aspect?: number; section?: Section; caption: string } // section: its own (model metres; none without)
   | { type: 'table'; column: string; by?: 'parts' | 'mesh' | 'facing'; parts?: string[]; metrics: Metric[]; caption: string };
 /** Prim path -> variant set -> the variant chosen in the app (a set at the file's own variant is not listed). */
 export type Variants = Record<string, Record<string, string>>;
@@ -61,7 +62,7 @@ function readable(id: string, s: unknown): s is Report {
   const metric = (v: unknown) => METRICS.includes(v as Metric);
   const block = (b: unknown) => isObj(b) && (b.type === 'text' ? typeof b.text === 'string'
     : b.type === 'chart' ? typeof b.caption === 'string' && isObj(b.chart) && typeof b.chart.column === 'string' && (b.chart.models === undefined || strs(b.chart.models)) && typeof cleanSpec({ ...b.chart, models: undefined }) !== 'string'
-      : b.type === 'view' ? typeof b.caption === 'string' && typeof b.name === 'string' && isObj(b.view) && vec(b.view.eye) && vec(b.view.target)
+      : b.type === 'view' ? typeof b.caption === 'string' && typeof b.name === 'string' && isObj(b.view) && vec(b.view.eye) && vec(b.view.target) && (b.section === undefined || !sectionProblems(b.section, 'section').length)
         : b.type === 'table' && typeof b.caption === 'string' && typeof b.column === 'string' && Array.isArray(b.metrics) && b.metrics.every(metric));
   return Array.isArray(s.models) && s.models.length > 0 && s.models.every(model) && (s.ranges === undefined || isObj(s.ranges))
     && (s.stats === undefined || (Array.isArray(s.stats) && s.stats.every((x) => isObj(x) && metric(x.metric) && [x.label, x.column, x.model].every((v) => typeof v === 'string'))))
@@ -133,7 +134,7 @@ const vec = (v: unknown) => Array.isArray(v) && v.length === 3 && v.every(finite
 const quantityOf = (column: string) => column.split('_')[0];
 const FIELDS: Record<string, string[]> = {
   spec: ['id', 'title', 'created', 'updated', 'models', 'stats', 'summary', 'blocks', 'notes'], stat: ['label', 'metric', 'column', 'model', 'path'],
-  text: ['type', 'title', 'text'], chart: ['type', 'chart', 'caption'], view: ['type', 'name', 'view', 'near', 'column', 'aspect', 'caption'], table: ['type', 'column', 'by', 'parts', 'metrics', 'caption'],
+  text: ['type', 'title', 'text'], chart: ['type', 'chart', 'caption'], view: ['type', 'name', 'view', 'near', 'column', 'aspect', 'section', 'caption'], table: ['type', 'column', 'by', 'parts', 'metrics', 'caption'],
 };
 
 /** The share metrics (below, within, above) of a spec whose quantity has no problem range now: they would read 0 or 100 %
@@ -254,9 +255,12 @@ export function validateSpec(raw: unknown, app: AppView): Draft | string[] {
       if (b.near !== undefined && !(finite(b.near) && b.near > 0)) bad(`${at}.near`, "the cutaway in m, more than 0 (find_critical's near)");
       if (b.aspect !== undefined && !(finite(b.aspect) && b.aspect >= 0.25 && b.aspect <= 4)) bad(`${at}.aspect`, 'width / height, 0.25 to 4');
       const col = b.column === null ? null : b.column === undefined ? bad(`${at}.column`, "a result column, or null for the models' own colours") : column(`${at}.column`, b.column);
+      const cut = b.section === undefined ? [] : sectionProblems(b.section, `${at}.section`);
+      no.push(...cut);
       blocks.push({
         type: 'view', name: text(`${at}.name`, b.name, 60)!, view: { eye: v.eye, target: v.target, fov: v.fov, projection: v.projection, height: v.height } as ViewState,
-        ...(b.near !== undefined ? { near: b.near as number } : {}), column: col ?? null, ...(b.aspect !== undefined ? { aspect: b.aspect as number } : {}), caption,
+        ...(b.near !== undefined ? { near: b.near as number } : {}), column: col ?? null, ...(b.aspect !== undefined ? { aspect: b.aspect as number } : {}),
+        ...(b.section !== undefined && !cut.length ? { section: sectionOf(b.section as Section) } : {}), caption,
       });
     } else {
       const by = b.by === undefined ? 'parts' : ['parts', 'mesh', 'facing'].includes(b.by as string) ? (b.by as 'parts') : bad(`${at}.by`, 'one of parts, mesh, facing');

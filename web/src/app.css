@@ -124,9 +124,9 @@
   .viewports__split { display: none; } /* so the split has nothing to switch */
 }
 
-/* the run bar: compact controls (it covers less of the model), the two menus kept together when it wraps */
+/* the run bar: compact controls (it covers less of the model); the menus stay on one line while it is wide enough for
+   them, and wrap (never stick out, clipped) in a narrower one */
 .viewport__bar { --control-h: 36px; }
-.viewport__bar > .cluster > .cluster:first-child { flex-wrap: nowrap; }
 /* the run bar's menus (Views, Download USD): saved rows with their remove button, the save form, short notes */
 .views__row { display: flex; align-items: center; }
 .views__row > .menu__item { flex: 1; min-inline-size: 0; }
@@ -135,7 +135,7 @@
 .views__save { gap: var(--space-2); }
 .views__save .input { inline-size: auto; flex: 1; min-inline-size: 0; }
 .views__download { justify-content: space-between; align-items: center; gap: var(--space-2); }
-/* a chart's settings menu (its tune button in the Results panel): the fields padded as the menu's items */
+/* a menu's fields (a chart's settings, the section's numbers in the run bar): padded as the menu's items */
 .chart-menu { padding: var(--space-2) var(--space-3); }
 /* a chart heading with only its settings button: a long title wraps beside the button, which stays top right */
 .chart-head { flex-wrap: nowrap; align-items: start; }

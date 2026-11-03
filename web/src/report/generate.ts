@@ -63,14 +63,14 @@ async function build(id: string, c: () => Ctl): Promise<Pdf> {
 
 /** Each view block's images (per report model, data: URLs; [] for the other blocks) at twice their printed size: PNG over
  *  white, the block's column on the report models' range (a blank Min or Max pinned to it) or the models' own colours,
- *  without grid, sun path, bin highlight or selection. */
+ *  its own section (none without one, never the user's), without grid, sun path, bin highlight or selection. */
 async function shots(spec: Report, models: Model[], c: () => Ctl): Promise<string[][]> {
   const out: string[][] = [];
   for (const [i, b] of spec.blocks.entries()) {
     if (b.type !== 'view') { out.push([]); continue; }
     const q = b.column?.split('_')[0], scale = q ? c().state.settings.viz.scales[q] : undefined, [lo, hi] = b.column ? unionRange(models.map((m) => m.result!), b.column) : [NaN, NaN];
     const { width, height } = imageSize(models.length, b.aspect ?? 1.6);
-    out.push(await staged(c, models.map((m) => m.slot), { column: b.column ?? undefined, colourBy: b.column ? 'value' : 'plain', sunPath: false, grid: false, clean: true, ...(q ? { pin: { quantity: q, min: scale?.min ?? lo, max: scale?.max ?? hi } } : {}) }, async () => {
+    out.push(await staged(c, models.map((m) => m.slot), { column: b.column ?? undefined, colourBy: b.column ? 'value' : 'plain', sunPath: false, grid: false, clean: true, section: b.section ?? null, ...(q ? { pin: { quantity: q, min: scale?.min ?? lo, max: scale?.max ?? hi } } : {}) }, async () => {
       const urls: string[] = [];
       for (const m of models) {
         const { el } = c().viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1;

@@ -16,6 +16,7 @@ const ICONS = {
   plus: <path d="M12 5v14M5 12h14" />,
   tune: <><path d="M4 8h8M16 8h4M4 16h4M12 16h8" /><circle cx="14" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>,
   report: <><path d="M6 3h8l4 4v14H6Z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
+  section: <><path d="M4 10l8-4 8 4-8 4Z" /><path d="M4 10v6l8 4 8-4v-6M12 14v6" /></>, // a block cut level: its cut face on top
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 | 20 | 24 }) {

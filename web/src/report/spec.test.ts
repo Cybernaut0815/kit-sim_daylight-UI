@@ -67,6 +67,17 @@ describe('validateSpec', () => {
     expect(validateSpec({ ...examples[0], id: 'nul' }, app(model('A')))).toEqual(['id: a name Windows keeps for a device; choose another id']);
   });
 
+  it("keeps a view's own section (its own fields; on unless off), and names what is wrong in it", () => {
+    const plan = { planes: [{ point: [10, 6, 1.2], normal: [0, 0, -1] }] }, viewed = (section: unknown) => ({ ...examples[0], blocks: examples[0].blocks.with(1, { ...examples[0].blocks[1], section }) });
+    const d = validateSpec(viewed(plan), app(model('A'))) as Draft;
+    expect(d.blocks[1]).toMatchObject({ type: 'view', section: { on: true, ...plan, boxes: [] } });
+    expect(parseReports([{ id: d.id, pdf: false, spec: JSON.stringify(stamp(d)) }])).toHaveLength(1);
+    expect(validateSpec(viewed({ ...plan, boxes: [{ keep: 'inside', footprint: [[0, 0], [1, 1], [1, 0], [0, 1]], bottom: 0, top: 1, name: 'b' }] }), app(model('A')))).toEqual([
+      'blocks[1].section.boxes[0].name: not a field of a box (keep, footprint, bottom, top)',
+      'blocks[1].section.boxes[0].footprint: crosses itself or has no area; give the corners in order round the box',
+    ]);
+  });
+
   it('refuses a model without a result, a share without a problem range, a chart id twice', () => {
     expect(validateSpec({ ...examples[0], models: ['A'] }, app(model('A', { result: null })))).toEqual(['models[0]: model A has no result; run first']);
     expect(validateSpec(examples[0], { ...app(model('A')), ranges: {} })).toEqual([
@@ -152,6 +163,7 @@ describe('parseReports', () => {
       entry(good.id, good), entry('x', { title: 'x' }), { id: 'y', pdf: true, spec: '{' }, entry('other-id', good),
       entry(good.id, { ...good, blocks: [{ type: 'chart', chart: { id: 'c', kind: 'pie', column: 'sunhours_front' }, caption: 'c' }] }),
       entry(good.id, { ...good, models: [{ model: 'A' }] }), entry(good.id, { ...good, stats: [{ label: 'x', metric: 'average', column: 'c', model: 'A' }] }),
+      entry(good.id, { ...good, blocks: good.blocks.map((b) => (b.type === 'view' ? { ...b, section: { planes: [{ point: [0, 0], normal: [0, 0, 1] }] } } : b)) }),
     ]);
     expect(list.map((e) => e.id)).toEqual([good.id]);
   });

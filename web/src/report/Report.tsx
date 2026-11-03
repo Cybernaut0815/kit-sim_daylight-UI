@@ -14,6 +14,7 @@ import { haversineKm } from '../lib/geo';
 import { scaleFor } from '../lib/gradients';
 import { runSwitches } from '../lib/optics';
 import { SIDE_HELP, columnLabel, fmtNum, roundPct, unionRange, unitFor, type Summary } from '../lib/result';
+import { active, describe } from '../lib/section';
 import { fmtClock, fmtDay } from '../lib/time';
 import { rowNames } from '../lib/tree';
 import { fmtOffset, zoneAt } from '../lib/zone';
@@ -301,12 +302,14 @@ function Page(p: ReportInput) {
                 {quantities.map((q) => { const g = s.viz.ranges[q], u = unitFor(q).value; return g && (g.lo !== null || g.hi !== null) ? ` The problem range of ${quantityName(q)}: ${[g.lo !== null ? `below ${fmtNum(g.lo)} ${u}` : '', g.hi !== null ? `above ${fmtNum(g.hi)} ${u}` : ''].filter(Boolean).join(' and ')} counts as out of range.` : ''; }).join('')}
               </p>
               {r.blocks.map((b, i) => {
-                if (b.type !== 'view' || (!b.column && b.near === undefined)) return null;
+                const cut = b.type === 'view' && b.section && active(b.section) ? b.section : null;
+                if (b.type !== 'view' || (!b.column && b.near === undefined && !cut)) return null;
                 const sc = b.column && scaleOf(b.column);
                 return (
                   <p key={i}>
                     {sc ? `Figure ${numbers[i]} colours ${quantityName(b.column!.split('_')[0])} (${b.column!.split('_')[1]} side) on one scale${many ? ' for every model' : ''}, ${sc.gradient.label} from ${fmtNum(sc.vmin)} to ${fmtNum(sc.vmax)} ${unitFor(b.column!).value}.` : ''}
                     {b.near !== undefined ? `${sc ? ' ' : ''}It leaves out geometry within ${fmtNum(b.near)} m of the camera, so that what stands in front does not hide what it shows.` : ''}
+                    {cut ? `${sc || b.near !== undefined ? ' It' : `Figure ${numbers[i]}`} is sectioned (${describe(cut)}); values are of the whole model.` : ''}
                   </p>
                 );
               })}

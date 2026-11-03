@@ -18,6 +18,7 @@ import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, pho
 import { gradientFor, type Scale } from '../lib/gradients';
 import { DEFAULT_KEY, GLASS_KEY, PRESETS, editOptics, type Optics, type resolveOptics } from '../lib/optics';
 import { QUANTITY_HELP, SIDE_HELP, fmtNum, roundNum, roundPct, summarize, unitFor, type Summary } from '../lib/result';
+import { NONE, toStage, type Section } from '../lib/section';
 import { dayBounds, parseHoy, sunAt } from '../lib/sun';
 import { fmtClock, fmtTime, yearOf } from '../lib/time';
 import { idsUnder, primQuery, underIndex } from '../lib/tree';
@@ -46,6 +47,7 @@ export interface Ctl {
   ui: UiPrefs; setUi: Dispatch<SetStateAction<UiPrefs>>;
   theme: Theme; setTheme: (mode: Theme) => void; // the mode (auto: the system's)
   sunScale: number; setSunScale: (scale: number) => void;
+  section: Section; setSection: (s: Section) => void; // every view's section (model metres; lib/section.ts), view only
   views: SavedView[]; setViews: Dispatch<SetStateAction<SavedView[]>>;
   optics: ReturnType<typeof resolveOptics>[]; materialsReady: boolean; // optics per model, in state.models order
   per: { m: Model; receivers: ObjectRow[]; shades: ObjectRow[]; key: string }[]; // per model, in order: its run key now
@@ -185,7 +187,7 @@ const problems = (x: Ctl) => validate(x.state.settings, x.per.some((p) => p.rece
 const loadedSlots = (x: Ctl) => x.state.models.filter((m) => (x.panes[m.slot]?.meshes.size ?? 0) > 0).map((m) => m.slot);
 const display = (x: Ctl) => ({
   active: letter(x.state.active), column: x.shown, colourBy: x.state.colourBy, highlight: x.state.bin, theme: x.theme,
-  sunPath: x.ui.sunPath, sunScale: x.sunScale, split: x.ui.split, link: x.ui.link, auto: x.ui.auto,
+  sunPath: x.ui.sunPath, sunScale: x.sunScale, split: x.ui.split, link: x.ui.link, auto: x.ui.auto, section: x.section,
 });
 
 export const UUID = /[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g;
@@ -378,8 +380,9 @@ export function shotSize(width: number, height: number): { width: number; height
 const tick = () => new Promise<void>((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(null); });
 
 /** How the views look for shots: the column by name, the colouring, the sun path, the ground grid (the overlay frame()
- *  skips), a quantity's colour scale Min and Max (`pin`), no bin highlight and no selection fill (`clean`). */
-export interface Look { column?: string; colourBy?: 'plain' | 'value'; sunPath?: boolean; grid?: boolean; pin?: { quantity: string; min: number; max: number }; clean?: boolean }
+ *  skips), a quantity's colour scale Min and Max (`pin`), no bin highlight and no selection fill (`clean`), a section of
+ *  their own (model metres; null: none; left out: the user's). */
+export interface Look { column?: string; colourBy?: 'plain' | 'value'; sunPath?: boolean; grid?: boolean; pin?: { quantity: string; min: number; max: number }; clean?: boolean; section?: Section | null }
 let staging = 0; // looks staged now
 /** A look is staged for shots: App keeps it out of the stored settings and view preferences (the restore stores them). */
 export const isStaging = () => staging > 0;
@@ -391,6 +394,8 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
   const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity] };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
+  // the shot's section goes straight to its views, the app's stays: each view gets its own back, with its gizmo
+  const cuts = look.section === undefined ? [] : slots.map((k) => { const { el } = x.viewer(k); return { el, section: el.section, gizmo: el.sectionGizmo }; });
   staging++;
   try {
     flushSync(() => {
@@ -404,6 +409,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     });
     if (fill) fill.highlight = { color: '#000000', opacity: 0 }; // after the commit: a colouring change sets it again
     for (const [o] of grids) o.visible = look.grid!;
+    for (const { el } of cuts) el.section = toStage(look.section ?? NONE, el.stage?.metersPerUnit ?? 1, el.stage?.upAxis ?? 'Y');
     // ponytail: one MessageChannel task lets Viewer.tsx's paint (it awaits a dynamic import before colouring a receiver
     // the first time) land; wait for a paint-done signal from the Viewer if a shot ever shows a receiver uncoloured
     await tick();
@@ -411,6 +417,10 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
   } finally {
     staging--;
     for (const [o, v] of grids) o.visible = v;
+    for (const { el, section, gizmo } of cuts) {
+      el.section = section;
+      if (gizmo && !el.sectionGizmo) el.sectionGizmo = gizmo; // detached where the shot's section lacked its entry
+    }
     flushSync(() => {
       const z = c();
       if (look.column !== undefined) z.dispatch({ type: 'COLUMN', column: was.column });

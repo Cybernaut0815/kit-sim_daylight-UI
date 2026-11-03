@@ -1,12 +1,12 @@
 // Shell: app bar, inputs panel, the models' views with the run bar, results panel; owns the models (up to four, each in
 // its own USD viewer, its meshes converted once), the per-mesh conversion cache, the runs (one batch per click or Auto,
-// the models one after another), the comparison (one colour scale over every model), the theme mode and the view
-// preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras).
+// the models one after another), the comparison (one colour scale over every model), the theme mode, the view
+// preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras) and the section every view shows.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { Object3D } from 'three';
 import { runRemote, type ObjMesh, type RemoteManifest } from 'daylight-mesh';
-import type { LocalFile, ViewState } from 'usd-viewer';
+import type { LocalFile, SectionGizmo, SectionSource, ViewState } from 'usd-viewer';
 import { Splitter } from './Splitter';
 import type { ChartEdit } from './charts/ChartSettings';
 import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args';
@@ -18,6 +18,7 @@ import { opticsArgs, readKey, resolveOptics, runSwitches, type TextureStats } fr
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, roundNum, unionRange, unitFor, vertexAreas } from './lib/result';
+import { NONE, active, describe, fromStage, toStage, type Section } from './lib/section';
 import { link, type SavedView } from './lib/views';
 import { exclusive, settled } from './mcp/bridge';
 import { UUID, appView, connect, isStaging, putReport, storedReport, type Ctl } from './mcp/tools';
@@ -35,7 +36,7 @@ import { inFlight, initialState, parseSettings, reducer, runBatch, serializeSett
 import { Icon, LETTERS, Segmented, Tag, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
-import { DownloadMenu, ReportsMenu, ViewsMenu } from './viewer/Views';
+import { DownloadMenu, ReportsMenu, SectionMenu, ViewsMenu } from './viewer/Views';
 import type { SunView } from './viewer/sunpath';
 import { readTexture, viewer } from './viewer/usd';
 
@@ -91,6 +92,11 @@ export default function App() {
   const [ended, setEnded] = useState(0); // bumped when a batch ends, so Auto re-checks with the settings of that moment
   const [slow, setSlow] = useState(false); // the batch in flight has taken over 0.3 s
   const [sunScale, setSunScale] = useState(1); // the sun path's radius over the one fitted to the model; 1 on every model load
+  // the section every view shows (lib/section.ts, model metres): view only, this session; never a setting, a run input or
+  // a key, and never cleared by a new model, a variant switch or a re-read
+  const [section, setSection] = useState<Section>(NONE);
+  const sectionNow = useRef(section); // for the listeners and callbacks
+  sectionNow.current = section;
   const [texStats, setTexStats] = useState<Readonly<Record<number, ReadonlyMap<string, TextureStats | null>>>>({}); // per slot (each core numbers its files from /drop/1), by readKey (null: unreadable)
   const reading = useRef(false); // one texture at a time: one decoded image in memory
   const onSunPath = useCallback((on: boolean) => setUi((u) => ({ ...u, sunPath: on })), []);
@@ -182,14 +188,15 @@ export default function App() {
   }, [editReport]);
   // a view block takes the camera `view` (stage units, `mpu` m each); its cutaway moves with it, keeping its distance in
   // front of the target (a camera moved closer cuts less), and goes once the camera is nearer than that, or looks from
-  // another side (more than 2° off: the cut, set for the old side, would slice into what it shows; the live view has none)
+  // another side (more than 2° off: the cut, set for the old side, would slice into what it shows; the live view has none).
+  // It takes the section shown too (none when it is off or empty).
   const onReportView = useCallback((id: string, i: number, name: string, view: ViewState, mpu: number) => void editReport(id, (r) => {
-    const b = r.blocks[i]; // the block the menu showed, unless the report changed since
+    const b = r.blocks[i], cut = sectionNow.current; // the block the menu showed, unless the report changed since
     if (b?.type !== 'view' || b.name !== name) return null;
-    const dir = (v: ViewState) => v.eye.map((e, k) => e - v.target[k]), reach = (v: ViewState) => Math.hypot(...dir(v)) * mpu, { near: was, ...rest } = b;
+    const dir = (v: ViewState) => v.eye.map((e, k) => e - v.target[k]), reach = (v: ViewState) => Math.hypot(...dir(v)) * mpu, { near: was, section: _was, ...rest } = b;
     const [p, q] = [dir(view), dir(b.view)], turned = p[0] * q[0] + p[1] * q[1] + p[2] * q[2] < Math.cos(Math.PI / 90) * Math.hypot(...p) * Math.hypot(...q);
     const near = was === undefined || turned ? 0 : roundNum(was + reach(view) - reach(b.view));
-    return { ...r, blocks: r.blocks.with(i, { ...rest, view, ...(near > 0 ? { near } : {}) }) };
+    return { ...r, blocks: r.blocks.with(i, { ...rest, view, ...(near > 0 ? { near } : {}), ...(active(cut) ? { section: cut } : {}) }) };
   }, true), [editReport]);
   const onReportDelete = useCallback(async (id: string) => {
     setReportError(null);
@@ -329,6 +336,51 @@ export default function App() {
       el.ready.then(() => { if (el.session.refineLevel !== subdiv.current) void el.usd.setComplexity(subdiv.current); }, () => {});
     }
   }, [slots]);
+
+  // The section in every view with a stage, in that stage's units and axes; again whenever a stage opens there (which
+  // clears it). Edited in a view (its gizmo, its own menu), it comes back in model metres and the other views follow, but
+  // that view keeps its own numbers: rounded ones would fight the drag. A change from the Section menu takes the gizmo
+  // to its entry in the active view once the views have it (attach: undefined leaves it as it is).
+  const mirrored = useRef<{ slot: number; section: Section } | null>(null), attach = useRef<SectionGizmo | null | undefined>(undefined);
+  const stages = state.models.map((m) => `${m.slot}:${panes[m.slot]?.stage ?? 0}`).join();
+  useEffect(() => {
+    for (const m of models.current) {
+      const { el } = viewer(m.slot), st = el.stage;
+      if (st && (mirrored.current?.section !== section || mirrored.current.slot !== m.slot)) el.section = toStage(section, st.metersPerUnit, st.upAxis);
+    }
+    if (attach.current !== undefined) viewer(state.active).el.sectionGizmo = attach.current;
+    attach.current = undefined;
+  }, [section, stages]); // eslint-disable-line react-hooks/exhaustive-deps -- the gizmo goes to this commit's active view
+  useEffect(() => {
+    const offs = models.current.map(({ slot }) => {
+      const { el } = viewer(slot);
+      const on = (e: Event) => {
+        const { source } = (e as CustomEvent<{ source: SectionSource }>).detail, st = el.stage;
+        if (!st) return;
+        if (source === 'stage') el.section = toStage(sectionNow.current, st.metersPerUnit, st.upAxis);
+        else if (source === 'gizmo' || source === 'ui') {
+          mirrored.current = { slot, section: fromStage(el.section, st.metersPerUnit, st.upAxis) };
+          setSection(mirrored.current.section);
+        }
+      };
+      el.addEventListener('sectionchange', on);
+      return () => el.removeEventListener('sectionchange', on);
+    });
+    return () => offs.forEach((off) => off());
+  }, [slots]);
+  const onSection = useCallback((next: Section, gizmo?: SectionGizmo | null) => {
+    if (gizmo !== undefined) attach.current = gizmo;
+    setSection(next);
+  }, []);
+  // The gizmo edits the section in the active view only: it goes along when another view becomes the active one.
+  const gizmoIn = useRef(state.active);
+  useEffect(() => {
+    if (gizmoIn.current === state.active) return;
+    const from = viewer(gizmoIn.current).el, g = from.sectionGizmo;
+    gizmoIn.current = state.active;
+    from.sectionGizmo = null;
+    if (g) viewer(state.active).el.sectionGizmo = g;
+  }, [state.active]);
   /** A model goes: its view, its results and its job on its way (deleted on the server; the batch goes on); its element and
    *  core stay for the next model in its slot (dispose() is final). */
   const onRemove = useCallback((slot: number) => {
@@ -522,6 +574,7 @@ export default function App() {
   // the app as the Reports menu checks a report against it, while there are reports: per change of the models, roles,
   // results, column or problem ranges, never per hover
   const reportApp = useMemo(() => (reports?.length ? appView({ shown, state, panes, per, variants }) : null), [reports, shown, state.models, s.viz.ranges, panes, keys]); // eslint-disable-line react-hooks/exhaustive-deps -- state and per by the parts appView reads
+  const sectionWords = active(section) ? describe(section) : null; // the views' scene info
 
   // The app as the tools in mcp/tools.ts drive it, rewritten on every commit, which also wakes the tools waiting for one;
   // where the agent routes answer this tab, the bridge polls the server for their calls while the page lives, after
@@ -529,7 +582,7 @@ export default function App() {
   const ctl = useRef<Ctl>(null!);
   useLayoutEffect(() => {
     ctl.current = {
-      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, views, setViews, optics, materialsReady, per, shown, scale, domain,
+      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection, views, setViews, optics, materialsReady, per, shown, scale, domain,
       exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, weightsFor, meshOf,
       busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
       variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
@@ -580,7 +633,7 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={state.colourBy} result={cols[i] >= 0 ? m.result : null} column={Math.max(cols[i], 0)}
-                      scale={scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={sunView}
+                      scale={scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={sunView} section={sectionWords}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
@@ -591,13 +644,14 @@ export default function App() {
                   );
                 })}
               </div>
-              {/* left: the Views and Download menus (the active view's); middle: how the views share the space and the camera;
-                  right-aligned, the button's label never changes and Cancel appears on its left: the tickbox stays put;
-                  progress shows in the Results run lines */}
+              {/* left: the Views, Section and Download menus (the active view's); middle: how the views share the space and the
+                  camera; right-aligned, the button's label never changes and Cancel appears on its left: the tickbox stays
+                  put; progress shows in the Results run lines */}
               <div className="viewport__bar">
                 <div className="cluster cluster--between">
                   <div className="cluster">
-                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} />
+                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={setSection} />
+                    <SectionMenu usd={viewer(am.slot).el} section={section} disabled={!ap.meshes.size} onChange={onSection} />
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports; a generation's failure shows as its lastError */}
                     {reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}

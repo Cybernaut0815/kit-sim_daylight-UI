@@ -3,10 +3,13 @@
 // tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
 // several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
 // and north. A click or a key pressed in the view makes its model the active one (focus alone does not: Tab passes
-// the views without changing the model the panels and the run bar act on).
+// the views without changing the model the panels and the run bar act on). The viewer's section cuts the model, its
+// result colours and the hover tint alike (never the sun path, the grid or the labels: diagrams, not the model), and its
+// gizmo takes the pointer before the sun path.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { applyToThree } from 'daylight-mesh';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
@@ -24,12 +27,12 @@ export const selectionFill = (byValue: boolean) => ({ color: `#${new THREE.Color
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
 const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m < 0.04 ? 0.4 * Math.sqrt(m) - m : 0.04; return c.setRGB(c.r + off, c.g + off, c.b + off); };
 /** A view's paint material and hover tint, per view: a mesh has one parent, and each view's [meshes] cleanup resets
- *  its tint. */
+ *  its tint. Node materials, made once (each new one compiles its shaders), so that the viewer can section them. */
 function look() {
   // Result colours: unlit, so with tone mapping off (the Value view) they are exactly the legend's
-  const PAINT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const PAINT = new MeshBasicNodeMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
   // The hover tint, over the paint (-1) and the viewer's selection fill (-2); it borrows the hovered object's geometry
-  const TINT = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+  const TINT = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
   const EMPTY = new THREE.BufferGeometry();
   const tint = new THREE.Mesh(EMPTY, TINT); // never dispose its geometry: it is the viewer's
   tint.raycast = () => {}; // the viewer's pick walks its objects' children
@@ -48,6 +51,7 @@ interface Props {
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
+  section: string | null; // the section shown, in words (null: none)
 }
 
 interface Ctx {
@@ -56,21 +60,30 @@ interface Ctx {
   dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
 }
 
-/** The scene info at the top right of the view: meshes by role, faces and vertices, units, and the frame line. */
-function SceneInfo({ objects, unit, stats }: { objects: ObjectRow[]; unit: number; stats: RefObject<HTMLSpanElement | null> }) {
+/** The scene info at the top right of the view: meshes by role, faces and vertices, units, the section, and the frame
+ *  line. */
+function SceneInfo({ objects, unit, section, stats }: { objects: ObjectRow[]; unit: number; section: string | null; stats: RefObject<HTMLSpanElement | null> }) {
   const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
   const ignored = n('none');
   return (
     <div className="viewport__info" aria-hidden="true">
       <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {f(n('shade'))} shading{ignored ? `, ${f(ignored)} ignored` : ''}</span>
       <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
+      {section && <span>Section: {section}</span>}
       <span ref={stats} />
     </div>
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, section }: Props) {
   const [{ PAINT, TINT, EMPTY, tint }] = useState(look);
+  // cut with the model from the first section on; registered per mount, as a dispose lets go of them (StrictMode runs
+  // this twice)
+  useEffect(() => {
+    usd.three.section(PAINT);
+    usd.three.section(TINT);
+    return () => { PAINT.dispose(); TINT.dispose(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- the view's own materials, for its life
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
   const at = useRef({ x: 0, y: 0 }); // the cursor in the canvas, where the floating readout sits
@@ -134,14 +147,14 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.addEventListener('selectionchange', onSel);
 
     // Hover and probe: pointermove raycasts the rows' objects (not their children: the overlays) once per frame; the
-    // element is the face, or the nearest vertex of the hit face.
+    // element is the face, or the nearest vertex of the hit face. What the section cuts away is passed through.
     // ponytail: linear raycast over every mesh; three-mesh-bvh past ~1M triangles
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3();
     const hitAt = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, usd.three.camera); // read again: the viewer swaps cameras
-      return ray.intersectObjects([...latest.current.meshes.values()].filter((o) => o.visible), false)[0] ?? null; // hidden: H or the eye
+      return ray.intersectObjects([...latest.current.meshes.values()].filter((o) => o.visible), false).find((h) => usd.three.keeps(h.point)) ?? null; // hidden: H or the eye
     };
     const pick = (e: PointerEvent) => {
       const hit = hitAt(e), r = canvas.getBoundingClientRect();
@@ -180,7 +193,8 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     canvas.addEventListener('pointerleave', onLeave);
 
     // Sun path drags: capture listeners on the viewport run before the viewer's own (its selection tool and orbit, on
-    // the canvas inside its shadow root). A grab stops the event there, so a drag never orbits, selects or probes.
+    // the canvas inside its shadow root). A grab stops the event there, so a drag never orbits, selects or probes. Over
+    // the section gizmo's handles, and while one is dragged, the sun path lets the viewer have the pointer.
     let grab: Grab | null = null;
     const ours = (e: PointerEvent) => e.composedPath()[0] === canvas; // events from the shadow canvas are retargeted to <usd-viewer>
     const ptr = (e: PointerEvent): Ptr => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height }; };
@@ -189,7 +203,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     const offModel = (e: PointerEvent) => () => { const h = hitAt(e); return !h || h.point.y < c.dome.y + 0.01 * c.dome.r; };
     const onGrab = (e: PointerEvent) => {
       const v = latest.current.sun;
-      if (!ours(e) || e.button !== 0 || !v || !latest.current.meshes.size) return; // the run bar lives in the viewport too
+      if (!ours(e) || e.button !== 0 || !v || !latest.current.meshes.size || usd.sectionGizmoAt(e.clientX, e.clientY)) return; // the run bar lives in the viewport too
       if (sunPath.hover(ptr(e), usd.three.camera, offModel(e)).changed) usd.three.invalidate(); // a press with no hover before it (touch, pen) gets the look too
       grab = sunPath.grab(ptr(e), usd.three.camera, v, offModel(e));
       if (!grab) return;
@@ -209,7 +223,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
         return;
       }
       if (!ours(e) || !v || !latest.current.meshes.size) return;
-      const { over, changed } = sunPath.hover(ptr(e), usd.three.camera, offModel(e));
+      const { over, changed } = sunPath.hover(usd.sectionGizmoAt(e.clientX, e.clientY) ? null : ptr(e), usd.three.camera, offModel(e));
       usd.classList.toggle('viewport__grab', over);
       if (changed) usd.three.invalidate();
     };
@@ -387,7 +401,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
           {error && hasModel && <span className="badge badge--warning" title={error}><span className="dot" />Problems</span>}
         </div>
       )}
-      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} stats={stats} />}
+      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} section={section} stats={stats} />}
       {ready && !hasModel && !loading && (error
         ? <div className="empty-state"><Alert title="Problems loading the model">{error}</Alert></div>
         : (
