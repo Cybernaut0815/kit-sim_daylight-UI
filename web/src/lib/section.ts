@@ -44,12 +44,18 @@ export function toStage(s: Section, mpu: number, up: Up): StageSection {
   };
 }
 
-/** A viewer's section back in model metres, rounded: lengths to 1 mm, normals to unit vectors of 1e-4. */
+type Footprint = Section['boxes'][number]['footprint'];
+/** A viewer's section back in model metres, rounded: lengths to 1 mm, normals to unit vectors of 1e-4. A box that
+ *  rounding would make unusable (under 1 mm high or across somewhere, as a gizmo drag can leave it) keeps its exact numbers. */
 export function fromStage(s: StageSection, mpu: number, up: Up): Section {
   return {
     on: s.on,
     planes: s.planes.map((p) => ({ point: model(p.point, up, mpu).map(mm) as Vec3, normal: direction(model(p.normal, up, 1)) })),
-    boxes: s.boxes.map((b) => ({ keep: b.keep, footprint: b.corners.map((c) => { const [x, y] = model(c, up, mpu); return [mm(x), mm(y)]; }) as Section['boxes'][number]['footprint'], bottom: mm(b.bottom * mpu), top: mm(b.top * mpu) })),
+    boxes: s.boxes.map((b) => {
+      const exact = { keep: b.keep, footprint: b.corners.map((c) => model(c, up, mpu).slice(0, 2)) as Footprint, bottom: b.bottom * mpu, top: b.top * mpu };
+      const near = { ...exact, footprint: exact.footprint.map((c) => c.map(mm)) as Footprint, bottom: mm(exact.bottom), top: mm(exact.top) };
+      return near.top > near.bottom && (separates(near.footprint, 0) || separates(near.footprint, 1)) ? near : exact;
+    }),
   };
 }
 
@@ -57,7 +63,7 @@ export function fromStage(s: StageSection, mpu: number, up: Up): Section {
 export const sectionOf = (v: Partial<Section>): Section => ({
   on: v.on !== false,
   planes: (v.planes ?? []).map(({ point, normal }) => ({ point: [...point] as Vec3, normal: [...normal] as Vec3 })),
-  boxes: (v.boxes ?? []).map(({ keep, footprint, bottom, top }) => ({ keep, footprint: footprint.map(([x, y]) => [x, y]) as Section['boxes'][number]['footprint'], bottom, top })),
+  boxes: (v.boxes ?? []).map(({ keep, footprint, bottom, top }) => ({ keep, footprint: footprint.map(([x, y]) => [x, y]) as Footprint, bottom, top })),
 });
 
 /** True when the diagonal from corner k to k + 2 has the other two corners on opposite sides, clear of it: the quad is

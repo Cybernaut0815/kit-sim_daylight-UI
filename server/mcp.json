@@ -377,7 +377,7 @@
             "type": "object",
             "description": "Clipping planes and boxes every view shows (model coordinates, m, Z up), replacing the whole section. A point shows when every plane keeps it, no 'outside' box holds it and, with 'inside' boxes, one of them does.",
             "properties": {
-              "on": { "type": "boolean", "description": "false keeps the planes and boxes but shows everything (default true)." },
+              "on": { "type": "boolean", "description": "false: the planes and boxes given with it stay but cut nothing (default true). The section is given whole: {on: false} alone has no planes or boxes; to switch a section off and keep its entries, send it whole (app_state display.section) with on: false." },
               "planes": {
                 "type": "array",
                 "maxItems": 8,
@@ -414,7 +414,7 @@
                       "additionalProperties": false
                     },
                     "rotation": { "type": "number", "description": "With box: degrees counter-clockwise, seen from above, about its vertical centre line." },
-                    "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Or round what is drawn at or under these prims of the active model." },
+                    "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Or round what is drawn at or under these prims of the active model, square to the model axes: round turned prims it is loose and also cuts what stands near them; give a footprint (or a plane) for a tight cut." },
                     "margin": { "type": "number", "minimum": 0, "description": "With box or paths: added on every side, m (default: box 0, paths 1 % of their diagonal). A find_critical box round a wall or a roof is flat: give one." }
                   },
                   "required": ["keep"],
@@ -549,7 +549,7 @@
             "type": ["object", "null"],
             "description": "This shot's clipping planes and boxes, as set_display's section (model coordinates, m, Z up); null = none; default the views' own.",
             "properties": {
-              "on": { "type": "boolean", "description": "false keeps the planes and boxes but shows everything (default true)." },
+              "on": { "type": "boolean", "description": "false: the planes and boxes given with it stay but cut nothing (default true). The section is given whole: {on: false} alone has no planes or boxes; to switch a section off and keep its entries, send it whole (app_state display.section) with on: false." },
               "planes": {
                 "type": "array",
                 "maxItems": 8,
@@ -586,7 +586,7 @@
                       "additionalProperties": false
                     },
                     "rotation": { "type": "number", "description": "With box: degrees counter-clockwise, seen from above, about its vertical centre line." },
-                    "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Or round what is drawn at or under these prims of the active model." },
+                    "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Or round what is drawn at or under these prims of the active model, square to the model axes: round turned prims it is loose and also cuts what stands near them; give a footprint (or a plane) for a tight cut." },
                     "margin": { "type": "number", "minimum": 0, "description": "With box or paths: added on every side, m (default: box 0, paths 1 % of their diagonal). A find_critical box round a wall or a roof is flat: give one." }
                   },
                   "required": ["keep"],

@@ -2,7 +2,7 @@ import { BoxGeometry, Mesh } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import mcp from '../../../server/mcp.json';
 import type { Summary } from '../lib/result';
-import { NONE, type Section } from '../lib/section';
+import { NONE, toStage, type Section } from '../lib/section';
 import { glyphs } from '../report/spec';
 import { defaultSettings, initialState, reducer, type Action, type State, type Station } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
@@ -189,21 +189,23 @@ describe('screenshot size', () => {
 
 describe('sections', () => {
   /** The app with model A loaded: a 2 x 6 x 4 m block at /Site/Block (drawn in three world, Y up, from a Z-up stage in
-   *  metres), the section every view shows, and what its view was given (`shown`). */
+   *  metres), the section every view shows (set in the view as App's effect does), and what its view was given (`shown`,
+   *  `gizmos`). */
   function app() {
-    const block = new Mesh(new BoxGeometry(2, 4, 6)), shown: unknown[] = [];
-    let own: unknown = { on: true, planes: [], boxes: [] };
+    const block = new Mesh(new BoxGeometry(2, 4, 6)), shown: unknown[] = [], gizmos: unknown[] = [];
+    let own: unknown = { on: true, planes: [], boxes: [] }, gizmo: unknown = null;
     const el = {
-      stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, 8, 16], target: [0, 0, 0], fov: 45, projection: 'perspective', height: 1 }, sectionGizmo: null,
+      stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, 8, 16], target: [0, 0, 0], fov: 45, projection: 'perspective', height: 1 },
       get section() { return own; }, set section(s) { shown.push(s); own = s; },
+      get sectionGizmo() { return gizmo; }, set sectionGizmo(g) { gizmos.push(g); gizmo = g; },
       three: { objectsFor: (p: string) => (p === '/Site/Block' ? [block] : []), overlay: { children: [] } },
     };
     let x = {
       state: { active: 0, models: [{ slot: 0, name: 'block', objects: [{ id: 'b', path: '/Site/Block' }] }], colourBy: 'plain', bin: null, settings: { sim: { north: 0 } } },
       panes: { 0: { loading: false } }, ui: {}, section: NONE, dispatch: () => {}, setUi: () => {}, viewer: () => ({ el }),
-      setSection: (s: Section) => { x = { ...x, section: s }; },
+      setSection: (s: Section) => { x = { ...x, section: s }; el.section = toStage(s, 1, 'Z'); },
     } as unknown as Ctl;
-    return { c: () => x, shown };
+    return { c: () => x, el, shown, gizmos };
   }
   /** A call as the bridge makes it: its arguments checked, then its handler; its text, or the refusal. */
   const call = async (c: () => Ctl, name: string, args: Record<string, unknown>) => {
@@ -255,17 +257,21 @@ describe('sections', () => {
     });
   });
 
-  it("screenshot shows its own section (null: none; left out: the views'), says which, and gives each view its own back", async () => {
-    const { c, shown } = app(), said = async (args: Record<string, unknown>) => (await call(c, 'screenshot', args)).replace(/^.*Section: /s, '');
+  it("screenshot shows its own section (null: none; left out: the views'), says which, and puts the app's back with the gizmo", async () => {
+    const { c, el, shown, gizmos } = app(), said = async (args: Record<string, unknown>) => (await call(c, 'screenshot', args)).replace(/^.*Section: /s, '');
     expect(await said({})).toBe('none.');
     expect(shown).toEqual([]); // the views' own: left as it is
     const plan = { on: true, planes: [{ point: [0, 0, 1.2], normal: [0, 0, -1] }], boxes: [] };
     expect(await said({ section: { planes: plan.planes } })).toBe('horizontal at 1.20 m, keeps below.');
-    expect(shown).toEqual([plan, NONE]); // the shot's (a Z-up stage in metres takes it as it is), then the view's own
+    expect(shown).toEqual([plan, NONE]); // the shot's (a Z-up stage in metres takes it as it is), then the app's
     await put(c, { boxes: [{ keep: 'outside', paths: ['/Site/Block'] }] });
+    const live = toStage(c().section, 1, 'Z');
+    el.sectionGizmo = { box: 0 };
     expect(await said({})).toBe('1 box cutting out.');
     expect(await said({ section: null })).toBe('none.');
-    expect(shown.slice(2)).toEqual([NONE, NONE]);
+    expect(await said({ section: { planes: plan.planes } })).toBe('horizontal at 1.20 m, keeps below.');
+    expect(shown.slice(2)).toEqual([live, NONE, live, plan, live]); // the app's after each shot of its own
+    expect(gizmos).toEqual([null, { box: 0 }, null, { box: 0 }, null, { box: 0 }]); // none while a shot's section shows, then back
   });
 });
 

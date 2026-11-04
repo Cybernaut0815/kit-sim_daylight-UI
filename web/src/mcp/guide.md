@@ -126,9 +126,9 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
   not modelled, or set to none, does not shade.
 - sim.north (degrees counter-clockwise from the model's +Y axis to true north) turns the sun for every result and sets
   the N / E / S / W of results by 'facing' and of find_critical. Check it before discussing orientation.
-- Sections (set_display section; a screenshot and a report figure take their own) cut the views only: runs, results,
-  find_critical, charts and downloads always use the whole model, results stay fresh, and what a section hides still
-  casts its shade.
+- Sections (set_display section; a screenshot can take its own, a report figure has its own or none) cut the views
+  only: runs, results, find_critical, charts and downloads always use the whole model, results stay fresh, and what a
+  section hides still casts its shade.
 
 ### Surfaces and light
 

@@ -308,7 +308,7 @@ function Page(p: ReportInput) {
                 return (
                   <p key={i}>
                     {sc ? `Figure ${numbers[i]} colours ${quantityName(b.column!.split('_')[0])} (${b.column!.split('_')[1]} side) on one scale${many ? ' for every model' : ''}, ${sc.gradient.label} from ${fmtNum(sc.vmin)} to ${fmtNum(sc.vmax)} ${unitFor(b.column!).value}.` : ''}
-                    {b.near !== undefined ? `${sc ? ' ' : ''}It leaves out geometry within ${fmtNum(b.near)} m of the camera, so that what stands in front does not hide what it shows.` : ''}
+                    {b.near !== undefined ? `${sc ? ' It' : `Figure ${numbers[i]}`} leaves out geometry within ${fmtNum(b.near)} m of the camera, so that what stands in front does not hide what it shows.` : ''}
                     {cut ? `${sc || b.near !== undefined ? ' It' : `Figure ${numbers[i]}`} is sectioned (${describe(cut)}); values are of the whole model.` : ''}
                   </p>
                 );

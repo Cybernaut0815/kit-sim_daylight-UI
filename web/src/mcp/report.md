@@ -92,13 +92,14 @@ Blocks, by `type`:
   projection, height} copied from find_critical, set_camera or app_state; `near` (m, more than 0) cuts away what stands
   closer to the camera; `column` is a result column, or null for the models' own colours (no legend); `aspect` is
   width / height, 0.25-4, default 1.6; `section` is the figure's own clipping planes and boxes as set_display section
-  takes them (model metres, Z up; boxes round prims are found in the active model and kept as footprints). A section is
-  view only: the values stay those of the whole model, and the Method says which figures are sectioned. Without one a
-  figure shows no section, whatever the views show. One image per report model from the same camera: side by side for
-  two, 2 x 2 for three or four, each labelled with its letter and name, the colour legend and unit under them, on one
-  colour scale over the report's models (Min and Max of the colour scale, where set, hold). The images show the models
-  as the app shows them at generation: prims hidden in the app (set_visibility hide or isolate) stay hidden; the
-  selection and a bin highlight do not show.
+  takes them (model metres, Z up; boxes round prims are found in the active model and kept as footprints, square to the
+  model axes: round turned prims they are loose and also cut what stands near them, where a footprint or a plane cuts
+  tight). A section is view only: the values stay those of the whole model, and the Method says which figures are
+  sectioned. Without one a figure shows no section, whatever the views show. One image per report model from the same
+  camera: side by side for two, 2 x 2 for three or four, each labelled with its letter and name, the colour legend and
+  unit under them, on one colour scale over the report's models (Min and Max of the colour scale, where set, hold). The
+  images show the models as the app shows them at generation: prims hidden in the app (set_visibility hide or isolate)
+  stay hidden; the selection and a bin highlight do not show.
 - table: {column, by?, parts?, metrics, caption}. `by`: 'parts' (default: one row per prim path in `parts`, 1-50),
   'mesh' (one row per receiver mesh, the 50 largest by area) or 'facing' (N, E, S, W, up, down; `parts`, when given,
   limits the rows to the receivers under them). A comparison gives each row a line per model. 1-6 metrics, one

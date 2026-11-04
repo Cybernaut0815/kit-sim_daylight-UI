@@ -178,6 +178,7 @@ describe('parseReports', () => {
       entry(good.id, { ...good, blocks: [{ type: 'chart', chart: { id: 'c', kind: 'pie', column: 'sunhours_front' }, caption: 'c' }] }),
       entry(good.id, { ...good, models: [{ model: 'A' }] }), entry(good.id, { ...good, stats: [{ label: 'x', metric: 'average', column: 'c', model: 'A' }] }),
       entry(good.id, { ...good, blocks: good.blocks.map((b) => (b.type === 'view' ? { ...b, section: { planes: [{ point: [0, 0], normal: [0, 0, 1] }] } } : b)) }),
+      entry(good.id, { ...good, blocks: good.blocks.map((b) => (b.type === 'view' ? { ...b, section: { planes: [{ point: [0, 0, 5], normal: [0, 0, -1] }] } } : b)) }), // not as stored: on and boxes left out
     ]);
     expect(list.map((e) => e.id)).toEqual([good.id]);
   });

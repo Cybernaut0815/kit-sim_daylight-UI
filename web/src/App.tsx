@@ -21,7 +21,7 @@ import { faceAreas, fmtNum, roundNum, unionRange, unitFor, vertexAreas } from '.
 import { NONE, active, describe, fromStage, toStage, type Section } from './lib/section';
 import { link, type SavedView } from './lib/views';
 import { exclusive, settled } from './mcp/bridge';
-import { UUID, appView, connect, isStaging, putReport, storedReport, type Ctl } from './mcp/tools';
+import { UUID, appView, connect, inShot, isStaging, putReport, storedReport, type Ctl } from './mcp/tools';
 import { InfoButton } from './panels/InfoPanel';
 import { LocationPanel } from './panels/LocationPanel';
 import { MaterialsPanel } from './panels/MaterialsPanel';
@@ -339,14 +339,16 @@ export default function App() {
 
   // The section in every view with a stage, in that stage's units and axes; again whenever a stage opens there (which
   // clears it). Edited in a view (its gizmo, its own menu), it comes back in model metres and the other views follow, but
-  // that view keeps its own numbers: rounded ones would fight the drag. A change from the Section menu takes the gizmo
-  // to its entry in the active view once the views have it (attach: undefined leaves it as it is).
-  const mirrored = useRef<{ slot: number; section: Section } | null>(null), attach = useRef<SectionGizmo | null | undefined>(undefined);
+  // that view keeps its own numbers: rounded ones would fight the drag (`from`: the view each such section came from, so
+  // an effect that runs after the next drag step still skips it). A view showing a shot's own section is the shot's until
+  // it puts this one back. A change from the Section menu takes the gizmo to its entry in the active view once the views
+  // have it (attach: undefined leaves it as it is).
+  const from = useRef(new WeakMap<Section, number>()), attach = useRef<SectionGizmo | null | undefined>(undefined);
   const stages = state.models.map((m) => `${m.slot}:${panes[m.slot]?.stage ?? 0}`).join();
   useEffect(() => {
     for (const m of models.current) {
       const { el } = viewer(m.slot), st = el.stage;
-      if (st && (mirrored.current?.section !== section || mirrored.current.slot !== m.slot)) el.section = toStage(section, st.metersPerUnit, st.upAxis);
+      if (st && from.current.get(section) !== m.slot && !inShot(el)) el.section = toStage(section, st.metersPerUnit, st.upAxis);
     }
     if (attach.current !== undefined) viewer(state.active).el.sectionGizmo = attach.current;
     attach.current = undefined;
@@ -356,11 +358,12 @@ export default function App() {
       const { el } = viewer(slot);
       const on = (e: Event) => {
         const { source } = (e as CustomEvent<{ source: SectionSource }>).detail, st = el.stage;
-        if (!st) return;
+        if (!st || inShot(el)) return;
         if (source === 'stage') el.section = toStage(sectionNow.current, st.metersPerUnit, st.upAxis);
         else if (source === 'gizmo' || source === 'ui') {
-          mirrored.current = { slot, section: fromStage(el.section, st.metersPerUnit, st.upAxis) };
-          setSection(mirrored.current.section);
+          const next = fromStage(el.section, st.metersPerUnit, st.upAxis);
+          from.current.set(next, slot);
+          setSection(next);
         }
       };
       el.addEventListener('sectionchange', on);
@@ -651,7 +654,7 @@ export default function App() {
                 <div className="cluster cluster--between">
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={setSection} />
-                    <SectionMenu usd={viewer(am.slot).el} section={section} disabled={!ap.meshes.size} onChange={onSection} />
+                    <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports; a generation's failure shows as its lastError */}
                     {reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}

@@ -1,6 +1,6 @@
 // Shared bits: knob helper, stroke icons, empty-state illustrations, alert, swatch, number field, segmented control,
 // collapsible panel section.
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 
 /** The only inline style the design system allows: one of its nine knobs. */
 export const knob = (name: string, value: string): CSSProperties => ({ [name]: value }) as CSSProperties;
@@ -33,19 +33,20 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 
  * its tooltip unless `title` gives one). `children` get `close`.
  */
 export function MenuButton({ id, label, title, icon, disabled, busy, children }: { id: string; label: string; title?: string; icon?: keyof typeof ICONS; disabled?: boolean; busy?: boolean; children: (close: () => void) => ReactNode }) {
-  const menu = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null), button = useRef<HTMLButtonElement>(null), placed = useRef(() => {});
   useEffect(() => {
     const m = menu.current, b = button.current;
     if (!m || !b) return;
-    const place = () => { // inside the window: its own height cap, or the room on its side when that is less
-      const r = b.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, down = below > above;
+    const place = (placed.current = () => { // inside the window: its own height cap, or the room on its side when that is less
+      const r = b.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, down = below > above, scrolled = m.scrollTop;
       m.style.left = '0px'; // its width measured where nothing squeezes it (a fitted width follows its place)
       m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
       m.style.top = down ? `${r.bottom + 4}px` : '';
       m.style.bottom = down ? '' : `${innerHeight - r.top + 4}px`;
       m.style.maxBlockSize = '';
       if (m.offsetHeight > (down ? below : above)) m.style.maxBlockSize = `${down ? below : above}px`;
-    };
+      m.scrollTop = scrolled; // placed again while open: the uncapped measure above may have scrolled it
+    });
     const onToggle = (e: Event) => {
       if ((e as ToggleEvent).newState === 'open') place();
       // closing with the focus inside (Esc, an item's close()): a NumberField commits on its blur; the focus goes back to
@@ -59,6 +60,8 @@ export function MenuButton({ id, label, title, icon, disabled, busy, children }:
     window.addEventListener('scroll', onScroll, true);
     return () => { m.removeEventListener('beforetoggle', onToggle); m.removeEventListener('toggle', onToggle); window.removeEventListener('resize', place); window.removeEventListener('scroll', onScroll, true); };
   }, []);
+  // its content changed while open (an entry added, a refusal said): placed again, so it never grows out of the window
+  useLayoutEffect(() => { if (menu.current?.matches(':popover-open')) placed.current(); });
   const close = () => { if (menu.current?.matches(':popover-open')) menu.current.hidePopover(); };
   return (
     <>

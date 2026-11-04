@@ -7,7 +7,7 @@
 // - Section: every view's clipping planes and boxes (view only), added and edited in the active view.
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
 // - Reports (only while there are any): a report's PDF generated from the current results, opened, or the report deleted.
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, memo, useEffect, useState } from 'react';
 import { Box3, type Object3D } from 'three';
 import type { SectionGizmo, UsdViewerElement, ViewState } from 'usd-viewer';
 import { toModel, type Box, type Vec3 } from '../lib/frame';
@@ -100,13 +100,23 @@ export function boundsOf(objects: readonly Object3D[], mpu: number): Box | null 
   return { min: a.map((v, k) => Math.min(v, b[k])) as Vec3, max: a.map((v, k) => Math.max(v, b[k])) as Vec3 };
 }
 
+/** A number refused (it would make its entry unusable): the id of the field it came from ('' for none), why, and a count
+ *  that puts that field back on its number. */
+interface Refused { at: string; why: string; n: number }
+
+/** A Section menu number: committed when finite and changed; refused, it goes back to its number and says why under it. */
+function Num({ id, label, value, refused, onCommit }: { id: string; label: string; value: number; refused: Refused; onCommit: (v: number, at: string) => void }) {
+  const no = !!refused.why && refused.at === id;
+  return <NumberField key={no ? refused.n : 0} id={id} label={label} value={value} error={no ? `Not applied: ${refused.why}` : undefined} onCommit={(v) => { if (Number.isFinite(v) && v !== value) onCommit(v, id); }} />;
+}
+
 /** A point's or a direction's x, y (and z) as number fields under one legend; a blank field keeps its number. */
-function Coords({ id, legend, value, onCommit }: { id: string; legend: string; value: readonly number[]; onCommit: (v: number[]) => void }) {
+function Coords({ id, legend, value, refused, onCommit }: { id: string; legend: string; value: readonly number[]; refused: Refused; onCommit: (v: number[], at: string) => void }) {
   return (
     <fieldset className="field">
       <legend>{legend}</legend>
       <div className="scale-row__cols">
-        {value.map((v, k) => <NumberField key={k} id={`${id}-${'xyz'[k]}`} label={'xyz'[k]} value={v} onCommit={(n) => { if (Number.isFinite(n) && n !== v) onCommit(value.with(k, n)); }} />)}
+        {value.map((v, k) => <Num key={k} id={`${id}-${'xyz'[k]}`} label={'xyz'[k]} value={v} refused={refused} onCommit={(n, at) => onCommit(value.with(k, n), at)} />)}
       </div>
     </fieldset>
   );
@@ -114,22 +124,27 @@ function Coords({ id, legend, value, onCommit }: { id: string; legend: string; v
 
 /**
  * The section every view shows (lib/section.ts, model metres), view only: on or off, cleared; planes and boxes added from
- * the pressed view `usd` (at its target, round its selection) and edited there with the viewer's gizmo, or here by the
- * numbers. onChange: the whole section, and where the gizmo goes once the views have it (null: off; left out: it stays).
+ * the pressed view `usd` (at its target, round its selection: `selected`, whether it has one) and edited there with the
+ * viewer's gizmo, or here by the numbers. onChange: the whole section, and where the gizmo goes once the views have it
+ * (null: off; left out: it stays).
  */
-export function SectionMenu({ usd, section, disabled, onChange }: { usd: UsdViewerElement; section: Section; disabled: boolean; onChange: (s: Section, gizmo?: SectionGizmo | null) => void }) {
-  const [refused, setRefused] = useState({ why: '', n: 0 }); // a number that would make an entry unusable: why; n puts the fields back on the numbers
+export const SectionMenu = memo(function SectionMenu({ usd, section, selected, disabled, onChange }: {
+  usd: UsdViewerElement; section: Section; selected: boolean; disabled: boolean; onChange: (s: Section, gizmo?: SectionGizmo | null) => void;
+}) {
+  const [refused, setRefused] = useState<Refused>({ at: '', why: '', n: 0 });
   const { planes, boxes } = section, mpu = usd.stage?.metersPerUnit ?? 1;
-  const put = (patch: Partial<Section>, gizmo?: SectionGizmo | null) => {
+  /** The section with `patch`, unless that makes an entry unusable: refused then, said at the field `at` (else on top). */
+  const put = (patch: Partial<Section>, gizmo?: SectionGizmo | null, at = '') => {
     const next = { ...section, ...patch }, why = validate(next, 'section')[0]?.replace(/^section\.(planes|boxes)\[(\d+)\]\./, (_, k: string, i: string) => `${k === 'planes' ? 'Plane' : 'Box'} ${Number(i) + 1} `);
-    setRefused((r) => ({ why: why ?? '', n: r.n + (why ? 1 : 0) }));
+    setRefused((r) => ({ at, why: why ?? '', n: r.n + (why ? 1 : 0) }));
     if (!why) onChange(next, gizmo);
   };
   const target = () => toModel(usd.view.target, mpu).map(mm) as Vec3; // where the view orbits, model metres
   const facing = () => { const { eye, target: t } = usd.view; return direction(toModel([t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]])); };
-  /** A box showing the selected prims (the whole model without), 1 % of their diagonal larger all round. */
+  /** A box showing what is drawn of the selected prims (of the whole model without), 1 % of their diagonal larger all round. */
   const around = () => {
-    const picked = usd.selection.flatMap((p) => usd.three.objectsFor(p)), b = boundsOf(picked.length ? picked : [usd.three.root], mpu);
+    const drawn = (p: string) => usd.three.objectsFor(p).filter((o) => o.visible), picked = usd.selection.flatMap(drawn); // hidden: H or the eye
+    const b = boundsOf(picked.length ? picked : drawn('/'), mpu);
     if (b) put({ boxes: [...boxes, { keep: 'inside', ...boxOf(b) }] }, { box: boxes.length });
   };
   /** Plane or box i goes: the gizmo lets go of it, or follows the entry it edits an index down. */
@@ -137,12 +152,13 @@ export function SectionMenu({ usd, section, disabled, onChange }: { usd: UsdView
     const g = usd.sectionGizmo as { plane?: number; box?: number } | null, at = g?.[kind] ?? -1;
     put(kind === 'plane' ? { planes: planes.toSpliced(i, 1) } : { boxes: boxes.toSpliced(i, 1) }, at < i ? undefined : at === i ? null : ({ ...g, [kind]: at - 1 } as SectionGizmo));
   };
-  /** An entry's heading: its name, its buttons [label, tooltip, action], Remove. */
+  /** An entry's heading: its name (id section-p0, section-b0: it names the entry's fields), its buttons [label, tooltip,
+   *  action], named with it, and Remove. */
   const head = (kind: 'plane' | 'box', i: number, buttons: [string, string, () => void][]) => (
     <div className="cluster cluster--between">
-      <span className="menu__section">{kind === 'plane' ? 'Plane' : 'Box'} {i + 1}</span>
+      <span className="menu__section" id={`section-${kind[0]}${i}`}>{kind === 'plane' ? 'Plane' : 'Box'} {i + 1}</span>
       <span className="cluster">
-        {buttons.map(([label, help, act]) => <button key={label} className="btn btn--ghost" type="button" title={help} onClick={act}>{label}</button>)}
+        {buttons.map(([label, help, act]) => <button key={label} className="btn btn--ghost" type="button" aria-label={`${label} ${kind} ${i + 1}`} title={help} onClick={act}>{label}</button>)}
         <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Remove ${kind} ${i + 1}`} title={`Remove ${kind} ${i + 1}`} onClick={() => remove(kind, i)}><Icon name="close" /></button>
       </span>
     </div>
@@ -158,54 +174,52 @@ export function SectionMenu({ usd, section, disabled, onChange }: { usd: UsdView
               <button className="btn btn--ghost" type="button" disabled={!planes.length && !boxes.length} onClick={() => put(NONE)}>Clear</button>
             </div>
             <p className="views__note text-muted">View only: runs, results, charts and downloads use the whole model.</p>
-            {refused.why && <Alert title="Not applied">{refused.why}</Alert>}
+            {refused.why && !refused.at && <Alert title="Not applied">{refused.why}</Alert>}
             <div className="menu__section">Add a plane</div>
             <button className="menu__item" type="button" disabled={planes.length >= MAX} title="Level with the point the view orbits; keeps what lies below" onClick={() => put({ planes: [...planes, { point: target(), normal: [0, 0, -1] }] }, { plane: planes.length })}><span>Horizontal</span></button>
             <button className="menu__item" type="button" disabled={planes.length >= MAX} title="Through the point the view orbits, square to the view; keeps what lies beyond it" onClick={() => put({ planes: [...planes, { point: target(), normal: facing() }] }, { plane: planes.length })}><span>Facing the view</span></button>
             <div className="menu__section">Add a box</div>
-            <button className="menu__item" type="button" disabled={boxes.length >= MAX} title="Round the selected prims (the whole model when none is), a little larger; shows what is inside" onClick={around}><span>{usd.selection.length ? 'Around the selection' : 'Around the model'}</span></button>
-            <Fragment key={refused.n}>
-              {planes.map((p, i) => (
-                <Fragment key={`p${i}`}>
+            <button className="menu__item" type="button" disabled={boxes.length >= MAX} title="Round the selected prims (the whole model when none is), a little larger; shows what is inside" onClick={around}><span>{selected ? 'Around the selection' : 'Around the model'}</span></button>
+            {planes.map((p, i) => (
+              <Fragment key={`p${i}`}>
+                <div className="menu__separator" />
+                {head('plane', i, [
+                  ['Edit', 'Move it along its normal with the arrow in the view', () => edit({ plane: i })],
+                  ['Tilt', 'Tilt it with the rings in the view', () => edit({ plane: i, rotate: true })],
+                  ['Flip', 'Keep the other side', () => put({ planes: planes.with(i, { ...p, normal: p.normal.map((v) => -v + 0) as Vec3 }) })],
+                ])}
+                <div className="stack chart-menu" role="group" aria-labelledby={`section-p${i}`}>
+                  <Coords id={`section-p${i}-point`} legend="Point (m)" value={p.point} refused={refused} onCommit={(v, at) => put({ planes: planes.with(i, { ...p, point: v as Vec3 }) }, undefined, at)} />
+                  <Coords id={`section-p${i}-normal`} legend="Normal, towards the side kept" value={p.normal} refused={refused} onCommit={(v, at) => put({ planes: planes.with(i, { ...p, normal: v as Vec3 }) }, undefined, at)} />
+                </div>
+              </Fragment>
+            ))}
+            {boxes.map((b, i) => {
+              const set = (patch: Partial<Section['boxes'][number]>, at?: string) => put({ boxes: boxes.with(i, { ...b, ...patch }) }, undefined, at);
+              return (
+                <Fragment key={`b${i}`}>
                   <div className="menu__separator" />
-                  {head('plane', i, [
-                    ['Edit', 'Move it along its normal with the arrow in the view', () => edit({ plane: i })],
-                    ['Tilt', 'Tilt it with the rings in the view', () => edit({ plane: i, rotate: true })],
-                    ['Flip', 'Keep the other side', () => put({ planes: planes.with(i, { ...p, normal: p.normal.map((v) => -v + 0) as Vec3 }) })],
+                  {head('box', i, [
+                    ['Edit', 'Move the whole box with the arrows in the view; click a dot to move a corner (in plan) or a face (up and down) alone', () => edit({ box: i })],
+                    ['Rotate', 'Turn it about the vertical with the ring in the view', () => edit({ box: i, rotate: true })],
                   ])}
-                  <div className="stack chart-menu">
-                    <Coords id={`section-p${i}-point`} legend="Point (m)" value={p.point} onCommit={(v) => put({ planes: planes.with(i, { ...p, point: v as Vec3 }) })} />
-                    <Coords id={`section-p${i}-normal`} legend="Normal, towards the side kept" value={p.normal} onCommit={(v) => put({ planes: planes.with(i, { ...p, normal: v as Vec3 }) })} />
+                  <div className="stack chart-menu" role="group" aria-labelledby={`section-b${i}`}>
+                    <Segmented name={`section-b${i}-keep`} label={`Box ${i + 1}`} value={b.keep} options={[['inside', 'Show inside'], ['outside', 'Cut out']] as const} onChange={(keep) => set({ keep })} />
+                    <div className="scale-row__cols">
+                      <Num id={`section-b${i}-bottom`} label="Bottom (m)" value={b.bottom} refused={refused} onCommit={(bottom, at) => set({ bottom }, at)} />
+                      <Num id={`section-b${i}-top`} label="Top (m)" value={b.top} refused={refused} onCommit={(top, at) => set({ top }, at)} />
+                    </div>
+                    {b.footprint.map((corner, c) => <Coords key={c} id={`section-b${i}-c${c}`} legend={`Corner ${c + 1} (m)`} value={corner} refused={refused} onCommit={(v, at) => set({ footprint: b.footprint.with(c, v as [number, number]) as Section['boxes'][number]['footprint'] }, at)} />)}
                   </div>
                 </Fragment>
-              ))}
-              {boxes.map((b, i) => {
-                const set = (patch: Partial<Section['boxes'][number]>) => put({ boxes: boxes.with(i, { ...b, ...patch }) });
-                return (
-                  <Fragment key={`b${i}`}>
-                    <div className="menu__separator" />
-                    {head('box', i, [
-                      ['Edit', 'Move the whole box with the arrows in the view; click a dot to move a corner (in plan) or a face (up and down) alone', () => edit({ box: i })],
-                      ['Rotate', 'Turn it about the vertical with the ring in the view', () => edit({ box: i, rotate: true })],
-                    ])}
-                    <div className="stack chart-menu">
-                      <Segmented name={`section-b${i}-keep`} label={`Box ${i + 1}`} value={b.keep} options={[['inside', 'Show inside'], ['outside', 'Cut out']] as const} onChange={(keep) => set({ keep })} />
-                      <div className="scale-row__cols">
-                        <NumberField id={`section-b${i}-bottom`} label="Bottom (m)" value={b.bottom} onCommit={(v) => { if (Number.isFinite(v) && v !== b.bottom) set({ bottom: v }); }} />
-                        <NumberField id={`section-b${i}-top`} label="Top (m)" value={b.top} onCommit={(v) => { if (Number.isFinite(v) && v !== b.top) set({ top: v }); }} />
-                      </div>
-                      {b.footprint.map((corner, c) => <Coords key={c} id={`section-b${i}-c${c}`} legend={`Corner ${c + 1} (m)`} value={corner} onCommit={(v) => set({ footprint: b.footprint.with(c, v as [number, number]) as Section['boxes'][number]['footprint'] })} />)}
-                    </div>
-                  </Fragment>
-                );
-              })}
-            </Fragment>
+              );
+            })}
           </>
         );
       }}
     </MenuButton>
   );
-}
+});
 
 const FORMAT_LABEL: Record<Format, string> = {
   usdz: '.usdz: USD package', usda: '.usda: USD text', usdc: '.usdc: USD binary', usd: '.usd: USD binary',

@@ -9,7 +9,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { flushSync } from 'react-dom';
 import { Matrix4, Vector3, type InstancedMesh, type Mesh, type Object3D } from 'three';
 import type { ObjMesh } from 'daylight-mesh';
-import type { ViewState } from 'usd-viewer';
+import type { UsdViewerElement, ViewState } from 'usd-viewer';
 import type { Pane, UiPrefs } from '../App';
 import { validate, weatherLeap } from '../lib/args';
 import { BUILT_IN, FIELDS, putChart, type ChartSpec, type WeightsFor } from '../lib/charts';
@@ -141,7 +141,7 @@ const display = (x: Ctl) => ({
 /** Section boxes round prims: the bounds (model metres) of what is drawn at or under them in model `l` (default the
  *  active one). */
 const boundsIn = (x: Ctl, l?: string): Bounds => (paths, at) => {
-  const m = loadedOf(x, l, at), { el } = x.viewer(m.slot), objs = paths.map((p) => el.three.objectsFor(p)), k = objs.findIndex((o) => !o.length);
+  const m = loadedOf(x, l, at), { el } = x.viewer(m.slot), objs = paths.map((p) => el.three.objectsFor(p).filter((o) => o.visible)), k = objs.findIndex((o) => !o.length); // hidden: H, the eye, set_visibility
   if (k >= 0) return `${at}[${k}]: nothing drawn at or under ${paths[k]} in model ${letter(m.slot)}, the active one; find prims with model_tree`;
   return boundsOf(objs.flat(), el.stage?.metersPerUnit ?? 1) ?? `${at}: what is drawn there has no extent`;
 };
@@ -349,6 +349,9 @@ export interface Look { column?: string; colourBy?: 'plain' | 'value'; sunPath?:
 let staging = 0; // looks staged now
 /** A look is staged for shots: App keeps it out of the stored settings and view preferences (the restore stores them). */
 export const isStaging = () => staging > 0;
+const shooting = new Set<UsdViewerElement>(); // the views showing a shot's own section
+/** True while view `el` shows a shot's own section: App leaves its section alone then (the shot puts the app's back). */
+export const inShot = (el: UsdViewerElement) => shooting.has(el);
 /** fn with the views of `slots` showing `look` (each part only when given) and no pointer hover or probe (a bin highlight
  *  and the selection stay, unless clean); all of it put back after fn, also when it throws. */
 export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Look, fn: () => Promise<T>): Promise<T> {
@@ -357,8 +360,9 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
   const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity] };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
-  // the shot's section goes straight to its views, the app's stays: each view gets its own back, with its gizmo
-  const cuts = look.section === undefined ? [] : slots.map((k) => { const { el } = x.viewer(k); return { el, section: el.section, gizmo: el.sectionGizmo }; });
+  // the shot's section goes straight to its views, without the gizmo (a drag would edit the shot's); after it they get the
+  // app's section as it is then (a Section menu edit meanwhile included) and their gizmo back
+  const cuts = look.section === undefined ? [] : slots.map((k) => { const { el } = x.viewer(k); return { el, gizmo: el.sectionGizmo }; });
   staging++;
   try {
     flushSync(() => {
@@ -372,7 +376,11 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     });
     if (fill) fill.highlight = { color: '#000000', opacity: 0 }; // after the commit: a colouring change sets it again
     for (const [o] of grids) o.visible = look.grid!;
-    for (const { el } of cuts) el.section = toStage(look.section ?? NONE, el.stage?.metersPerUnit ?? 1, el.stage?.upAxis ?? 'Y');
+    for (const { el } of cuts) {
+      shooting.add(el);
+      el.sectionGizmo = null;
+      el.section = toStage(look.section ?? NONE, el.stage?.metersPerUnit ?? 1, el.stage?.upAxis ?? 'Y');
+    }
     // ponytail: one MessageChannel task lets Viewer.tsx's paint (it awaits a dynamic import before colouring a receiver
     // the first time) land; wait for a paint-done signal from the Viewer if a shot ever shows a receiver uncoloured
     await tick();
@@ -380,9 +388,10 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
   } finally {
     staging--;
     for (const [o, v] of grids) o.visible = v;
-    for (const { el, section, gizmo } of cuts) {
-      el.section = section;
-      if (gizmo && !el.sectionGizmo) el.sectionGizmo = gizmo; // detached where the shot's section lacked its entry
+    for (const { el, gizmo } of cuts) {
+      shooting.delete(el);
+      el.section = toStage(c().section, el.stage?.metersPerUnit ?? 1, el.stage?.upAxis ?? 'Y');
+      if (gizmo && !el.sectionGizmo) el.sectionGizmo = gizmo;
     }
     flushSync(() => {
       const z = c();

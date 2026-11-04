@@ -1,8 +1,8 @@
 // Smoke test of daylight_server --mcp in Claude-only mode (no app tab): the agent routes off without --mcp; the
 // local-only gate; the MCP handshake; the fixture (building.usda) walked through tools/call in the hidden instance the
-// server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only), a parts chart, and
-// guide 'report''s two example reports generated to PDF (one with a sectioned figure); then Claude Desktop's stdio relay
-// (mcp-stdio.mjs). Node 18+, no packages.
+// server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only; a shot's own), a
+// parts chart, and guide 'report''s two example reports generated to PDF (one with a sectioned figure, which differs
+// from the same without its section); then Claude Desktop's stdio relay (mcp-stdio.mjs). Node 18+, no packages.
 // Run: node server/test/mcp-smoke.mjs --web <app dist dir> [--exe <daylight_server.exe>] [--port 18100]
 // It starts its own servers on --port (no --mcp) and --port + 1 (--mcp --web), each with a cache in a fresh temporary
 // folder (kept when a check fails: server logs, reports), and needs the GPU and Chrome or Edge. One PASS / FAIL line per
@@ -188,6 +188,12 @@ if (on) await part('walk', async () => {
   const cut = await tool('screenshot', { width: 640, height: 400 }), [whole, through] = [plain.images[0]?.data, cut.images[0]?.data];
   check('a sectioned screenshot differs from the unsectioned one', !!whole && !!through && whole !== through && /Section: none\./.test(plain.text) && /Section: horizontal at 5\.00 m, keeps below\./.test(cut.text),
     `${said(plain)} | ${said(cut)} | images ${whole === through ? 'equal' : 'different'}`);
+  // a shot's own section is that shot's only: null shows none over the live cut, and after one of its own the live cut is back
+  const none = await tool('screenshot', { width: 640, height: 400, section: null });
+  const own = await tool('screenshot', { width: 640, height: 400, section: { boxes: [{ keep: 'outside', paths: [FAC[4]] }] } });
+  const back = await tool('screenshot', { width: 640, height: 400 }), [n, o, b] = [none, own, back].map((r) => r.images[0]?.data);
+  check("a shot's own section is that shot's only", !!n && !!o && n !== through && o !== through && b === through && /Section: horizontal at 5\.00 m, keeps below\./.test(back.text),
+    `null ${n === through ? 'equals' : 'differs from'} the live cut, its own ${o === through ? 'equals' : 'differs from'} it, the next default shot ${b === through ? 'equals' : 'differs from'} it; ${said(back)}`);
   if (g) {
     const boxed = await tool('set_display', { section: { boxes: [{ keep: 'inside', box: g.box, margin: 1 }, { keep: 'outside', paths: [FAC[4]] }] } }), bs = boxed.json?.section?.boxes ?? [];
     check("set_display section: find_critical's box and a box round the roof -> footprints", !boxed.err && bs.length === 2 && bs.every((b) => b.footprint?.length === 4 && b.top > b.bottom), brief(boxed.text));
@@ -222,6 +228,14 @@ if (on) await part('walk', async () => {
     if (!sectioned.includes(spec.id) || gen.err) continue;
     const page = readFileSync(join(cache, `${ON}`, 'reports', spec.id, 'index.html'), 'utf8').replace(/<!-- -->/g, ''), words = /[^.>]*is sectioned[^<]*/.exec(page)?.[0];
     check(`${spec.id}: the Method says its figure is sectioned, its values of the whole model`, /is sectioned \(1 plane\); values are of the whole model\./.test(page), words ?? 'not said');
+    // the same report without the section: other images, so the figure was shot with the block's own section
+    const copy = { ...spec, id: `${spec.id}-whole`, blocks: spec.blocks.map(({ section: _, ...b }) => b) };
+    await step(`save_report ${copy.id}: the same without the section`, 'save_report', { spec: copy }, (r) => !r.err && r.json?.ready === true);
+    const plainGen = await again('generate_report', { id: copy.id }, (r) => r.json?.status === 'generating');
+    const images = (id) => [...readFileSync(join(cache, `${ON}`, 'reports', id, 'index.html'), 'utf8').matchAll(/src="data:image\/png;base64,([^"]+)"/g)].map((m) => m[1]);
+    const [cutImages, wholeImages] = plainGen.err ? [[], []] : [images(spec.id), images(copy.id)];
+    check(`${spec.id}: its figure differs from the same figure without the section`, cutImages.length > 0 && cutImages.length === wholeImages.length && cutImages.every((s, k) => s !== wholeImages[k]),
+      plainGen.err ? brief(plainGen.text) : `${cutImages.length} and ${wholeImages.length} images, ${cutImages.filter((s, k) => s !== wholeImages[k]).length} differ`);
   }
   const one = specs.find((s) => s.models.length === 1);
   if (!one) return;

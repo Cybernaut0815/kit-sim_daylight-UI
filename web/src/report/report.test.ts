@@ -89,6 +89,8 @@ describe('renderReport', () => {
     const html = renderReport(p);
     expect(html).toContain('so that what stands in front does not hide what it shows. It is sectioned (horizontal at 1.20 m, keeps below); values are of the whole model.');
     expect(html).toContain('Figure 4 is sectioned (horizontal at 1.20 m, keeps below; 1 box showing inside); values are of the whole model.');
+    p.report.blocks = p.report.blocks.map((b) => (b.type === 'view' && b.name === 'Plan' ? { ...b, near: 3 } : b)); // no colours: the figure is named first
+    expect(renderReport(p)).toContain('Figure 4 leaves out geometry within 3 m of the camera, so that what stands in front does not hide what it shows. It is sectioned (');
     p.report.blocks = p.report.blocks.map((b) => (b.type === 'view' ? { ...b, section: { ...plan, on: false } } : b));
     expect(renderReport(p)).not.toContain('sectioned');
   });

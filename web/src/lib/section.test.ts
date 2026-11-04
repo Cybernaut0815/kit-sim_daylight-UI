@@ -44,6 +44,17 @@ group('toStage / fromStage', () => {
       on: false, planes: [{ point: [1.235, 2, 3], normal: [0, 0.6, 0.8] }], boxes: [{ keep: 'inside', footprint: [[0, 0], [3, 0], [3, 2], [0, 2]], bottom: 1, top: 2.001 }],
     });
   });
+  it('keeps the exact numbers of a box rounding would make unusable (under 1 mm high or across), so validate() passes it', () => {
+    const thin = clean({ on: true, planes: [], boxes: [
+      { keep: 'inside', corners: [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]], bottom: 1.0001, top: 1.0004 },
+      { keep: 'outside', corners: [[0, 0, 0], [2, 0, 0], [2, 0.0004, 0], [0, 0.0004, 0]], bottom: 0, top: 1 },
+    ] }, 'Z'), s = fromStage(thin, 1, 'Z');
+    expect(s.boxes).toEqual([
+      { keep: 'inside', footprint: [[0, 0], [2, 0], [2, 2], [0, 2]], bottom: 1.0001, top: 1.0004 },
+      { keep: 'outside', footprint: [[0, 0], [2, 0], [2, 0.0004], [0, 0.0004]], bottom: 0, top: 1 },
+    ]);
+    expect(validate(s, 'section')).toEqual([]);
+  });
 });
 
 group('validate', () => {

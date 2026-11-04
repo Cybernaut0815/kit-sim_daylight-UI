@@ -87,11 +87,12 @@ data licence), and PVGIS (European Commission JRC; 30 requests per second per IP
 ## Agents (MCP)
 
 `--mcp` lets agents on this machine work with the web app over MCP: Claude Code or Claude Desktop opens models, sets
-roles, settings and cameras, runs, reads results, takes screenshots of any shape, edits the Results charts, writes PDF
-reports in the kit-ui `kit-report` layout (one option, or 2 to 4 compared) and talks through what the results mean. The
-app has no chat: the agent drives the open app tab and everything it changes shows there. `POST /mcp` answers the
-handshake and the tool list from [mcp.json](mcp.json) and relays each tool call to the tab (`web/src/mcp`); `/docs`
-documents the routes (tag `agents`) and lists the tools under `mcpMessage`.
+roles, settings and cameras, runs, reads results, takes screenshots of any shape, sections the views with clipping
+planes and boxes (view only: runs use the whole model), edits the Results charts, writes PDF reports in the kit-ui
+`kit-report` layout (one option, or 2 to 4 compared) and talks through what the results mean. The app has no chat: the
+agent drives the open app tab and everything it changes shows there. `POST /mcp` answers the handshake and the tool
+list from [mcp.json](mcp.json) and relays each tool call to the tab (`web/src/mcp`); `/docs` documents the routes (tag
+`agents`) and lists the tools under `mcpMessage`.
 
 ```
 build\RelWithDebInfo\daylight_server.exe --web ..\web\dist --mcp

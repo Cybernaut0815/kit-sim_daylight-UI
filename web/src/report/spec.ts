@@ -61,9 +61,11 @@ function readable(id: string, s: unknown): s is Report {
   const model = (m: unknown) => isObj(m) && typeof m.model === 'string' && m.model.length === 1 && LETTERS.includes(m.model) && typeof m.file === 'string' && typeof m.runKey === 'string'
     && isObj(m.variants) && Object.values(m.variants).every(isObj) && strs(m.receivers) && strs(m.shades) && (m.open === undefined || strs(m.open));
   const metric = (v: unknown) => METRICS.includes(v as Metric);
+  // a view's section as save_report stores it, every field given: the Views menu and the shots read them all
+  const cut = (v: unknown) => isObj(v) && typeof v.on === 'boolean' && Array.isArray(v.planes) && Array.isArray(v.boxes) && !sectionProblems(v, 'section').length;
   const block = (b: unknown) => isObj(b) && (b.type === 'text' ? typeof b.text === 'string'
     : b.type === 'chart' ? typeof b.caption === 'string' && isObj(b.chart) && typeof b.chart.column === 'string' && (b.chart.models === undefined || strs(b.chart.models)) && typeof cleanSpec({ ...b.chart, models: undefined }) !== 'string'
-      : b.type === 'view' ? typeof b.caption === 'string' && typeof b.name === 'string' && isObj(b.view) && vec(b.view.eye) && vec(b.view.target) && (b.section === undefined || !sectionProblems(b.section, 'section').length)
+      : b.type === 'view' ? typeof b.caption === 'string' && typeof b.name === 'string' && isObj(b.view) && vec(b.view.eye) && vec(b.view.target) && (b.section === undefined || cut(b.section))
         : b.type === 'table' && typeof b.caption === 'string' && typeof b.column === 'string' && Array.isArray(b.metrics) && b.metrics.every(metric));
   return Array.isArray(s.models) && s.models.length > 0 && s.models.every(model) && (s.ranges === undefined || isObj(s.ranges))
     && (s.stats === undefined || (Array.isArray(s.stats) && s.stats.every((x) => isObj(x) && metric(x.metric) && [x.label, x.column, x.model].every((v) => typeof v === 'string'))))
