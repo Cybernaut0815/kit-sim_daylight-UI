@@ -1,7 +1,7 @@
 // Model: a tab per model to compare (up to four, A to D: "+" adds one, x removes one), and for the active model: file
-// and folder inputs, the roles of the selected meshes, and the stage's prim tree (PrimTree: the hierarchy as in the USD
-// viewer, selected as there; a prim's role goes to every mesh below it). The tree sits in a fixed-height,
-// user-resizable box, so loading a model never moves the panels below it.
+// and folder inputs, the roles of the selected meshes (and whether the selected receivers cast shade), and the stage's
+// prim tree (PrimTree: the hierarchy as in the USD viewer, selected as there; a prim's role goes to every mesh below it).
+// The tree sits in a fixed-height, user-resizable box, so loading a model never moves the panels below it.
 import { memo, useCallback, type Dispatch } from 'react';
 import type { UsdViewerElement } from 'usd-viewer';
 import type { Action, Model, Role } from '../store';
@@ -10,11 +10,13 @@ import { PrimTree } from './PrimTree';
 
 const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none: 'Ignore' };
 const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. Not saved to the model.';
+const SHADE_HELP = "Off: the selected receivers are measured but cast no shade and reflect nothing, e.g. a grid of points inside a room, which gets the room's shade and shades nothing else.";
+const SHADE_OFF = 'No receiver casts shade now: Receivers block rays too (Simulation, Advanced) is off.';
 
 interface Props {
   models: Model[]; active: number; usd: UsdViewerElement; // the active model's viewer
   names: ReadonlyMap<string, string>; loading: boolean; busy: boolean; // busy: any model loading
-  error: string | null; errors: Record<string, string>; stage: number; subdiv: number;
+  error: string | null; errors: Record<string, string>; stage: number; subdiv: number; selfOcclude: boolean; // selfOcclude: receivers block rays
   onFiles: (slot: number, files: File[]) => void; onVariant: (slot: number, path: string, set: string, variant: string) => void;
   onSubdiv: (level: number) => void; onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRemove: (slot: number) => void; dispatch: Dispatch<Action>;
@@ -23,9 +25,11 @@ interface Props {
 /** After a tab is added or removed, the pressed tab takes the focus (the button pressed may be gone). */
 const focusTab = () => requestAnimationFrame(() => document.querySelector<HTMLElement>('.model-tabs [aria-current="page"]')?.focus());
 
-export const ModelPanel = memo(function ModelPanel({ models, active, usd, names, loading, busy, error, errors, stage, subdiv, onFiles, onVariant, onSubdiv, onRefine, onRemove, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ models, active, usd, names, loading, busy, error, errors, stage, subdiv, selfOcclude, onFiles, onVariant, onSubdiv, onRefine, onRemove, dispatch }: Props) {
   const { objects, selection, selected } = models.find((m) => m.slot === active)!;
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
+  const receivers = objects.filter((o) => selected.has(o.id) && o.role === 'receiver'), free = receivers.filter((o) => o.shade === false).length; // the selected receivers; those casting no shade
+  const shadeHelp = selfOcclude ? SHADE_HELP : `${SHADE_OFF} ${SHADE_HELP}`;
   const variant = useCallback((path: string, set: string, v: string) => onVariant(active, path, set, v), [onVariant, active]); // stable for the memoised tree
   const about = (m: Model) => `Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`;
   return (
@@ -97,6 +101,14 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
                 {LABEL[role]}
               </button>
             ))}
+            {/* checked: every selected receiver casts shade; mixed: some do */}
+            <label title={shadeHelp}>
+              <input
+                type="checkbox" title={shadeHelp} checked={!free} disabled={!receivers.length || !selfOcclude}
+                ref={(el) => { if (el) el.indeterminate = free > 0 && free < receivers.length; }}
+                onChange={(e) => dispatch({ type: 'SHADE', slot: active, ids: receivers.map((o) => o.id), shade: e.target.checked })}
+              /> Casts shade
+            </label>
             <select
               className="select" value="" aria-label="Subdivision of the selected meshes" title={`Subdivision of the selected meshes, over the model's level. ${SUBDIV_HELP}`}
               disabled={!selected.size || loading}

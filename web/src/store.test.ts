@@ -34,6 +34,24 @@ describe('roles', () => {
     s = reducer(s, { type: 'RELOAD', slot: 0, objects: [{ ...obj('a2'), path: '/W/G/a' }, { ...obj('n', 'none'), path: '/W/G/new' }] });
     expect([m(s).selection.paths, [...m(s).selected], m(s).result]).toEqual([['/W/G'], ['a2', 'n'], null]);
   });
+  it('SHADE: receivers only, the result kept (the run key says it is stale); a role change drops the flag, a re-read keeps it by path', () => {
+    const result: RunResult = { values: [], columns: [], receivers: ['a', 'b'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } };
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a'), obj('b'), obj('c', 'shade')] });
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } });
+    s = reducer(s, { type: 'SHADE', slot: 0, ids: ['a', 'c'], shade: false });
+    expect(m(s).objects.map((o) => o.shade)).toEqual([false, undefined, undefined]); // a shade always casts shade
+    expect(m(s).result).toBe(result);
+    expect(reducer(s, { type: 'SHADE', slot: 0, ids: ['a'], shade: false })).toBe(s); // already so
+    expect(m(reducer(s, { type: 'SHADE', slot: 0, ids: ['a', 'b'], shade: true })).objects.map((o) => 'shade' in o)).toEqual([false, false, false]); // no flag left behind
+    expect(m(reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'receiver' })).objects[0].shade).toBe(false); // a receiver stays one: its flag too
+    const shaded = reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'shade' });
+    expect(m(reducer(shaded, { type: 'ROLE', slot: 0, ids: ['a'], role: 'receiver' })).objects[0]).toEqual(obj('a')); // back as a new receiver: it casts shade
+    // a variant switch or a subdivision level: new rows (new ids) at the same paths keep the flag; a new model drops it
+    s = reducer(s, { type: 'RELOAD', slot: 0, objects: [{ ...obj('a2'), path: '/a' }, { ...obj('b2'), path: '/b' }, obj('n')] });
+    expect(m(s).objects.map((o) => [o.id, o.shade])).toEqual([['a2', false], ['b2', undefined], ['n', undefined]]);
+    expect(m(reducer(s, { type: 'RELOAD', slot: 0, objects: [{ ...obj('a3', 'none'), path: '/a' }] })).objects[0].shade).toBeUndefined(); // not a receiver there now
+    expect(m(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('a')] })).objects[0].shade).toBeUndefined();
+  });
   it('an instanced mesh is never a receiver: Shade and Ignore only', () => {
     let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a', 'none'), { ...obj('i', 'none'), instances: 3 }] });
     s = reducer(s, { type: 'ROLE', slot: 0, ids: ['a', 'i'], role: 'receiver' });

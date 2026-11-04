@@ -1,19 +1,30 @@
 import { BoxGeometry, Mesh } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import mcp from '../../../server/mcp.json';
+import { noOccludeArgs } from '../lib/args';
 import type { Summary } from '../lib/result';
 import { NONE, toStage, type Section } from '../lib/section';
 import { glyphs } from '../report/spec';
-import { defaultSettings, initialState, reducer, type Action, type State, type Station } from '../store';
+import { defaultSettings, initialState, reducer, type Action, type ObjectRow, type State, type Station } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
 import { SECTION, TOOLS, WORDS, check } from './schema';
-import { HANDLERS, bySide, connect, difference, publicSettings, settingsActions, shotSize, type Ctl } from './tools';
+import { HANDLERS, bySide, connect, difference, publicSettings, settingsActions, shotSize, stableKey, type Ctl } from './tools';
 
 vi.mock('../viewer/capture', () => ({ capture: async () => new Blob([new Uint8Array(8)], { type: 'image/jpeg' }) })); // no GPU here
 
 const schema = (name: string) => TOOLS.find((t) => t.name === name)!.inputSchema;
+/** A call as the bridge makes it: its arguments checked, then its handler; its text, or the refusal. */
+const call = async (c: () => Ctl, name: string, args: Record<string, unknown>) => {
+  const why = check(schema(name), args);
+  if (why) return why;
+  try {
+    return (await HANDLERS[name](args, c, Date.now() + 5e3)).content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
+  } catch (e) {
+    return (e as Error).message;
+  }
+};
 
 describe('the tool list', () => {
   it('every tool of mcp.json has its handler, and only those', () => {
@@ -207,16 +218,6 @@ describe('sections', () => {
     } as unknown as Ctl;
     return { c: () => x, el, shown, gizmos };
   }
-  /** A call as the bridge makes it: its arguments checked, then its handler; its text, or the refusal. */
-  const call = async (c: () => Ctl, name: string, args: Record<string, unknown>) => {
-    const why = check(schema(name), args);
-    if (why) return why;
-    try {
-      return (await HANDLERS[name](args, c, Date.now() + 5e3)).content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
-    } catch (e) {
-      return (e as Error).message;
-    }
-  };
   const put = async (c: () => Ctl, section: unknown) => JSON.parse(await call(c, 'set_display', { section })).section;
 
   it('set_display takes each box form and answers footprints, which it takes back as they are; no planes and boxes clear it', async () => {
@@ -272,6 +273,50 @@ describe('sections', () => {
     expect(await said({ section: { planes: plan.planes } })).toBe('horizontal at 1.20 m, keeps below.');
     expect(shown.slice(2)).toEqual([live, NONE, live, plan, live]); // the app's after each shot of its own
     expect(gizmos).toEqual([null, { box: 0 }, null, { box: 0 }, null, { box: 0 }]); // none while a shot's section shows, then back
+  });
+});
+
+describe('receivers that cast no shade', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const row = (path: string, id = path.split('/').pop()!.toLowerCase()): ObjectRow => ({ id, name: id, path, tris: 2, verts: 4, role: 'none' });
+  /** Model A loaded: /Room with Grid, Floor and Walls, all ignored; its state through the reducer. */
+  function app() {
+    const rows = ['/Room/Grid', '/Room/Floor', '/Room/Walls'].map((p) => row(p)), prim = (path: string, hasChildren = false) => ({ path, name: path.split('/').pop(), typeName: hasChildren ? 'Xform' : 'Mesh', hasChildren, visible: true, active: true, hasVariantSets: false });
+    const kids: Record<string, unknown[]> = { '/': [prim('/Room', true)], '/Room': rows.map((o) => prim(o.path)) }, el = { usd: { children: async (p: string) => kids[p] ?? [] }, session: { isLocked: () => false } };
+    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'room' });
+    return () => ({
+      state, dispatch: (a: Action) => { state = reducer(state, a); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), ui: {}, views: [], reports: null, generation: () => ({}),
+      per: state.models.map((m) => ({ m, receivers: m.objects.filter((o) => o.role === 'receiver'), shades: [], key: '' })),
+    }) as unknown as Ctl;
+  }
+  const json = async (c: () => Ctl, name: string, args: Record<string, unknown>) => JSON.parse(await call(c, name, args));
+
+  it('set_roles shade false: receivers measure without shade; refused with another role; model_tree and app_state say so', async () => {
+    const c = app();
+    await call(c, 'set_roles', { paths: ['/Room/Grid', '/Room/Floor'], role: 'receiver' });
+    expect(await json(c, 'set_roles', { paths: ['/Room'], role: 'receiver', shade: false }).then((r) => r.meshes)).toEqual({ receiver: 3, shade: 0, none: 0, noShade: 3 });
+    const back = await json(c, 'set_roles', { paths: ['/Room/Floor', '/Room/Walls'], role: 'receiver', shade: true });
+    expect([back.meshes, back.changed]).toEqual([{ receiver: 3, shade: 0, none: 0, noShade: 1 }, ['/Room/Floor', '/Room/Walls']]);
+    expect(await json(c, 'set_roles', { paths: ['/Room/Walls'], role: 'shade' }).then((r) => r.meshes)).toEqual({ receiver: 2, shade: 1, none: 0, noShade: 1 });
+    expect(await call(c, 'set_roles', { paths: ['/Room/Walls'], role: 'shade', shade: true })).toBe("shade: only with role 'receiver' (a shade always casts shade; role none leaves a mesh out)");
+    expect(await call(c, 'set_roles', { paths: ['/Room/Grid'], role: 'receiver', shade: 'no' })).toBe('shade: boolean');
+    const tree = (await json(c, 'model_tree', {})).prims.map((p: Record<string, unknown>) => [p.path, p.role, p.shade]);
+    expect(tree).toEqual([['/Room', 'mixed', 'mixed'], ['/Room/Grid', 'receiver', false], ['/Room/Floor', 'receiver', undefined], ['/Room/Walls', 'shade', undefined]]);
+    vi.stubGlobal('document', { visibilityState: 'visible' });
+    expect((await json(c, 'app_state', {})).models[0].meshes).toEqual({ receiver: 2, shade: 1, none: 0, noShade: 1 });
+  });
+
+  it('with sim.selfOcclude off, set_roles says the flag waits for it; a run key names the meshes by path, the same after a re-read', async () => {
+    const c = app();
+    c().dispatch({ type: 'SIM', patch: { selfOcclude: false } });
+    expect((await json(c, 'set_roles', { paths: ['/Room/Grid'], role: 'receiver', shade: false })).note).toBe('no receiver casts shade while sim.selfOcclude is off: shade false counts once it is on');
+    const sim = defaultSettings().sim, key = (ids: string[]) => {
+      const rows = ['/Room/Grid', '/Room/Desk'].map((path, k): ObjectRow => ({ ...row(path, ids[k]), role: 'receiver', shade: false }));
+      return stableKey(JSON.stringify([noOccludeArgs(rows, sim), null, ids, []]), rows);
+    };
+    const a = '00000000-0000-4000-8000-00000000000a', b = '00000000-0000-4000-8000-00000000000b';
+    expect(key([a, b])).toBe(JSON.stringify([['--no-occlude', '/Room/Desk;/Room/Grid'], null, ['/Room/Grid', '/Room/Desk'], []]));
+    expect(key([b, a])).toBe(key([a, b])); // new ids per re-read, in another order: the same stable key
   });
 });
 

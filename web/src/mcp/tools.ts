@@ -131,7 +131,11 @@ function loadedOf(x: Ctl, l?: string, field = 'model'): Model {
   if (!m.objects.length) throw new Error(`${field}: model ${L} has no model open; open one with open_model`);
   return m;
 }
-const roles = (m: Model) => Object.fromEntries((['receiver', 'shade', 'none'] as const).map((r) => [r, m.objects.filter((o) => o.role === r).length]));
+/** A model's meshes by role; noShade: the receivers among them that cast no shade, when there are. */
+const roles = (m: Model) => {
+  const free = m.objects.filter((o) => o.shade === false).length;
+  return { ...Object.fromEntries((['receiver', 'shade', 'none'] as const).map((r) => [r, m.objects.filter((o) => o.role === r).length])), ...(free ? { noShade: free } : {}) };
+};
 const problems = (x: Ctl) => validate(x.state.settings, x.per.some((p) => p.receivers.length > 0), x.materialsReady);
 const loadedSlots = (x: Ctl) => x.state.models.filter((m) => (x.panes[m.slot]?.meshes.size ?? 0) > 0).map((m) => m.slot);
 const display = (x: Ctl) => ({
@@ -166,14 +170,15 @@ const runOf = (key: string) => JSON.stringify((JSON.parse(key) as unknown[]).sli
 // per slot, open_model's paths, the open counter that open gave its pane and the model's name once loaded
 const opened = new Map<number, { paths: string[]; stage: number; name?: string }>();
 /** The app as a report sees it (report/spec.ts): the models' files (and paths, opened by open_model), variant choices,
- *  roles and results; the column shown, the problem ranges. From the controller, or from App's render (its Reports menu). */
+ *  roles (the receivers that cast no shade among them) and results; the column shown, the problem ranges. From the
+ *  controller, or from App's render (its Reports menu). */
 export const appView = (x: Pick<Ctl, 'shown' | 'state' | 'panes' | 'variants' | 'per'>): AppView => ({
   shown: x.shown, ranges: x.state.settings.viz.ranges,
   models: x.state.models.map((m, i) => {
     const o = opened.get(m.slot), mine = o && o.stage === x.panes[m.slot]?.stage && (o.name ?? m.name) === m.name; // not a file opened in the app since
     return {
       model: letter(m.slot), file: m.objects.length ? m.name : '', ...(mine ? { open: o.paths } : {}), loading: !!x.panes[m.slot]?.loading, choices: x.variants(m.slot),
-      receivers: x.per[i].receivers.map((r) => r.path), shades: x.per[i].shades.map((r) => r.path),
+      receivers: x.per[i].receivers.map((r) => r.path), shades: x.per[i].shades.map((r) => r.path), noShade: x.per[i].receivers.filter((r) => r.shade === false).map((r) => r.path),
       result: freshness(x, i), key: m.result && runOf(stableKey(m.result.key, m.objects)), inputs: runOf(stableKey(x.per[i].key, m.objects)), columns: m.result?.columns ?? [],
     };
   }),
@@ -718,10 +723,11 @@ export const HANDLERS: Record<string, Handler> = {
       for (const p of level) {
         for (const s of await el.usd.children(p)) {
           if (out.length >= limit) { more = true; break; }
-          const rows = (under.get(s.path) ?? []).map((id) => byId.get(id)!), first = rows[0]?.role;
+          const rows = (under.get(s.path) ?? []).map((id) => byId.get(id)!), first = rows[0]?.role, free = rows.filter((o) => o.shade === false).length;
           out.push({
             path: s.path, name: names?.get(s.path) ?? s.name, type: s.typeName, children: s.hasChildren,
             ...(rows.length ? { meshes: rows.length, triangles: rows.reduce((n, o) => n + o.tris, 0), role: rows.every((o) => o.role === first) ? first : 'mixed' } : {}),
+            ...(free ? { shade: free === rows.filter((o) => o.role === 'receiver').length ? false : 'mixed' } : {}), // its receivers cast no shade (some: mixed)
             visible: s.visible, locked: el.session.isLocked(s.path),
             ...(s.hasVariantSets ? { variants: ((await el.usd.prim(s.path).catch(() => null))?.variantSets ?? []).map((v) => ({ set: v.name, values: v.variants, selected: v.selection })) } : {}),
           });
@@ -735,14 +741,19 @@ export const HANDLERS: Record<string, Handler> = {
   },
 
   async set_roles(a, c) {
+    if (a.shade !== undefined && a.role !== 'receiver') throw new Error("shade: only with role 'receiver' (a shade always casts shade; role none leaves a mesh out)");
     return exclusive(() => {
-      const m = loadedOf(c(), a.model), L = letter(m.slot), ids = idsUnder(a.paths, m.objects), was = new Map(m.objects.map((o) => [o.id, o.role]));
-      flushSync(() => c().dispatch({ type: 'ROLE', slot: m.slot, ids, role: a.role }));
-      const now = modelOf(c(), L), changed = now.objects.filter((o) => was.get(o.id) !== o.role).map((o) => o.path);
+      const m = loadedOf(c(), a.model), L = letter(m.slot), ids = idsUnder(a.paths, m.objects), was = new Map(m.objects.map((o) => [o.id, o]));
+      flushSync(() => {
+        c().dispatch({ type: 'ROLE', slot: m.slot, ids, role: a.role });
+        if (a.shade !== undefined) c().dispatch({ type: 'SHADE', slot: m.slot, ids, shade: a.shade });
+      });
+      const now = modelOf(c(), L), changed = now.objects.filter((o) => was.get(o.id)?.role !== o.role || was.get(o.id)?.shade !== o.shade).map((o) => o.path);
       const hit = new Set(ids), instanced = a.role === 'receiver' ? now.objects.filter((o) => hit.has(o.id) && o.instances).length : 0;
+      const notes = [instanced ? 'instanced meshes can only shade or be ignored' : '', a.shade === false && !c().state.settings.sim.selfOcclude ? 'no receiver casts shade while sim.selfOcclude is off: shade false counts once it is on' : ''].filter(Boolean);
       return ok({
         model: L, meshes: roles(now), changed: changed.slice(0, 50), ...(changed.length > 50 ? { moreChanged: changed.length - 50 } : {}),
-        unmatched: (a.paths as string[]).filter((p) => !idsUnder([p], m.objects).length), ...(instanced ? { instanced, note: 'instanced meshes can only shade or be ignored' } : {}),
+        unmatched: (a.paths as string[]).filter((p) => !idsUnder([p], m.objects).length), ...(instanced ? { instanced } : {}), ...(notes.length ? { note: notes.join('; ') } : {}),
       });
     });
   },

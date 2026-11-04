@@ -94,6 +94,21 @@ describe('renderReport', () => {
     p.report.blocks = p.report.blocks.map((b) => (b.type === 'view' ? { ...b, section: { ...plan, on: false } } : b));
     expect(renderReport(p)).not.toContain('sectioned');
   });
+  it('names the receivers that cast no shade under Surfaces and marks them in the Models table, while receivers block rays', () => {
+    const p = input(['A']), roof = ['/Site/Block/Roof'];
+    expect(renderReport(p)).toContain('<td>Every surface opaque and black; virtual ground reflectance 0.2</td>'); // none: as before
+    p.report.models[0].noShade = roof;
+    const one = renderReport(p);
+    expect(one).toContain('<td>Every surface opaque and black; virtual ground reflectance 0.2; 1 receiver casts no shade (Roof)</td>');
+    expect(one).toContain('<td>2: /Site/Block/Facade_S, /Site/Block/Roof (no shade)</td>');
+    const two = input(['A', 'B']);
+    two.report.models[1].noShade = roof;
+    expect(renderReport(two)).toContain('virtual ground reflectance 0.2; model B: 1 receiver casts no shade (Roof)</td>');
+    p.settings = { ...settings, sim: { ...settings.sim, selfOcclude: false } }; // no receiver casts any: no marks
+    const off = renderReport(p);
+    expect(off).toContain('<td>Every surface opaque and black; virtual ground reflectance 0.2; receivers cast no shade</td>');
+    expect(off).toContain('<td>2: /Site/Block/Facade_S, /Site/Block/Roof</td>');
+  });
   it('a comparison reads model by model', () => {
     const two = renderReport(input(['A', 'B']));
     expect(two).toContain('Model A building');

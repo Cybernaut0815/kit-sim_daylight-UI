@@ -13,16 +13,18 @@ generates the PDF (generate_report). Read guide 'daylight' first: its writing ru
   summary, the text blocks, the captions, the stat labels and the notes are yours: every number in them is your copy
   of tool output.
 - The app writes the rest itself: the title block and status line, Inputs (site, coordinates, time zone, north,
-  weather, period, quantities, mode, surfaces, sensors, each model's file, variant choices and roles), Method and
-  assumptions (per result column, sky, surfaces, statistics, problem range, the cutaway and section of each view) and
-  the Appendix (Table A1. Provenance: job ids, times, run arguments, weather reference, versions). Do not repeat them.
+  weather, period, quantities, mode, surfaces (the receivers that cast no shade among them), sensors, each model's
+  file, variant choices and roles), Method and assumptions (per result column, sky, surfaces, statistics, problem
+  range, the cutaway and section of each view) and the Appendix (Table A1. Provenance: job ids, times, run arguments,
+  weather reference, versions). Do not repeat them.
 - save_report also stores each report model's run: its file (and the paths open_model opened it from), the variant
-  choices made in the app, its receivers and shades, and the run's settings; and the problem range of each quantity
-  the report shows (its shares and range colours depend on it). generate_report refuses when a model or a range no
-  longer matches and says what to restore: open_model (another file or none in the slot), set_geometry (other variant
-  choices), set_roles (other roles), the settings it names (another date, step, weather ...) and run, run (no result,
-  a stale one), update_settings viz (another problem range), or wait (a run on its way). After a run with other
-  settings or a new range, check that your text still holds, then save the report again: that stores them.
+  choices made in the app, its receivers (and which of them cast no shade) and shades, and the run's settings; and the
+  problem range of each quantity the report shows (its shares and range colours depend on it). generate_report
+  refuses when a model or a range no longer matches and says what to restore: open_model (another file or none in the
+  slot), set_geometry (other variant choices), set_roles (other roles, or a receiver's shade), the settings it names
+  (another date, step, weather ...) and run, run (no result, a stale one), update_settings viz (another problem range),
+  or wait (a run on its way). After a run with other settings or a new range, check that your text still holds, then
+  save the report again: that stores them.
 - The user edits the report in the app: report charts with the settings button of the Results panel's
   "Report: TITLE" group, report cameras in the Views menu (Report: TITLE, Update), and generates again from the Reports
   menu. Each edit saves the report with a new `updated`. So call get_report before you change a report, edit what it

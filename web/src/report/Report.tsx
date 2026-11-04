@@ -128,6 +128,9 @@ function Page(p: ReportInput) {
   const weather = w.source === 'clear-sky' ? `Clear sky (Ineichen-Perez), Linke turbidity ${w.turbidity}, site altitude ${w.altitude} m`
     : `${w.source === 'station' ? `EPW of the station ${w.station?.title ?? ''}` : w.source === 'pvgis' ? 'PVGIS typical year at the site' : `EPW file ${w.file?.name ?? ''}`}${s.epwMeta ? ` (${s.epwMeta.name}, ${deg(s.epwMeta.lat, 'N', 'S')} ${deg(s.epwMeta.lon, 'E', 'W')}, ${fmtNum(haversineKm(site.lat, site.lon, s.epwMeta.lat, s.epwMeta.lon))} km from the site)` : ''}`;
   const job = (m: Model) => m.result.manifest as typeof m.result.manifest & { id?: string; started?: string; finished?: string };
+  const refOf = (m: Model) => r.models.find((x) => x.model === LETTERS[m.slot])!;
+  const freeOf = (m: Model) => (sim.selfOcclude ? refOf(m).noShade ?? [] : []); // its receivers that cast no shade (with self-occlusion off none does)
+  const free = models.map((m) => { const ps = freeOf(m); return ps.length ? `; ${many ? `model ${LETTERS[m.slot]}: ` : ''}${ps.length} receiver${ps.length === 1 ? ' casts' : 's cast'} no shade (${few(rowNames(ps))})` : ''; }).join('');
   const cache = (c?: Record<string, string>) => (!c ? '' : c.response === 'hit' ? 'an identical run, replayed from the server cache' : `scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}`);
   const when = p.date.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -187,7 +190,7 @@ function Page(p: ReportInput) {
                 ['Period', `${period} (${first.manifest.duration_h} h evaluated)`],
                 ['Results', first.columns.map(columnLabel).join('; ')],
                 ['Mode', sim.mode === 'physical' ? `Physical: Perez sky in ${PATCHES[sim.skyDensity] ?? sim.skyDensity} patches, the sun exact per step` : `Ladybug emulation, ${PATCHES[sim.skyDensity] ?? sim.skyDensity} sky patches`],
-                ['Surfaces', `${switches || 'Every surface opaque and black'}; virtual ground reflectance ${sim.ground}${sim.selfOcclude ? '' : '; receivers cast no shade'}${sim.cullBackfaces ? '; back faces let light through' : ''}`],
+                ['Surfaces', `${switches || 'Every surface opaque and black'}; virtual ground reflectance ${sim.ground}${sim.selfOcclude ? free : '; receivers cast no shade'}${sim.cullBackfaces ? '; back faces let light through' : ''}`],
                 ['Sensors', `One per ${sim.on === 'faces' ? 'triangle' : 'vertex'} of the receivers, ${sim.sides === 'both' ? 'front and back' : sim.sides} side${sim.sides === 'both' ? 's' : ''}, ${sim.offset} m off the surface`],
               ]} />
             </div>
@@ -197,12 +200,12 @@ function Page(p: ReportInput) {
                 <thead><tr><th scope="col">Model</th><th scope="col">Variants chosen</th><th scope="col">Receivers</th><th scope="col">Shades</th></tr></thead>
                 <tbody>
                   {models.map((m) => {
-                    const ref = r.models.find((x) => x.model === LETTERS[m.slot])!, vs = Object.entries(ref.variants).flatMap(([path, sets]) => Object.entries(sets).map(([k, v]) => `${k} = ${v} on ${path}`));
+                    const ref = refOf(m), vs = Object.entries(ref.variants).flatMap(([path, sets]) => Object.entries(sets).map(([k, v]) => `${k} = ${v} on ${path}`)), ns = new Set(freeOf(m));
                     return (
                       <tr key={m.slot}>
                         <td>{label(m)}{many && m === models[0] ? ' (reference)' : ''}</td>
                         <td>{vs.length ? vs.join('; ') : "The file's own"}</td>
-                        <td>{`${ref.receivers.length}: ${few(ref.receivers)}`}</td>
+                        <td>{`${ref.receivers.length}: ${few(ref.receivers.map((p) => (ns.has(p) ? `${p} (no shade)` : p)))}`}</td>
                         <td>{`${ref.shades.length}: ${few(ref.shades)}`}</td>
                       </tr>
                     );

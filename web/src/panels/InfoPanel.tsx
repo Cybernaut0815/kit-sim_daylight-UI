@@ -24,7 +24,7 @@ export function InfoButton() {
 
           <h3>Quick start</h3>
           <ol>
-            <li><em>Model</em>: open the model files (USD, USDZ, glTF, GLB, or OBJ with its MTL and textures), or a folder holding a USD scene and its assets. In the prim tree select meshes or whole groups and give them a role: <em>Receiver</em> (measured and painted with the result), <em>Shade</em> (casts shadows) or <em>Ignore</em> (left out of the run).</li>
+            <li><em>Model</em>: open the model files (USD, USDZ, glTF, GLB, or OBJ with its MTL and textures), or a folder holding a USD scene and its assets. In the prim tree select meshes or whole groups and give them a role: <em>Receiver</em> (measured and painted with the result), <em>Shade</em> (casts shadows) or <em>Ignore</em> (left out of the run). A receiver casts shadows too; untick <em>Casts shade</em> for one that should only measure, such as a grid of points inside a room (with <em>Receivers block rays too</em> off, under Simulation, Advanced, no receiver casts any).</li>
             <li><em>Location</em>: search a place, click the map, drag the marker or type coordinates.</li>
             <li><em>Time</em>: <em>Annual</em>, a <em>Single date</em> or a <em>Date range</em>; or drag the sun path drawn around the model.</li>
             <li><em>Simulation</em>: the quantities, the receiving side, sensors on faces or vertices.</li>

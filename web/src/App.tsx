@@ -9,7 +9,7 @@ import { runRemote, type ObjMesh, type RemoteManifest } from 'daylight-mesh';
 import type { LocalFile, SectionGizmo, SectionSource, ViewState } from 'usd-viewer';
 import { Splitter } from './Splitter';
 import type { ChartEdit } from './charts/ChartSettings';
-import { buildArgs, derivedTz, epwRef, validate, weatherLeap } from './lib/args';
+import { buildArgs, derivedTz, epwRef, noOccludeArgs, validate, weatherLeap } from './lib/args';
 import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
@@ -294,7 +294,8 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- readStage reads refs only
 
   // A variant switch or a subdivision level (session layer, not saved) changes what is drawn: re-read the model's meshes,
-  // keeping each path's role. Every such edit resolves once the view has the new meshes.
+  // keeping each path's role (and, in RELOAD, a receiver's no-shade flag). Every such edit resolves once the view has the
+  // new meshes.
   const reread = useCallback(async (slot: number, edit: () => Promise<unknown>) => {
     pane(slot, { loading: true, loadError: null });
     try {
@@ -428,12 +429,12 @@ export default function App() {
     const slot = state.models[k].slot;
     void readTexture(viewer(slot).el, r).then((t) => { reading.current = false; setTexStats((all) => ({ ...all, [slot]: new Map(all[slot] ?? NO_STATS).set(readKey(r), t) })); });
   }); // every render: cheap when nothing is unread or a read is in flight
-  // Per model: its receivers and shades, its run arguments, and everything the server's response cache keys on (an equal
-  // key gives an equal result).
+  // Per model: its receivers and shades, its run arguments (the receivers that cast no shade among them), and everything
+  // the server's response cache keys on (an equal key gives an equal result).
   const epw = epwRef(s), base = buildArgs(s), weather = epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null;
   const per = state.models.map((m, i) => {
     const receivers = m.objects.filter((o) => o.role === 'receiver'), shades = m.objects.filter((o) => o.role === 'shade');
-    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, s.sim)];
+    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, s.sim), ...noOccludeArgs(receivers, s.sim)];
     return { m, receivers, shades, args, mesh: JSON.stringify(ids), key: JSON.stringify([args, weather, ...ids]) };
   });
   const meshKeys = useRef<Record<number, string>>({}); // per slot, its receivers and shades now: a job started for others reports nothing
@@ -616,7 +617,7 @@ export default function App() {
           <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel models={state.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={state.errors} stage={ap.stage} subdiv={ui.subdiv} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={dispatch} />
+                <ModelPanel models={state.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={state.errors} stage={ap.stage} subdiv={ui.subdiv} selfOcclude={s.sim.selfOcclude} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={dispatch} />
                 <MaterialsPanel slot={am.slot} title={n > 1 ? `Materials, model ${LETTERS[am.slot]}` : 'Materials'} rows={optics[ai].materials} fallback={optics[ai].fallback} glass={optics[ai].glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} reflections={reflect} dispatch={dispatch} />
                 <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
                 <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />

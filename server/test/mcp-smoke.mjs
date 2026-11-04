@@ -1,8 +1,9 @@
 // Smoke test of daylight_server --mcp in Claude-only mode (no app tab): the agent routes off without --mcp; the
 // local-only gate; the MCP handshake; the fixture (building.usda) walked through tools/call in the hidden instance the
 // server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only; a shot's own), a
-// parts chart, and guide 'report''s two example reports generated to PDF (one with a sectioned figure, which differs
-// from the same without its section); then Claude Desktop's stdio relay (mcp-stdio.mjs). Node 18+, no packages.
+// parts chart, a receiver that casts no shade (set_roles shade false), and guide 'report''s two example reports generated
+// to PDF (one with a sectioned figure, which differs from the same without its section); then Claude Desktop's stdio
+// relay (mcp-stdio.mjs). Node 18+, no packages.
 // Run: node server/test/mcp-smoke.mjs --web <app dist dir> [--exe <daylight_server.exe>] [--port 18100]
 // It starts its own servers on --port (no --mcp) and --port + 1 (--mcp --web), each with a cache in a fresh temporary
 // folder (kept when a check fails: server logs, reports), and needs the GPU and Chrome or Edge. One PASS / FAIL line per
@@ -202,6 +203,14 @@ if (on) await part('walk', async () => {
   await step('update_settings adds a parts chart', 'update_settings', { charts: [{ id: 'facades', kind: 'parts', column: 'sunhours_front', parts: FAC, metric: 'mean', range: 'absolute' }] });
   const charts = (await tool('app_state')).json?.settings?.charts ?? [];
   check('app_state lists it', charts.some((c) => c.id === 'facades' && c.kind === 'parts'), charts.map((c) => `${c.id} (${c.kind})`).join(', '));
+  // a receiver that casts no shade: the neighbour measured but out of the scene, so Facade_S gets the sun it kept off; then a shade again
+  await step('set_roles /Site/Neighbour receiver, shade false', 'set_roles', { paths: ['/Site/Neighbour'], role: 'receiver', shade: false }, (r) => r.json?.meshes?.noShade === 1);
+  run = await again('run', {}, running);
+  const open = (await tool('results', { models: ['A'], column: 'sunhours_front', paths: [FAC[2]] })).json?.models?.[0], [shaded, unshaded] = [parts.find((r) => r.path === FAC[2])?.mean, open?.rows?.[0]?.mean];
+  const sent = open?.run?.args?.join(' ') ?? '';
+  check('a receiver with shade false shades nothing: Facade_S gets more sun, the run sends --no-occlude', done(run) && unshaded > shaded && sent.includes('--no-occlude /Site/Neighbour'),
+    `Facade_S ${shaded} h behind the neighbour as shade, ${unshaded} h with it a receiver casting none; ${/--no-occlude \S+/.exec(sent)?.[0] ?? 'no --no-occlude'}`);
+  await step('set_roles /Site/Neighbour shade again', 'set_roles', { paths: ['/Site/Neighbour'], role: 'shade' }, (r) => !r.err && r.json?.meshes?.noShade === undefined);
   // option B: the same file with the overhang variant
   await step('open_model -> B', 'open_model', { paths: [BUILDING], model: 'B' }, (r) => r.json?.model === 'B');
   await step('set_geometry B option overhang', 'set_geometry', { model: 'B', variant: { path: '/Site/Block', set: 'option', value: 'overhang' } });

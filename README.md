@@ -4,8 +4,9 @@ Browser front end and HTTP server for [kit-sim_daylight](https://github.com/Cybe
 annual daylight / solar simulation): open a USD stage (`.usd` / `.usda` / `.usdc` / `.usdz`, as files or a folder with
 its assets) or a `.glb` / `.gltf` (Draco and meshopt compression too) / `.obj` (with its `.mtl`), turned into USD in the
 browser with its materials, UVs and textures, in the [USD web viewer](https://github.com/Cybernaut0815/USD_WebViewer),
-pick shade-casting and receiving meshes (or whole groups) in the stage's prim tree, switch its variants, hide or lock
-prims as in the viewer, subdivide catmullClark / loop meshes (creases included) so the run uses the smooth surface, set
+pick shade-casting and receiving meshes (or whole groups; a receiver can also measure without casting shade, such as a
+grid of points in a room) in the stage's prim tree, switch its variants, hide or lock prims as in the viewer, subdivide
+catmullClark / loop meshes (creases included) so the run uses the smooth surface, set
 the site on a map, the weather (upload, nearest station, PVGIS or clear sky), the time (a single date and time, a date
 range such as 09:00 to 17:00 every day of the summer, or the whole year) on timelines or by dragging the sun path drawn
 around the model, and every CLI option; run on the GPU box (or tick "Run on every change"), read the results on the

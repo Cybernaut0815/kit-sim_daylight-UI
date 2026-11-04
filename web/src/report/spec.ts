@@ -27,10 +27,11 @@ export type Variants = Record<string, Record<string, string>>;
 /** A quantity's problem range as the Results panel sets it (null: no bound). */
 export interface Range { lo: number | null; hi: number | null }
 /** A report model and its run at save time: the file (and the paths open_model opened it from), the variant choices,
- *  the receivers' and shades' prim paths, and its run's settings (AppModel.key).
+ *  the receivers' and shades' prim paths, the receivers that cast no shade (absent: none), and its run's settings
+ *  (AppModel.key).
  *  ponytail: every receiver and shade path, stored once; counts and a hash if models of many thousand meshes must fit
  *  the server's 1 MB */
-export interface ModelRef { model: string; file: string; open?: string[]; variants: Variants; receivers: string[]; shades: string[]; runKey: string }
+export interface ModelRef { model: string; file: string; open?: string[]; variants: Variants; receivers: string[]; shades: string[]; noShade?: string[]; runKey: string }
 /** ranges: per quantity the report shows, its problem range at save (its shares and range colours are drawn on it). */
 export interface Report { id: string; title: string; created: string; updated: string; models: ModelRef[]; ranges?: Record<string, Range>; stats?: Stat[]; summary: string; blocks: Block[]; notes?: string }
 /** A checked spec before the save stamps it (created, updated). */
@@ -39,12 +40,12 @@ export type Draft = Omit<Report, 'created' | 'updated'>;
 export interface Stored { id: string; pdf: boolean; spec: Report }
 
 /** An open model as a report sees it: its file's name ('' = none) and the paths open_model opened it from, the variant
- *  choices made in the app ([the file's own, the chosen one]), its receivers' and shades' prim paths, and its result:
- *  freshness, the settings it ran with (`key`: its run key's arguments and weather, prim paths for the mesh ids, as
- *  tools.ts stableKey gives them; `inputs`: the same of the inputs now), columns. */
+ *  choices made in the app ([the file's own, the chosen one]), its receivers' and shades' prim paths, the receivers that
+ *  cast no shade, and its result: freshness, the settings it ran with (`key`: its run key's arguments and weather, prim
+ *  paths for the mesh ids, as tools.ts stableKey gives them; `inputs`: the same of the inputs now), columns. */
 export interface AppModel {
   model: string; file: string; open?: string[]; loading: boolean; choices: Record<string, Record<string, readonly [string, string]>>;
-  receivers: string[]; shades: string[]; result: 'running' | 'fresh' | 'stale' | null; key: string | null; inputs: string; columns: string[];
+  receivers: string[]; shades: string[]; noShade: string[]; result: 'running' | 'fresh' | 'stale' | null; key: string | null; inputs: string; columns: string[];
 }
 /** The app as a report sees it (tools.ts appView): the open models, the column shown, the problem ranges. */
 export interface AppView { models: AppModel[]; shown: string | null; ranges: Settings['viz']['ranges'] }
@@ -59,7 +60,7 @@ const strs = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => t
 function readable(id: string, s: unknown): s is Report {
   if (!isObj(s) || s.id !== id || ![s.title, s.created, s.updated, s.summary].every((v) => typeof v === 'string')) return false;
   const model = (m: unknown) => isObj(m) && typeof m.model === 'string' && m.model.length === 1 && LETTERS.includes(m.model) && typeof m.file === 'string' && typeof m.runKey === 'string'
-    && isObj(m.variants) && Object.values(m.variants).every(isObj) && strs(m.receivers) && strs(m.shades) && (m.open === undefined || strs(m.open));
+    && isObj(m.variants) && Object.values(m.variants).every(isObj) && strs(m.receivers) && strs(m.shades) && (m.open === undefined || strs(m.open)) && (m.noShade === undefined || strs(m.noShade));
   const metric = (v: unknown) => METRICS.includes(v as Metric);
   // a view's section as save_report stores it, every field given: the Views menu and the shots read them all
   const cut = (v: unknown) => isObj(v) && typeof v.on === 'boolean' && Array.isArray(v.planes) && Array.isArray(v.boxes) && !sectionProblems(v, 'section').length;
@@ -283,7 +284,7 @@ export function validateSpec(raw: unknown, app: AppView, bounds?: Bounds): Draft
   const used = [...(stats ?? []).map((s) => s.column), ...blocks.flatMap((b) => (b.type === 'chart' ? [b.chart.column!] : b.type === 'view' ? (b.column ? [b.column] : []) : b.type === 'table' ? [b.column] : []))];
   const draft: Draft = {
     id: id!, title: title!,
-    models: refs.map((m) => ({ model: m.model, file: m.file, ...(m.open ? { open: m.open } : {}), variants: chosenOf(m.choices), receivers: m.receivers, shades: m.shades, runKey: m.key! })),
+    models: refs.map((m) => ({ model: m.model, file: m.file, ...(m.open ? { open: m.open } : {}), variants: chosenOf(m.choices), receivers: m.receivers, shades: m.shades, ...(m.noShade.length ? { noShade: m.noShade } : {}), runKey: m.key! })),
     ranges: Object.fromEntries([...new Set(used.map(quantityOf))].map((q) => [q, { lo: app.ranges[q]?.lo ?? null, hi: app.ranges[q]?.hi ?? null }])),
     ...(stats ? { stats } : {}), summary: summary!, blocks, ...(notes !== undefined ? { notes } : {}),
   };
@@ -318,9 +319,10 @@ function differ(was: string, now: string): string {
 
 /**
  * What stops report `r` from being generated now, in words the agent can act on ([]: ready). Per report model: not open
- * in its slot with its file (open_model); the variants or roles not as at save (set_geometry, set_roles, then run); a run
- * on its way (wait), no result or a stale one (run); a result run with settings other than at save, which it names. Then
- * a problem range other than at save, share metrics without one, and a generation of it on its way.
+ * in its slot with its file (open_model); the variants or roles (which receivers cast no shade included) not as at save
+ * (set_geometry, set_roles, then run); a run on its way (wait), no result or a stale one (run); a result run with
+ * settings other than at save, which it names. Then a problem range other than at save, share metrics without one, and a
+ * generation of it on its way.
  */
 export function readiness(r: Report, app: AppView, generating = false): string[] {
   const out: string[] = [];
@@ -332,9 +334,16 @@ export function readiness(r: Report, app: AppView, generating = false): string[]
     const now = chosenOf(m.choices), fix: string[] = [];
     for (const [p, sets] of Object.entries(ref.variants)) for (const [set, v] of Object.entries(sets)) if (now[p]?.[set] !== v) fix.push(`set_geometry variant ${set} of ${p} to ${v} (now ${now[p]?.[set] ?? "the file's own"})`);
     for (const [p, sets] of Object.entries(now)) for (const [set, v] of Object.entries(sets)) if (ref.variants[p]?.[set] === undefined) fix.push(`set_geometry variant ${set} of ${p} back to ${m.choices[p][set][0]}, the file's own (now ${v})`);
-    const roleOf = (receivers: string[], shades: string[]) => { const rs = new Set(receivers), ss = new Set(shades); return (p: string) => (rs.has(p) ? 'receiver' : ss.has(p) ? 'shade' : 'none'); };
-    const was = roleOf(ref.receivers, ref.shades), is = roleOf(m.receivers, m.shades), to = new Map<string, string[]>();
-    for (const p of new Set([...ref.receivers, ...ref.shades, ...m.receivers, ...m.shades])) if (was(p) !== is(p)) to.set(was(p), [...(to.get(was(p)) ?? []), p]);
+    // a path's role as set_roles gives it; back to a receiver that casts shade takes shade true (a receiver's flag stays)
+    const roleOf = (x: Pick<ModelRef, 'receivers' | 'shades' | 'noShade'>) => {
+      const rs = new Set(x.receivers), ss = new Set(x.shades), ns = new Set(x.noShade);
+      return (p: string) => (ns.has(p) ? 'receiver shade false' : rs.has(p) ? 'receiver' : ss.has(p) ? 'shade' : 'none');
+    };
+    const was = roleOf(ref), is = roleOf(m), to = new Map<string, string[]>();
+    for (const p of new Set([...ref.receivers, ...ref.shades, ...m.receivers, ...m.shades])) {
+      const w = was(p), back = w === 'receiver' && is(p) === 'receiver shade false' ? 'receiver shade true' : w;
+      if (w !== is(p)) to.set(back, [...(to.get(back) ?? []), p]);
+    }
     for (const [role, ps] of to) fix.push(`set_roles ${role} for ${few(ps)}`);
     if (fix.length) say(`not as at save: ${fix.join('; ')}; then run`);
     else if (m.result === 'running') say('a run is on its way; wait for it (run waits)');
@@ -362,7 +371,7 @@ export function readiness(r: Report, app: AppView, generating = false): string[]
 export const inApp = (s: string) => s
   .replace(/open_model (.+?) into ([A-D])\b/g, 'open $1 as model $2')
   .replace(/set_geometry variant (\S+) of (\S+) (?:back )?to /g, 'variant $1 of $2 back to ')
-  .replace(/set_roles (\w+) for ([^;]+)/g, (_, role: string, ps: string) => `${ps} back to ${role === 'none' ? 'ignored' : role}`)
+  .replace(/set_roles (\w+)(?: shade (true|false))? for ([^;]+)/g, (_, role: string, shade: string | undefined, ps: string) => `${ps} back to ${role === 'none' ? 'ignored' : role}${shade ? `, casting ${shade === 'false' ? 'no ' : ''}shade` : ''}`)
   .replace(/; call app_state until it has loaded| \(run waits\)|,? or (?:run and )?save the report again|; call generate_report for it/g, '')
   .replace(/ \(update_settings viz \{[^}]*\}\)/g, ' in Results')
   .replace(/(?:stats|blocks)\[\d+\](?:\.metric)?: [\w, ]+ is a share of the problem range, and (\w+) has none; set it in Results or use another metric/g, 'the report shows shares of the problem range of $1, which has none now; set one in Results')

@@ -4,7 +4,7 @@
     {
       "name": "app_state",
       "title": "App state",
-      "description": "Snapshot of the app: call it first, and again whenever the user may have changed something in the UI. Returns compact JSON: the tab (the user's browser tab or the hidden instance, whether it is visible, whether the browser discarded it); per model A-D its file, loading state or load problems, meshes by role (receiver, shade, none), faces, run status and whether its result is fresh, stale or running; the active model, the shown column and colouring; every setting (site, time, simulation, weather, colour scales, charts) and the problems that would stop a run; the saved views; and the stored reports (id, title, models, updated, PDF present, generating, last error).",
+      "description": "Snapshot of the app: call it first, and again whenever the user may have changed something in the UI. Returns compact JSON: the tab (the user's browser tab or the hidden instance, whether it is visible, whether the browser discarded it); per model A-D its file, loading state or load problems, meshes by role (receiver, shade, none; noShade: the receivers among them that cast no shade), faces, run status and whether its result is fresh, stale or running; the active model, the shown column and colouring; every setting (site, time, simulation, weather, colour scales, charts) and the problems that would stop a run; the saved views; and the stored reports (id, title, models, updated, PDF present, generating, last error).",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "annotations": { "readOnlyHint": true }
     },
@@ -101,7 +101,7 @@
               "ground": { "type": "number", "minimum": 0, "maximum": 1, "description": "Reflectance of the ground beyond the model (default 0.2)." },
               "offset": { "type": "number", "description": "Sensor offset from the surface along its normal, m." },
               "cullBackfaces": { "type": "boolean", "description": "Occluders block only from their front side." },
-              "selfOcclude": { "type": "boolean", "description": "Receivers block rays too (default on)." }
+              "selfOcclude": { "type": "boolean", "description": "Receivers block rays too (default on); off: no receiver casts shade (set_roles shade false does that per receiver)." }
             },
             "additionalProperties": false
           },
@@ -194,7 +194,7 @@
     {
       "name": "model_tree",
       "title": "Model prim tree",
-      "description": "Browse a model's prim hierarchy to name building parts: the prims below `path`, `depth` levels deep. Per prim: path, name, type, children, meshes and triangles under it and their role (receiver, shade, none or mixed), visibility, lock, and variant sets with the selected variant. `query` searches the whole stage instead and returns the matching prim paths: words match names, 'type:Mesh' filters by prim type, e.g. 'type:Mesh roof'. At most `limit` prims; the reply says when there are more.",
+      "description": "Browse a model's prim hierarchy to name building parts: the prims below `path`, `depth` levels deep. Per prim: path, name, type, children, meshes and triangles under it and their role (receiver, shade, none or mixed; shade false where its receivers cast no shade, mixed where some do), visibility, lock, and variant sets with the selected variant. `query` searches the whole stage instead and returns the matching prim paths: words match names, 'type:Mesh' filters by prim type, e.g. 'type:Mesh roof'. At most `limit` prims; the reply says when there are more.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -211,13 +211,14 @@
     {
       "name": "set_roles",
       "title": "Set mesh roles",
-      "description": "Set the role of every mesh at or under the given prims, as the Model panel's Receiver, Shade and Ignore buttons do. receiver: gets results and casts shade. shade: only casts shade (e.g. neighbours, trees). none: ignored by the simulation. Instanced meshes can only shade or be ignored. A change clears that model's result (call run). Returns the role counts, the meshes changed and the paths that matched nothing.",
+      "description": "Set the role of every mesh at or under the given prims, as the Model panel's Receiver, Shade and Ignore buttons and its Casts shade box do. receiver: gets results and casts shade; with shade false it gets results but casts no shade and reflects nothing (e.g. a grid of measuring points inside a room, which gets the room's shade and shades neither the floor nor the walls), shade true makes it cast shade again. shade: only casts shade (e.g. neighbours, trees). none: ignored by the simulation. Instanced meshes can only shade or be ignored. A role change clears that model's result, a shade change makes it stale (call run). With sim.selfOcclude off no receiver casts shade, whatever shade says. Returns the role counts (noShade: the receivers that cast no shade), the meshes changed and the paths that matched nothing.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
           "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Prim paths; every mesh at or under each ('/' = all)." },
-          "role": { "type": "string", "enum": ["receiver", "shade", "none"], "description": "New role." }
+          "role": { "type": "string", "enum": ["receiver", "shade", "none"], "description": "New role." },
+          "shade": { "type": "boolean", "description": "Only with role receiver: false = they get results but cast no shade; true = they cast shade. Left out: a new receiver casts shade, a receiver keeps its own." }
         },
         "required": ["paths", "role"],
         "additionalProperties": false

@@ -10,11 +10,12 @@ import { idsUnder } from './lib/tree';
 
 export type Role = 'receiver' | 'shade' | 'none';
 /**
- * A mesh of the stage: its prim path, its drawn triangles and vertices; `instances`: one mesh drawn that many times;
- * `paths`: every copy's prim path where each copy is its own prim (native instancing), so a click on any finds the row;
- * `materials[k]`: the viewer's material rid of optics slot k (0 = none).
+ * A mesh of the stage: its prim path, its drawn triangles and vertices; `shade` false: a receiver that is measured but
+ * casts no shade (the core's --no-occlude; absent: it casts shade while receivers block rays); `instances`: one mesh
+ * drawn that many times; `paths`: every copy's prim path where each copy is its own prim (native instancing), so a click
+ * on any finds the row; `materials[k]`: the viewer's material rid of optics slot k (0 = none).
  */
-export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; instances?: number; paths?: string[]; materials?: number[] }
+export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; shade?: false; instances?: number; paths?: string[]; materials?: number[] }
 
 export type Quantity = 'radiation' | 'direct' | 'diffuse' | 'irradiance' | 'illuminance' | 'sunhours';
 export const QUANTITIES: Quantity[] = ['radiation', 'direct', 'diffuse', 'irradiance', 'illuminance', 'sunhours'];
@@ -90,8 +91,9 @@ export interface State {
 
 export type Action =
   | { type: 'LOAD'; slot: number; objects: ObjectRow[]; name?: string }
-  | { type: 'RELOAD'; slot: number; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection stays
-  | { type: 'ROLE'; slot: number; ids: string[]; role: Role }
+  | { type: 'RELOAD'; slot: number; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection and each path's no-shade flag stay
+  | { type: 'ROLE'; slot: number; ids: string[]; role: Role } // a row whose role changes casts shade as its new role does
+  | { type: 'SHADE'; slot: number; ids: string[]; shade: boolean } // whether the receivers among them cast shade
   | { type: 'SELECT'; slot: number; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
   | ({ type: 'SELECTION'; slot: number } & Selection) // the viewer's selection changed
   | { type: 'ADD' } // a model to compare, in the lowest free slot, made active
@@ -146,6 +148,8 @@ const put = (s: State, slot: number, f: (m: Model) => Model): State => {
 };
 /** A model still shows a result: the shared column (and colouring) stay; else they start over, as for one model. */
 const kept = (models: readonly Model[]) => models.some((m) => m.result);
+/** Row `o` casting shade (no flag), or not. */
+const shading = (o: ObjectRow, shade: boolean): ObjectRow => { const { shade: _was, ...rest } = o; return shade ? rest : { ...rest, shade: false }; };
 const only = (c: ChartSpec, keep: (k: string) => boolean) => Object.fromEntries(Object.entries(c).filter(([k]) => keep(k))) as ChartSpec;
 const lookOf = (c: ChartSpec): readonly string[] => FIELDS[c.kind];
 /** putChart, where a refusal leaves the list as it is (the agent's tool reports it; stored junk is dropped). */
@@ -171,10 +175,17 @@ export function reducer(s: State, a: Action): State {
     }
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
       const n = put(s, a.slot, (m) => {
-        const objects = m.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...o, role: a.role } : o));
+        const objects = m.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...shading(o, true), role: a.role } : o));
         return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }; // nothing changed: keep the result
       });
       return n === s || kept(n.models) ? n : { ...n, column: 0 };
+    }
+    case 'SHADE': { // the same receivers with other run arguments: the result stays, stale where the arguments differ
+      const ids = new Set(a.ids);
+      return put(s, a.slot, (m) => {
+        const objects = m.objects.map((o) => (ids.has(o.id) && o.role === 'receiver' && (o.shade ?? true) !== a.shade ? shading(o, a.shade) : o));
+        return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects };
+      });
     }
     case 'SELECT':
       return put(s, a.slot, (m) => {
@@ -183,8 +194,12 @@ export function reducer(s: State, a: Action): State {
         for (const id of a.ids) next.has(id) ? next.delete(id) : next.add(id);
         return { ...m, selected: next };
       });
-    case 'RELOAD': {
-      const n = put(s, a.slot, (m) => ({ ...m, objects: a.objects, selected: new Set(idsUnder(m.selection.paths, a.objects)), run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }));
+    case 'RELOAD': { // the re-read rows keep their roles by path (App's readStage), and a receiver its no-shade flag here
+      const n = put(s, a.slot, (m) => {
+        const free = new Set(m.objects.filter((o) => o.shade === false).map((o) => o.path));
+        const objects = free.size ? a.objects.map((o) => (o.role === 'receiver' && free.has(o.path) ? shading(o, false) : o)) : a.objects;
+        return { ...m, objects, selected: new Set(idsUnder(m.selection.paths, objects)), run: inFlight(m.run) ? m.run : IDLE, result: null, error: null };
+      });
       return n === s ? s : { ...n, hovered: null, probe: null, ...(kept(n.models) ? {} : { column: 0 }) };
     }
     case 'SELECTION':

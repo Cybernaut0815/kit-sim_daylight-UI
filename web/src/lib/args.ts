@@ -1,5 +1,5 @@
 // Settings -> CLI flags for /run (every option explicit, so equal settings give equal request keys), and validation.
-import type { Settings } from '../store';
+import type { ObjectRow, Settings } from '../store';
 import { quantitiesFor } from '../store';
 import { pvgisUrl } from './geo';
 import { doy, fmtClock, fmtTime } from './time';
@@ -34,6 +34,14 @@ export function buildArgs(s: Settings): string[] {
     if (time.from.date !== time.to.date) a.push('--hours', `${fmtClock(time.from.hour)}-${fmtClock(time.to.hour)}`); // the same hours of every day
   }
   return a;
+}
+
+/** A model's receivers that cast no shade, as the core's --no-occlude (mesh ids in the order of their paths, so a run key
+ *  with its ids as paths stays the same across re-reads); none while receivers do not block rays, when none casts shade
+ *  anyway and the core builds the same scene. */
+export function noOccludeArgs(receivers: readonly Pick<ObjectRow, 'id' | 'path' | 'shade'>[], sim: Settings['sim']): string[] {
+  const ids = sim.selfOcclude ? receivers.filter((o) => o.shade === false).sort((x, y) => (x.path < y.path ? -1 : 1)).map((o) => o.id) : [];
+  return ids.length ? ['--no-occlude', ids.join(';')] : [];
 }
 
 /**

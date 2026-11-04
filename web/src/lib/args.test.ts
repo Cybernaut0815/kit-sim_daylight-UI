@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, type Settings } from '../store';
-import { buildArgs, derivedTz, validate } from './args';
+import { buildArgs, derivedTz, noOccludeArgs, validate } from './args';
 import { DEFAULT_GLASS, DEFAULT_OPTICS, opticsArgs, type RunMesh } from './optics';
 
 const pairs = (a: string[]) => Object.fromEntries(a.map((v, i) => [v, a[i + 1]]));
@@ -93,6 +93,16 @@ describe('buildArgs', () => {
     const r = defaultSettings();
     r.sim.bounceSamples = 65536; // Reflections off: the samples are not sent
     expect(run(r)).toEqual(buildArgs(defaultSettings()));
+  });
+  it('--no-occlude: the receivers that cast no shade by id in the order of their paths, only while receivers block rays', () => {
+    const rows = [{ id: 'u1', path: '/Room/Grid', shade: false as const }, { id: 'u2', path: '/Room/Floor' }, { id: 'u0', path: '/Room/Desk', shade: false as const }];
+    const s = defaultSettings(), run = (rs: typeof rows) => [...buildArgs(s), ...noOccludeArgs(rs, s.sim)]; // as the App sends them
+    const plain = rows.map(({ id, path }) => ({ id, path }));
+    expect(run(plain)).toEqual(buildArgs(s)); // nothing marked: the arguments, and so the run key (App: [args, weather, ids]), as before
+    expect(run(rows).slice(buildArgs(s).length)).toEqual(['--no-occlude', 'u0;u1']); // /Room/Desk, /Room/Grid: one key whatever the ids
+    expect(rows.map((o) => o.id)).toEqual(['u1', 'u2', 'u0']); // the rows left as they are
+    s.sim.selfOcclude = false;
+    expect(run(rows)).toEqual(buildArgs(s)); // no receiver casts shade anyway: the same scene and response, so not sent
   });
 });
 

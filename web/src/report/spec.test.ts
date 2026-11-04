@@ -9,7 +9,7 @@ const BLOCK = ['/Site/Block/Facade_N', '/Site/Block/Facade_E', '/Site/Block/Faca
 const run = (from: string, weather: unknown = null) => JSON.stringify([['--clear-sky', '--from', from, '--to', '2026-03-21T18:00', '--step', '15'], weather]);
 const MARCH = run('2026-03-21T08:00'), JUNE = run('2026-06-21T08:00');
 const model = (L: string, o: Partial<AppModel> = {}): AppModel => ({
-  model: L, file: 'building', loading: false, choices: {}, receivers: BLOCK, shades: ['/Site/Neighbour'], result: 'fresh', key: MARCH, inputs: MARCH, columns: ['sunhours_front'], ...o,
+  model: L, file: 'building', loading: false, choices: {}, receivers: BLOCK, shades: ['/Site/Neighbour'], noShade: [], result: 'fresh', key: MARCH, inputs: MARCH, columns: ['sunhours_front'], ...o,
 });
 // the fixture as A (base) and B (overhang, the overhang a shade), run with the problem range below 2 h
 const B = { choices: { '/Site/Block': { option: ['base', 'overhang'] as const } }, shades: ['/Site/Block/Overhang', '/Site/Neighbour'] };
@@ -125,6 +125,23 @@ describe('readiness', () => {
     ]);
     const opened = stamp(validateSpec(examples[0], app(model('A', { open: ['F:\\models\\building.usda'] }))));
     expect(readiness(opened, app())).toEqual(['model A: not open; open_model F:\\models\\building.usda into A']);
+  });
+
+  it('stores the receivers that cast no shade (none: no field), and needs them as at save', () => {
+    const grid = { receivers: [...BLOCK, '/Site/Grid'], noShade: ['/Site/Grid'] };
+    expect((validateSpec(examples[0], app(model('A'))) as Draft).models[0]).not.toHaveProperty('noShade');
+    const saved = stamp(validateSpec(examples[0], app(model('A', grid))));
+    expect(saved.models[0].noShade).toEqual(['/Site/Grid']);
+    expect(parseReports([{ id: saved.id, pdf: false, spec: JSON.stringify(saved) }])).toHaveLength(1);
+    expect(parseReports([{ id: saved.id, pdf: false, spec: JSON.stringify({ ...saved, models: [{ ...saved.models[0], noShade: '/Site/Grid' }] }) }])).toEqual([]);
+    expect(readiness(saved, app(model('A', grid)))).toEqual([]);
+    const casting = readiness(saved, app(model('A', { ...grid, noShade: [] }))), dropped = readiness(saved, app(model('A', { receivers: BLOCK, shades: ['/Site/Neighbour', '/Site/Grid'] })));
+    expect(casting).toEqual(['model A: not as at save: set_roles receiver shade false for /Site/Grid; then run']);
+    expect(dropped).toEqual(['model A: not as at save: set_roles receiver shade false for /Site/Grid; then run']); // a role change drops the flag: set_roles gives both back
+    const single = stamp(validateSpec(examples[0], app(model('A', { receivers: [...BLOCK, '/Site/Grid'] }))));
+    const flagged = readiness(single, app(model('A', grid))); // receiver alone would keep the flag
+    expect(flagged).toEqual(['model A: not as at save: set_roles receiver shade true for /Site/Grid; then run']);
+    expect([...casting, ...flagged].map(inApp)).toEqual(['model A: not as at save: /Site/Grid back to receiver, casting no shade; then run', 'model A: not as at save: /Site/Grid back to receiver, casting shade; then run']);
   });
 
   it('needs the problem range of save time', () => {

@@ -122,8 +122,10 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
 ### Model setup
 
 - Roles (set_roles): receiver = gets results and casts shade (sim.selfOcclude, default on); shade = only casts shade
-  (neighbours, trees, terrain); none = left out. Prims hidden by set_visibility still run by their role. Whatever is
-  not modelled, or set to none, does not shade.
+  (neighbours, trees, terrain); none = left out. A receiver with shade false gets results but casts no shade and
+  reflects nothing: measuring geometry such as a sensor grid (section 7); with sim.selfOcclude off no receiver casts
+  shade. Prims hidden by set_visibility still run by their role. Whatever is not modelled, or set to none, does not
+  shade.
 - sim.north (degrees counter-clockwise from the model's +Y axis to true north) turns the sun for every result and sets
   the N / E / S / W of results by 'facing' and of find_critical. Check it before discussing orientation.
 - Sections (set_display section; a screenshot can take its own, a report figure has its own or none) cut the views
@@ -263,6 +265,15 @@ Each is an approximation: say so, and what it leaves out.
 - time.mode 'range' over the season (from.date, to.date) with the occupied daily hours (from.hour, to.hour, standard
   time), step 60 from whole hours: irradiance and illuminance become means over those hours only (the provenance gives
   the hours evaluated). Still a mean over surfaces and hours: it does not say how many hours reach a target.
+
+### Sensor grids inside rooms
+
+- A grid of measuring points inside rooms (a work plane 0.8 m above the floor, facing up, finely meshed, its own prim):
+  set_roles role 'receiver' with shade false, so it gets the room's light and shade but shades neither the floor nor
+  the walls nor any other receiver (and reflects nothing). The room itself (walls, floor, ceiling, glazing) as
+  receiver or shade; light inside needs transmission and reflections (section 5). Read the grid with results by
+  'parts' and its path. Its values are the plane's over the period; against a target such as 300 lx use occupied-hour
+  means (above). No daylight factor, DA or UDI (section 6).
 
 ### PV potential
 
