@@ -341,18 +341,19 @@ export default function App() {
   // clears it). Edited in a view (its gizmo, its own menu), it comes back in model metres and the other views follow, but
   // that view keeps its own numbers: rounded ones would fight the drag (`from`: the view each such section came from, so
   // an effect that runs after the next drag step still skips it). A view showing a shot's own section is the shot's until
-  // it puts this one back. A change from the Section menu takes the gizmo to its entry in the active view once the views
-  // have it (attach: undefined leaves it as it is).
-  const from = useRef(new WeakMap<Section, number>()), attach = useRef<SectionGizmo | null | undefined>(undefined);
+  // it puts this one back. A change from the Section menu takes the gizmo to its entry once the views have it (attach:
+  // undefined leaves it as it is); a whole section from an agent or a report's view lets it go (null): the viewer keeps
+  // the gizmo's index, which may then be another entry. gizmoIn: the view the gizmo is in.
+  const from = useRef(new WeakMap<Section, number>()), attach = useRef<SectionGizmo | null | undefined>(undefined), gizmoIn = useRef(state.active);
   const stages = state.models.map((m) => `${m.slot}:${panes[m.slot]?.stage ?? 0}`).join();
   useEffect(() => {
     for (const m of models.current) {
       const { el } = viewer(m.slot), st = el.stage;
       if (st && from.current.get(section) !== m.slot && !inShot(el)) el.section = toStage(section, st.metersPerUnit, st.upAxis);
     }
-    if (attach.current !== undefined) viewer(state.active).el.sectionGizmo = attach.current;
+    if (attach.current !== undefined) viewer(gizmoIn.current).el.sectionGizmo = attach.current; // before a new active view takes it (below)
     attach.current = undefined;
-  }, [section, stages]); // eslint-disable-line react-hooks/exhaustive-deps -- the gizmo goes to this commit's active view
+  }, [section, stages]);
   useEffect(() => {
     const offs = models.current.map(({ slot }) => {
       const { el } = viewer(slot);
@@ -372,11 +373,10 @@ export default function App() {
     return () => offs.forEach((off) => off());
   }, [slots]);
   const onSection = useCallback((next: Section, gizmo?: SectionGizmo | null) => {
-    if (gizmo !== undefined) attach.current = gizmo;
+    if (gizmo !== undefined && next !== sectionNow.current) attach.current = gizmo; // the same section commits nothing: attach would wait for the next change
     setSection(next);
   }, []);
   // The gizmo edits the section in the active view only: it goes along when another view becomes the active one.
-  const gizmoIn = useRef(state.active);
   useEffect(() => {
     if (gizmoIn.current === state.active) return;
     const from = viewer(gizmoIn.current).el, g = from.sectionGizmo;
@@ -585,7 +585,7 @@ export default function App() {
   const ctl = useRef<Ctl>(null!);
   useLayoutEffect(() => {
     ctl.current = {
-      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection, views, setViews, optics, materialsReady, per, shown, scale, domain,
+      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection: (s) => onSection(s, null), views, setViews, optics, materialsReady, per, shown, scale, domain,
       exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, weightsFor, meshOf,
       busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
       variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
@@ -653,7 +653,7 @@ export default function App() {
               <div className="viewport__bar">
                 <div className="cluster cluster--between">
                   <div className="cluster">
-                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={setSection} />
+                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={(s) => onSection(s, null)} />
                     <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports; a generation's failure shows as its lastError */}

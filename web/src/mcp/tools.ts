@@ -48,7 +48,7 @@ export interface Ctl {
   ui: UiPrefs; setUi: Dispatch<SetStateAction<UiPrefs>>;
   theme: Theme; setTheme: (mode: Theme) => void; // the mode (auto: the system's)
   sunScale: number; setSunScale: (scale: number) => void;
-  section: Section; setSection: (s: Section) => void; // every view's section (model metres; lib/section.ts), view only
+  section: Section; setSection: (s: Section) => void; // every view's section (model metres; lib/section.ts), view only; setting it lets the user's gizmo go
   views: SavedView[]; setViews: Dispatch<SetStateAction<SavedView[]>>;
   optics: ReturnType<typeof resolveOptics>[]; materialsReady: boolean; // optics per model, in state.models order
   per: { m: Model; receivers: ObjectRow[]; shades: ObjectRow[]; key: string }[]; // per model, in order: its run key now
