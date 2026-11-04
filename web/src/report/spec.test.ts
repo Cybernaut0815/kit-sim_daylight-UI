@@ -142,6 +142,12 @@ describe('readiness', () => {
     const flagged = readiness(single, app(model('A', grid))); // receiver alone would keep the flag
     expect(flagged).toEqual(['model A: not as at save: set_roles receiver shade true for /Site/Grid; then run']);
     expect([...casting, ...flagged].map(inApp)).toEqual(['model A: not as at save: /Site/Grid back to receiver, casting no shade; then run', 'model A: not as at save: /Site/Grid back to receiver, casting shade; then run']);
+    // with receivers out of the rays (self-occlusion off) at save or now the flags change nothing: the run key says what differs
+    const OFF = MARCH.replace('"--clear-sky"', '"--clear-sky","--no-self-occlude"'), off = { key: OFF, inputs: OFF };
+    expect(readiness(stamp(validateSpec(examples[0], app(model('A', { ...grid, ...off })))), app(model('A', { ...grid, ...off, noShade: [] })))).toEqual([]);
+    expect(readiness(saved, app(model('A', { ...grid, noShade: [], result: 'stale', inputs: OFF })))).toEqual([
+      'model A: the inputs changed since the run this report is on (--no-self-occlude off at save, on now); set them back',
+    ]);
   });
 
   it('needs the problem range of save time', () => {

@@ -13,7 +13,8 @@ putSession, deleteSession.
 ## Workflow
 
 1. PUT /mesh/{id} with one .dmesh image per mesh (id: your UUID; layout in uploadMesh, optionally with one uint16
-   optics slot per face, header flags bit 0). Upload once; meshes stay cached. ?name= names it in results and --optics.
+   optics slot per face, header flags bit 0). Upload once; meshes stay cached. ?name= names it in results, --optics
+   and --no-occlude.
 2. POST /jobs (multipart/form-data): `sensors` = receiving mesh ids (repeat the field), `context` = shading-only mesh
    ids, `args` = CLI flags, one token per field (e.g. --lat 52.52 --lon 13.41 --tz 1 --quantity radiation,sunhours),
    weather = an `epw` file part, an `epw_url`, or the --clear-sky flag. 404 {"missing": [...]}: upload those, resubmit.
@@ -40,12 +41,12 @@ putSession, deleteSession.
   per million sensors on a city-like model, RTX 2060), noise ~1 / sqrt(M) (at 1024 annual facade values 0.5 % median,
   2.3 % p95; a single --time instant 2.3 % / 14 %: use 4096-16384 for instants and small differences).
 - cache.scene: reused = the scene was still on the GPU. A scene = the sensors ids then the context ids, in order,
-  --no-self-occlude, the --no-occlude set (receiving meshes that are analysed but cast no shade; it counts only
-  without --no-self-occlude, under which none does), and the layout of the slots that cast shade: the set that
-  transmits (tau > 0 with --transmission on), else with --bounces > 0 and a quantity other than direct / sunhours
-  whether their rho or glass differ (with --fresnel off none is glass; a hit record per slot). New --optics values
-  reuse it while that layout stays; a slot that starts or stops transmitting, or --bounces switched on or off (with
-  such a quantity) for a model whose slots differ (none transmitting), is another scene (built, then kept).
+  --no-self-occlude, the --no-occlude set (receiving meshes that are analysed but cast no shade and reflect nothing;
+  it counts only without --no-self-occlude, under which none does), and the layout of the slots that cast shade: the
+  set that transmits (tau > 0 with --transmission on), else with --bounces > 0 and a quantity other than direct /
+  sunhours whether their rho or glass differ (with --fresnel off none is glass; a hit record per slot). New --optics
+  values reuse it while that layout stays; a slot that starts or stops transmitting, or --bounces switched on or off
+  (with such a quantity) for a model whose slots differ (none transmitting), is another scene (built, then kept).
 - Columns: <quantity>_<side>, e.g. radiation_front.
 - Time (standard time, no DST): annual by default; --time MM-DDTHH:MM one instant; --from TS --to TS --step MIN a
   range (the sun at the middle of each step); add --hours HH:MM-HH:MM for only those hours of every day (e.g.

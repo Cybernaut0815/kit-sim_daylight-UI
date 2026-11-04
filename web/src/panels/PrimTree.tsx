@@ -12,11 +12,9 @@ import { meshAt, primQuery, underIndex } from '../lib/tree';
 import type { Action, ObjectRow, Role, Selection } from '../store';
 import { Icon } from '../ui';
 
-type Shown = Role | 'noShade' | 'mixed';
-const LABEL: Record<Shown, string> = { receiver: 'Receiver', noShade: 'Receiver, no shade', shade: 'Shade', none: 'Ignored', mixed: 'Mixed' };
+type Shown = Role | 'noShade' | 'mixed'; // noShade: receivers that all cast no shade, in a label that fits the role column as 'Receiver' does
+const LABEL: Record<Shown, string> = { receiver: 'Receiver', noShade: 'No shade', shade: 'Shade', none: 'Ignored', mixed: 'Mixed' };
 const BADGE: Record<Shown, string> = { receiver: 'badge--info', noShade: 'badge--info', shade: 'badge--neutral', none: 'badge--neutral', mixed: 'badge--neutral' };
-/** A mesh's role as the tree shows it, a receiver that casts no shade apart. */
-const shown = (o?: ObjectRow): Shown | undefined => (o?.shade === false ? 'noShade' : o?.role);
 const AUTO_OPEN = 40; // models up to this many meshes open down to every mesh; larger ones show their top level
 const LIMIT = 400; // rows drawn at most (ponytail: no row windowing; the search reaches the rest)
 
@@ -45,7 +43,6 @@ export const PrimTree = memo(function PrimTree({ usd, objects, selection, select
   loaded.current = kids;
   const under = useMemo(() => underIndex(objects), [objects]), exact = useMemo(() => meshAt(objects), [objects]);
   const byId = useMemo(() => new Map(objects.map((o) => [o.id, o])), [objects]);
-  const wide = useMemo(() => objects.some((o) => o.shade === false), [objects]); // a role column for 'Receiver, no shade'
   const picked = useMemo(() => new Set(selection.paths), [selection]);
   const total = objects.length;
 
@@ -202,12 +199,12 @@ export const PrimTree = memo(function PrimTree({ usd, objects, selection, select
       <div className="tree" ref={box} tabIndex={0} role="tree" aria-label="Prims" aria-multiselectable onKeyDown={onKey}>
         {total ? (
           <table className="data-table">
-            <colgroup><col />{variants && <col className="tree__col-variant" />}<col className={`tree__col-role${wide ? ' tree__col-role--wide' : ''}`} /></colgroup>
+            <colgroup><col />{variants && <col className="tree__col-variant" />}<col className="tree__col-role" /></colgroup>
             <thead><tr><th scope="col">Prim</th>{variants && <th scope="col">Variant</th>}<th scope="col">Role</th></tr></thead>
             <tbody>
               {rows.map((r) => {
-                const ids = under.get(r.path) ?? [], mesh = byId.get(exact.get(r.path) ?? ''), first = shown(byId.get(ids[0]));
-                const role: Shown | null = !ids.length ? null : ids.every((id) => shown(byId.get(id)) === first) ? first! : 'mixed';
+                const ids = under.get(r.path) ?? [], mesh = byId.get(exact.get(r.path) ?? ''), first = byId.get(ids[0])?.role; // only receivers carry shade false
+                const role: Shown | null = !ids.length ? null : ids.every((id) => byId.get(id)?.shade === false) ? 'noShade' : ids.every((id) => byId.get(id)?.role === first) ? first! : 'mixed';
                 const tris = ids.reduce((n, id) => n + (byId.get(id)?.tris ?? 0), 0), locked = usd.session.isLocked(r.path);
                 return (
                   <tr
@@ -242,7 +239,7 @@ export const PrimTree = memo(function PrimTree({ usd, objects, selection, select
                         ))}
                       </td>
                     )}
-                    <td>{role && <span className={`badge ${BADGE[role]}`}><span className="dot" />{LABEL[role]}</span>}</td>
+                    <td>{role && <span className={`badge ${BADGE[role]}`} title={role === 'noShade' ? 'Receiver, casts no shade' : undefined}><span className="dot" />{LABEL[role]}</span>}</td>
                   </tr>
                 );
               })}

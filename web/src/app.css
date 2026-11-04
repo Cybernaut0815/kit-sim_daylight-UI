@@ -96,7 +96,6 @@
 .tree :is(th, td) { padding-inline: var(--space-2); } /* three columns in a 22rem panel */
 .materials :is(th, td) { padding-inline: var(--space-1); } /* a name, a kind, a reflectance and a transmittance in a 22rem panel */
 .tree__col-role { inline-size: 6.5rem; }
-.tree__col-role--wide { inline-size: 9.5rem; } /* while a receiver casts no shade: 'Receiver, no shade' */
 .tree__col-variant { inline-size: 5rem; }
 /* a variant set per line; a material's kind, reflectance and transmittance, its reset beside its source */
 :is(.tree .select, .materials :is(.select, .input, .icon-btn)) { --control-h: 24px; --control-pad-y: 2px; padding-inline: var(--space-1); font-size: var(--fs-small); }

@@ -319,10 +319,10 @@ function differ(was: string, now: string): string {
 
 /**
  * What stops report `r` from being generated now, in words the agent can act on ([]: ready). Per report model: not open
- * in its slot with its file (open_model); the variants or roles (which receivers cast no shade included) not as at save
- * (set_geometry, set_roles, then run); a run on its way (wait), no result or a stale one (run); a result run with
- * settings other than at save, which it names. Then a problem range other than at save, share metrics without one, and a
- * generation of it on its way.
+ * in its slot with its file (open_model); the variants or roles (which receivers cast no shade included, while receivers
+ * block rays) not as at save (set_geometry, set_roles, then run); a run on its way (wait), no result or a stale one
+ * (run); a result run with settings other than at save, which it names. Then a problem range other than at save, share
+ * metrics without one, and a generation of it on its way.
  */
 export function readiness(r: Report, app: AppView, generating = false): string[] {
   const out: string[] = [];
@@ -334,9 +334,11 @@ export function readiness(r: Report, app: AppView, generating = false): string[]
     const now = chosenOf(m.choices), fix: string[] = [];
     for (const [p, sets] of Object.entries(ref.variants)) for (const [set, v] of Object.entries(sets)) if (now[p]?.[set] !== v) fix.push(`set_geometry variant ${set} of ${p} to ${v} (now ${now[p]?.[set] ?? "the file's own"})`);
     for (const [p, sets] of Object.entries(now)) for (const [set, v] of Object.entries(sets)) if (ref.variants[p]?.[set] === undefined) fix.push(`set_geometry variant ${set} of ${p} back to ${m.choices[p][set][0]}, the file's own (now ${v})`);
-    // a path's role as set_roles gives it; back to a receiver that casts shade takes shade true (a receiver's flag stays)
+    // a path's role as set_roles gives it; back to a receiver that casts shade takes shade true (a receiver's flag stays).
+    // With receivers out of the rays at save or now (--no-self-occlude) the flags change nothing: the run key names that.
+    const flags = [ref.runKey, m.inputs].every((k) => !k.includes('"--no-self-occlude"'));
     const roleOf = (x: Pick<ModelRef, 'receivers' | 'shades' | 'noShade'>) => {
-      const rs = new Set(x.receivers), ss = new Set(x.shades), ns = new Set(x.noShade);
+      const rs = new Set(x.receivers), ss = new Set(x.shades), ns = new Set(flags ? x.noShade : []);
       return (p: string) => (ns.has(p) ? 'receiver shade false' : rs.has(p) ? 'receiver' : ss.has(p) ? 'shade' : 'none');
     };
     const was = roleOf(ref), is = roleOf(m), to = new Map<string, string[]>();
