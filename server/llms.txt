@@ -40,11 +40,12 @@ putSession, deleteSession.
   per million sensors on a city-like model, RTX 2060), noise ~1 / sqrt(M) (at 1024 annual facade values 0.5 % median,
   2.3 % p95; a single --time instant 2.3 % / 14 %: use 4096-16384 for instants and small differences).
 - cache.scene: reused = the scene was still on the GPU. A scene = the sensors ids then the context ids, in order,
-  --no-self-occlude, and the layout of the slots that cast shade: the set that transmits (tau > 0 with --transmission
-  on), else with --bounces > 0 and a quantity other than direct / sunhours whether their rho or glass differ (with
-  --fresnel off none is glass; a hit record per slot). New --optics values reuse it while that layout stays; a slot
-  that starts or stops transmitting, or --bounces switched on or off (with such a quantity) for a model whose slots
-  differ (none transmitting), is another scene (built, then kept).
+  --no-self-occlude, the --no-occlude set (receiving meshes that are analysed but cast no shade; it counts only
+  without --no-self-occlude, under which none does), and the layout of the slots that cast shade: the set that
+  transmits (tau > 0 with --transmission on), else with --bounces > 0 and a quantity other than direct / sunhours
+  whether their rho or glass differ (with --fresnel off none is glass; a hit record per slot). New --optics values
+  reuse it while that layout stays; a slot that starts or stops transmitting, or --bounces switched on or off (with
+  such a quantity) for a model whose slots differ (none transmitting), is another scene (built, then kept).
 - Columns: <quantity>_<side>, e.g. radiation_front.
 - Time (standard time, no DST): annual by default; --time MM-DDTHH:MM one instant; --from TS --to TS --step MIN a
   range (the sun at the middle of each step); add --hours HH:MM-HH:MM for only those hours of every day (e.g.
@@ -56,8 +57,8 @@ putSession, deleteSession.
 ## Limits
 
 - Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime. An
-  --optics row naming no mesh of the run (or several), a slot out of range or a row given twice fails the job (state
-  error, status 500), not the submission.
+  --optics row naming no mesh of the run (or several), a slot out of range or a row given twice, and a --no-occlude
+  NAME that is unknown, ambiguous or a context mesh, fail the job (state error, status 500), not the submission.
 - Send X-Client-Id to identify your client: at most 2 jobs queued or running per client (429), 32 in the queue (503),
   both with Retry-After. Finished jobs are kept 15 minutes. Identical requests are answered from a result cache.
 - No authentication; job ids are random UUIDs only their submitter knows.

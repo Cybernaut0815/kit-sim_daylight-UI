@@ -49,9 +49,10 @@ Change an endpoint: edit `server.cpp` and `openapi.json` together.
 - Identical request (same mesh ids, args, weather): answered from the result cache at once (`cache.response: hit`).
 - Scenes: the acceleration structures of the last `--gpu-scenes` (default 4) scenes stay on the GPU, so users who
   alternate between models do not rebuild each other's (`cache.scene: reused`). A scene is the job's `sensors` ids and
-  then its `context` ids, in order, its `--no-self-occlude`, and the layout of the slots that cast shade: the set of
-  those that transmit, else (with `--bounces` above 0 and a quantity other than direct / sunhours) whether their RHO or
-  glass differ (with `--fresnel off` none is glass), which gives the scene a hit record per slot (~20 % more
+  then its `context` ids, in order, its `--no-self-occlude`, its `--no-occlude` set (the receiving meshes that cast no
+  shade; without `--no-self-occlude` only, under which none does), and the layout of the slots that cast shade: the
+  set of those that transmit, else (with `--bounces` above 0 and a quantity other than direct / sunhours) whether their
+  RHO or glass differ (with `--fresnel off` none is glass), which gives the scene a hit record per slot (~20 % more
   acceleration-structure (GAS) memory). New `--optics` values or `--fresnel` reuse it while that layout stays; a slot
   that starts or stops transmitting, or `--bounces` switched on or off (with such a quantity) for a model whose slots
   differ (none transmitting), is another scene (`built`, then kept like the others). The report is the core's own
