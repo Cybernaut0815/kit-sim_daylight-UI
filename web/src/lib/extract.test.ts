@@ -25,7 +25,7 @@ describe('extract', () => {
     hidden.visible = false;
     root.add(mesh, inst, unused, hidden);
     const items = [
-      { rid: 1, path: '/W/M', kind: 'mesh', object: mesh }, { rid: 2, path: '/W/P', kind: 'mesh', object: inst }, { rid: 6, path: '/W/U', kind: 'mesh', object: unused },
+      { rid: 1, path: '/W/M', kind: 'mesh', object: mesh }, { rid: 2, path: '/W/P', kind: 'mesh', object: inst, instances: inst.instanceMatrix.array as Float32Array }, { rid: 6, path: '/W/U', kind: 'mesh', object: unused, instances: new Float32Array(0) },
       { rid: 3, path: '/W/H', kind: 'mesh', object: hidden }, { rid: 4, path: '/W/C', kind: 'curves', object: mesh }, { rid: 5, path: '/W/Cam', kind: 'camera', object: null },
     ];
     const out = extract(items, root, 0.01);
@@ -53,7 +53,7 @@ describe('extract', () => {
     const out = extract([
       { rid: 1, path: '/W/Facade', kind: 'mesh', object: facade, material: 5, subsets }, // the mesh's own material lives on in a subset
       { rid: 2, path: '/W/Wall', kind: 'mesh', object: plain, material: 5, subsets: null },
-      { rid: 3, path: '/W/Scatter', kind: 'mesh', object: inst, material: 5, subsets },
+      { rid: 3, path: '/W/Scatter', kind: 'mesh', object: inst, material: 5, subsets, instances: inst.instanceMatrix.array as Float32Array },
     ], root, 1);
     expect(out.map((e) => e.materials)).toEqual([[7, 9], [5], [7, 9]]);
     expect(Array.from(out[0].obj!.slots!)).toEqual([0, 0, 1]);
@@ -65,6 +65,17 @@ describe('extract', () => {
     const bytes = toDmesh(out[0].obj!);
     expect([new DataView(bytes.buffer).getUint32(4, true), Array.from(new Uint16Array(bytes.buffer, bytes.length - 6, 3))]).toEqual([1, [0, 0, 1]]);
     expect(new DataView(toDmesh(out[1].obj!).buffer).getUint32(4, true)).toBe(0);
+  });
+  it('a single instance, which the viewer draws as a plain mesh placed by its matrix, is still an instanced shade', () => {
+    const geometry = new BufferGeometry().setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)).setIndex([0, 1, 2]);
+    const at = new Matrix4().makeTranslation(10, 0, 0), one = new Mesh(geometry);
+    one.matrixAutoUpdate = false;
+    one.matrix.copy(at);
+    const root = new Group();
+    root.add(one);
+    const [e] = extract([{ rid: 4, path: '/__Prototype_1/Cup', kind: 'mesh', object: one, material: 0, instances: new Float32Array(at.elements) }], root, 1);
+    expect([e.instances, e.obj]).toEqual([1, undefined]);
+    expect(Array.from(e.make!().positions, (v) => v + 0)).toEqual([10, 0, 0, 11, 0, 0, 10, 0, 1]); // placed once, not twice (Y up to Z up)
   });
   it('a group range not on a triangle boundary takes the triangles it starts (start <= 3t < start + count)', () => {
     const geometry = new BufferGeometry().setAttribute('position', new Float32BufferAttribute(new Array(27).fill(0), 3)).setIndex([0, 1, 2, 3, 4, 5, 6, 7, 8]);

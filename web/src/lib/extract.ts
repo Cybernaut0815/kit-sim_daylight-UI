@@ -1,7 +1,7 @@
 // The USD viewer's drawn meshes -> daylight meshes (metres, Z-up). fromThree reads the viewer's own geometry, so result
 // rows map 1:1 to the drawn triangles and vertices; stand-ins carry the world matrix, which also keeps the viewer's
 // highlight overlays (children of its objects) out.
-import { Matrix4, Mesh, type BufferGeometry, type InstancedMesh, type Object3D } from 'three';
+import { Matrix4, Mesh, type BufferGeometry, type Object3D } from 'three';
 import { fromThree, type ObjMesh } from 'daylight-mesh';
 
 /**
@@ -12,6 +12,8 @@ import { fromThree, type ObjMesh } from 'daylight-mesh';
  */
 export interface RenderItem {
   rid: number; path: string; kind: string; object: Object3D | null;
+  /** Instance matrices in stage space, 16 per copy (one copy draws as a plain mesh); none for a plain mesh. */
+  instances?: Float32Array | null;
   material?: number; subsets?: readonly { start: number; count: number; material: number }[] | null;
 }
 /** A drawn mesh: converted now (`obj`), or for an instanced one built on first use (`make`), since a scatter of many
@@ -37,7 +39,8 @@ function slotsOf(g: BufferGeometry, tris: number): Uint16Array | undefined {
 /**
  * Every shown mesh item of the stage, scaled to metres, plus the hidden ones `keep` names (hidden in the view only). An
  * instanced item becomes one mesh of all its instances (a shade), whose instance matrices are in stage space under the
- * root's up-axis rotation; every copy keeps the prototype's slots.
+ * root's up-axis rotation; every copy keeps the prototype's slots. Instanced is the item's `instances`, not how the
+ * viewer draws it: a single instance is a plain mesh there, placed by its instance matrix.
  * ponytail: instance matrices come from the core as float32 (0.5 m steps at 5e6 m survey coordinates), unlike the
  * float64 matrices of plain meshes; send them as doubles in the viewer's protocol if georeferenced scatters matter.
  */
@@ -47,15 +50,15 @@ export function extract(items: readonly RenderItem[], root: Object3D, scale: num
   for (const item of items) {
     const o = item.object;
     if (item.kind !== 'mesh' || !o || !(o.visible || keep?.(item.path))) continue;
-    const g = (o as Mesh).geometry, im = o as InstancedMesh;
+    const g = (o as Mesh).geometry;
     const materials = item.subsets?.length ? item.subsets.map((s) => s.material) : [item.material ?? 0];
-    if (!im.isInstancedMesh) {
+    if (!item.instances) {
       const obj = fromThree([stand(g, o.matrixWorld)], { scale })[0], slots = slotsOf(g, obj.indices.length / 3);
       if (slots) obj.slots = slots;
       out.push({ item, instances: 0, tris: obj.indices.length / 3, verts: obj.positions.length / 3, materials, obj });
       continue;
     }
-    const n = im.count, V = g.attributes.position.count, I = g.index ? g.index.count : V, all = im.instanceMatrix.array;
+    const all = item.instances, n = all.length / 16, V = g.attributes.position.count, I = g.index ? g.index.count : V;
     if (!n) continue; // a prototype with no (visible) instances draws nothing
     const make = (): ObjMesh => { // one instance at a time: the peak is the result plus one copy
       const positions = new Float64Array(3 * V * n), indices = new Uint32Array(I * n), m = new Matrix4(), one = slotsOf(g, I / 3);
