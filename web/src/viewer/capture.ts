@@ -56,6 +56,11 @@ export async function capture(el: UsdViewerElement, s: Shot): Promise<Blob> {
     throw new Error(`${W} × ${H} px: a shot is 16 to ${MAX_SIDE} px a side and at most 4096 × 4096 px in all`);
   }
   await el.ready;
+  // The page's first section builds the sectioned materials off-frame (viewer viewport.ts warm(), started when it is
+  // set); a render meanwhile leaves out what is still building. The viewer's screenshot() waits for it through a frame,
+  // which a hidden tab never draws: wait for the warm-up itself.
+  // ponytail: a private field of the viewer; ask it for a public promise if this one moves
+  await (el as unknown as { viewport?: { warming?: Promise<void> | null } }).viewport?.warming;
   const three = el.three, r = three.renderer, cam = camera(s.view ?? el.view, W / H);
   const box = new Box3(); // the stage and the overlay shown (sun path, grid) in one sphere
   for (const o of three.overlay.children) if (o.visible) box.expandByObject(o);
