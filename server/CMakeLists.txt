@@ -28,7 +28,11 @@ endforeach()
 add_executable(daylight_server src/server.cpp ${EMBEDDED})
 target_include_directories(daylight_server PRIVATE "${GEN}")
 target_link_libraries(daylight_server PRIVATE daylightcore httplib::httplib ws2_32 advapi32)   # advapi32: the browser's App Paths entry
-target_compile_definitions(daylight_server PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+# POST /jobs sends one form field per mesh in a role and one per CLI token: httplib's default of 1024 fields refused
+# models of about 1000 meshes with an empty 400. The body stays capped by --max-mb, which bounds the memory.
+# ponytail: past 1M fields the empty 400 again; give httplib an error handler with a text if a model gets there
+target_compile_definitions(daylight_server PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
+  CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT=1048576)
 target_compile_options(daylight_server PRIVATE /W4 /WX /permissive- /utf-8 /EHsc /external:anglebrackets /external:W0)
 target_link_options(daylight_server PRIVATE /NODEFAULTLIB:libcmt)
 
