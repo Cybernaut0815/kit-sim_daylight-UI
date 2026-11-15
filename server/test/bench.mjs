@@ -20,10 +20,13 @@ const USAGE = `node server/test/bench.mjs --selftest
 node server/test/bench.mjs --mode server --exe <daylight_server.exe> --tag <tag> [--mesh bhs] [--cases S1,A6,B1,V1] [--port 18200]
 node server/test/bench.mjs --mode browser --browser chrome|firefox --exe <daylight_server.exe> --web <app dist> --model <file>
     --tag <tag> [--mesh bhs] [--cases S1,A6] [--port 18300] [--playwright <dir with Playwright's index.mjs>]
-both: [--root F:/claude-scratch/large-models] [--epw <EPW>, default validate/_dl's Boston]`;
-const here = fileURLToPath(new URL('.', import.meta.url)), LIB = pathToFileURL(join(here, '../../kit-sim_daylight/bindings/ts/src/index.ts')).href;
+both: [--root F:/claude-scratch/large-models] [--epw <EPW>, default validate/_dl's Boston]
+     [--lib <client lib index.ts>, default the app's kit-sim_daylight/bindings/ts/src/index.ts; an older server needs
+      the lib of its time, as a file beside it (same node_modules), e.g. index.base.ts from git show]`;
+const here = fileURLToPath(new URL('.', import.meta.url));
 const { values: opt } = parseArgs({ options: { selftest: { type: 'boolean' },
-  ...Object.fromEntries('mode root exe epw mesh cases tag port browser web model playwright'.split(' ').map((k) => [k, { type: 'string' }])) } });
+  ...Object.fromEntries('mode root exe epw mesh cases tag port browser web model playwright lib'.split(' ').map((k) => [k, { type: 'string' }])) } });
+const LIB = pathToFileURL(resolve(opt.lib ?? join(here, '../../kit-sim_daylight/bindings/ts/src/index.ts'))).href;
 const R = resolve(opt.root ?? 'F:/claude-scratch/large-models'), EPW = resolve(opt.epw ?? 'F:/Github/kit-sim_daylight/validate/_dl/epw/USA_MA_Boston-City.WSO_TMY.epw');
 const EXE = opt.exe && resolve(opt.exe), MESH = opt.mesh ?? 'bhs', TAG = opt.tag, BROWSER = opt.browser ?? 'chrome', IDS = (opt.cases ?? 'S1').split(',');
 const PORT = Number(opt.port ?? (opt.mode === 'browser' ? 18300 : 18200));
@@ -46,6 +49,8 @@ const gb = (b) => (b == null ? null : +(b / 2 ** 30).toFixed(3)), sec = (a, b) =
 const max = (a) => a.reduce((m, x) => (x > m ? x : m), -Infinity), min = (a) => a.reduce((m, x) => (x < m ? x : m), Infinity); // no spread: 14k+ items
 const hex = (code) => `0x${(code >>> 0).toString(16).toUpperCase().padStart(8, '0')}`; // 3221226505 or -1073740791: 0xC0000409
 const brief = (s) => String(s).replace(/\s+/g, ' ').trim().slice(0, 200);
+/** "TypeError: fetch failed" hides why: the cause chain (socket errors and their codes), as " <- SocketError: ... (UND_ERR_SOCKET)". */
+const causes = (e) => { let s = ''; for (let c = e?.cause, d = 0; c && d < 4; c = c.cause, d++) s += ` <- ${c.name}: ${c.message}${c.code ? ` (${c.code})` : ''}`; return s; };
 
 /** big.py's merged model.dmesh (daylight.h layout, all triangles) and meshes.json [{prim, points, faces}] -> one ObjMesh
  *  per mesh, as the app hands runRemote: positions a view of the file, indices shifted back to the mesh's own points. */
@@ -229,7 +234,7 @@ async function serverMode() {
     if (err && srv.exitCode === null) await Promise.race([srv.exited, sleep(2e3)]); // a reset socket comes before the exit event
     const died = srv.exitCode !== null;
     Object.assign(rec, { ok: !err, wall_s: sec(t0, t1), phases: phases(log, t1),
-      error: died ? `server exited ${hex(srv.exitCode)} during the ${during(log)}${err ? `: ${err.message}` : ''}` : err ? `${err.name}: ${err.message}` : null,
+      error: died ? `server exited ${hex(srv.exitCode)} during the ${during(log)}${err ? `: ${err.message}` : ''}` : err ? `${err.name}: ${err.message}${causes(err)}` : null,
       values: res ? (existsSync(ref) ? compare(res, npy(readFileSync(ref))) : { vs: 'no CLI run' }) : null,
       manifest: res && { run_s: res.manifest.run_s, cache: res.cache ?? res.manifest.cache, timing: res.manifest.timing, gpu: res.manifest.gpu },
       mem: { server: procStats(s.procs, t0, t1) }, gpu: gpuStats(s.gpu, t0, t1), retained: died ? null : (await health(PORT).catch(() => null))?.jobs_retained ?? null });

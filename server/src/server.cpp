@@ -780,7 +780,10 @@ int main(int argc, char** argv) {
   httplib::Server svr;
   svr.new_task_queue = [] { return new httplib::ThreadPool(16, 128); };   // long polls and waiting /run calls never starve uploads
   svr.set_payload_max_length(maxMb << 20);
-  svr.set_write_timeout(60, 0);   // a tab busy painting or collecting garbage may pause reading a big /values answer
+  // A busy client (a tab building upload bodies, a paging machine, a long GC) can pause mid-request for seconds: httplib's
+  // 5 s default would cut an upload or a big /values answer off ("fetch failed" after thousands of PUTs).
+  svr.set_read_timeout(60, 0);
+  svr.set_write_timeout(60, 0);
   // The page's USD viewer runs a threaded wasm core (SharedArrayBuffer): its files must come cross-origin isolated.
   const httplib::Headers isolation{{"Cross-Origin-Opener-Policy", "same-origin"}, {"Cross-Origin-Embedder-Policy", "require-corp"}};
   if (!web.empty() && !svr.set_mount_point("/", web, isolation)) { std::fprintf(stderr, "error: --web %s is not a directory\n", web.c_str()); return 1; }
