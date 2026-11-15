@@ -138,7 +138,8 @@ def Scope "${root}" (
  * layers strongest first, `root` = a free top-level name for the material, `shown` = the column whose colours are drawn.
  * Without meta and subLayers a bare layer: the overlay the core composes over the stage for one flattened file.
  */
-export function overlay(o: { meta: string[]; subLayers: string[]; root: string; meshes: OverlayMesh[]; shown: number }): string[] {
+export function overlay(o: { meta: string[]; subLayers: string[]; root: string; meshes: OverlayMesh[]; shown: number; arrays?: boolean }): string[] {
+  const arrays = o.arrays ?? true; // false: no arrays (geometry, colours, values): overlayArrays sends them to the core as binary
   const out = o.meta.length || o.subLayers.length
     ? ['#usda 1.0\n(\n', ...o.meta.map((l) => `    ${l}\n`), ...(o.subLayers.length ? ['    subLayers = [\n', o.subLayers.map((l) => `        @${l}@`).join(',\n'), '\n    ]\n'] : []), ')\n']
     : ['#usda 1.0\n'];
@@ -154,7 +155,8 @@ export function overlay(o: { meta: string[]; subLayers: string[]; root: string; 
     out.push(`\n${indent}over ${m?.geometry ? 'Mesh ' : ''}"${name}"${m ? ` (\n${i1}prepend apiSchemas = ["MaterialBindingAPI"]\n${indent})` : ''}\n${indent}{\n`);
     if (m) {
       const g = m.geometry;
-      if (g) {
+      if (g && !arrays) out.push(`${i1}uniform token orientation = "rightHanded"\n`, `${i1}uniform token subdivisionScheme = "none"\n`);
+      else if (g) {
         const e = extent(g.points);
         out.push(`${i1}float3[] extent = [${tuple(e)(0)}, ${tuple(e)(1)}]\n`);
         out.push(...arrayParts(`${i1}int[] faceVertexCounts`, g.counts.length, (i) => String(g.counts[i])));
@@ -165,8 +167,10 @@ export function overlay(o: { meta: string[]; subLayers: string[]; root: string; 
         out.push(`${i1}uniform token subdivisionScheme = "none"\n`);
       }
       out.push(`${i1}rel material:binding = </${o.root}/Result>\n`);
-      out.push(...arrayParts(`${i1}color3f[] primvars:displayColor`, m.colours[o.shown].length / 3, tuple(m.colours[o.shown]), meta));
-      for (const v of m.values) out.push(...arrayParts(`${i1}float[] primvars:daylight_${v.name}`, v.data.length, scalar(v.data), meta));
+      if (arrays) {
+        out.push(...arrayParts(`${i1}color3f[] primvars:displayColor`, m.colours[o.shown].length / 3, tuple(m.colours[o.shown]), meta));
+        for (const v of m.values) out.push(...arrayParts(`${i1}float[] primvars:daylight_${v.name}`, v.data.length, scalar(v.data), meta));
+      }
       for (const b of m.blocks) out.push(`${i1}${b.uniform ? 'uniform ' : ''}${b.type} ${b.name} = None\n`);
       for (const s of m.subsets) {
         out.push(g
@@ -180,6 +184,38 @@ export function overlay(o: { meta: string[]; subLayers: string[]; root: string; 
   for (const [k, c] of tree.kids) emit(k, c, '');
   out.push(materialScope(o.root));
   return out;
+}
+
+/**
+ * What overlay({ arrays: false }) leaves out, for the core's exportVariants with flatten: false: per receiver its
+ * geometry (when other polygons) and its primvars (the shown colours, every value), as slices of one float and one int
+ * array, each written once (no copy of the parts first).
+ */
+export function overlayArrays(meshes: readonly ResultMesh[], shown: number): { prims: ExportVariantsSpec['prims']; floats: Float32Array; ints: Int32Array } {
+  let nf = 0, ni = 0;
+  for (const m of meshes) {
+    nf += m.colours[shown].length + m.values.reduce((a, v) => a + v.data.length, 0) + (m.geometry ? m.geometry.points.length + (m.geometry.normals?.length ?? 0) + 6 : 0);
+    ni += m.geometry ? m.geometry.counts.length + m.geometry.indices.length : 0;
+  }
+  const floats = new Float32Array(nf), ints = new Int32Array(ni);
+  nf = ni = 0;
+  const f = (a: ArrayLike<number>): [number, number] => { floats.set(a, nf); nf += a.length; return [nf - a.length, a.length]; };
+  const i = (a: ArrayLike<number>): [number, number] => { ints.set(a, ni); ni += a.length; return [ni - a.length, a.length]; };
+  const prims = meshes.map((m) => {
+    const g = m.geometry, geometry: ExportAttribute[] = g ? [
+      { name: 'points', type: 'point3f[]', data: f(g.points) },
+      ...(g.normals ? [{ name: 'normals', type: 'normal3f[]', interpolation: 'vertex', data: f(g.normals) }] : []),
+      { name: 'faceVertexCounts', type: 'int[]', data: i(g.counts) },
+      { name: 'faceVertexIndices', type: 'int[]', data: i(g.indices) },
+      { name: 'extent', type: 'float3[]', data: f(extent(g.points)) },
+    ] : [];
+    return {
+      path: m.path, geometry,
+      primvars: [{ name: 'primvars:displayColor', type: 'color3f[]', interpolation: m.interp, data: f(m.colours[shown]) },
+        ...m.values.map((v) => ({ name: `primvars:daylight_${v.name}`, type: 'float[]', interpolation: m.interp, data: f(v.data) }))],
+    };
+  });
+  return { prims, floats, ints };
 }
 
 /**

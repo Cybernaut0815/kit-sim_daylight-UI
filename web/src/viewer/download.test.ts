@@ -35,9 +35,11 @@ describe('values download', () => {
     const apart = { ...result(), data: [Float32Array.of(1, 2, 3), Float32Array.of(10, 20, 30)] }; // columns in buffers of their own
     expect(f32(new Map(valuesFiles(apart, rows)).get('values.npy')!)).toEqual([1, 2, 3, 10, 20, 30]);
   });
-  it('every other format is refused above the triangle bound, values never', () => {
-    expect(tooBig('usdz', MAX_TRIANGLES)).toBeNull();
-    expect(tooBig('glb', MAX_TRIANGLES + 1)).toMatch(/too big .* Values \(\.npy \+ \.json, zip\)/);
-    expect(tooBig('values', 17_244_108)).toBeNull();
+  it('above the triangle bound only values and the usdz replace are written', () => {
+    expect(tooBig('usda', 'replace', MAX_TRIANGLES)).toBeNull();
+    expect(tooBig('glb', 'replace', MAX_TRIANGLES + 1)).toMatch(/too big .* Values \(\.npy \+ \.json, zip\)/);
+    expect(tooBig('usdz', 'variants', MAX_TRIANGLES + 1)).toMatch(/with variants .* too big/);
+    expect(tooBig('usdz', 'replace', 17_244_108)).toBeNull(); // its overlay is a usdc of binary arrays, nothing flattened
+    expect(tooBig('values', 'replace', 17_244_108)).toBeNull();
   });
 });

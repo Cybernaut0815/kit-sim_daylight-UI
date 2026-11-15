@@ -8,13 +8,15 @@
 //   sets; zipped with the files it uses (textures) when it uses any.
 // glTF / GLB / OBJ: the model as drawn, receivers coloured with the shown result (lib/sceneexport).
 // values: every result as numbers, values.npy (float32, rows x columns) + weights.npy + values.json, zipped; any size.
-// Above about 4M triangles every other format is refused (tooBig): their writers pass a browser's buffer or string limits.
+// Above about 4M triangles only those and the usdz replace (its overlay a usdc the core writes from binary arrays, nothing
+// flattened, the model's files packed as they are) are written (tooBig): the others pass a browser's buffer or string
+// limits, or the core's heap (flattening).
 import type { BufferAttribute, InterleavedBufferAttribute, Mesh, Object3D } from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import type { StageInfo, UsdViewerElement } from 'usd-viewer';
 import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { exportMatrices, gltfScene, objText, type Drawn } from '../lib/sceneexport';
-import { freeName, overlay, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
+import { freeName, overlay, overlayArrays, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
 import { usdz } from '../lib/usdz';
 import { stableKey } from '../mcp/tools';
 import type { ObjectRow, RunResult } from '../store';
@@ -40,8 +42,6 @@ const xyz = (a: BufferAttribute | InterleavedBufferAttribute) => {
   for (let i = 0; i < a.count; i++) { out[3 * i] = a.getX(i); out[3 * i + 1] = a.getY(i); out[3 * i + 2] = a.getZ(i); }
   return out;
 };
-const bytes = async (parts: BlobPart[]) => new Uint8Array(await new Blob(parts).arrayBuffer());
-const read = async ([path, file]: [string, File]): Promise<[string, Uint8Array]> => [path, new Uint8Array(await file.arrayBuffer())];
 const save = (data: BlobPart[], name: string) => {
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob(data, { type: MIME[name.split('.').pop()!] ?? 'application/octet-stream' })), download: name });
   a.click();
@@ -51,10 +51,10 @@ const save = (data: BlobPart[], name: string) => {
 /** The most triangles a model gets USD, glTF or OBJ for. ponytail: one bound for all of them (the USD layers and the
  *  overlay are text, glTF a JSON and buffers, OBJ a string); measure per format if a bigger model needs one. */
 export const MAX_TRIANGLES = 4_000_000;
-/** Why `format` is refused for a model of `tris` triangles, or null. */
-export function tooBig(format: Format, tris: number): string | null {
-  if (format === 'values' || tris <= MAX_TRIANGLES) return null;
-  return `A ${format} file of this model (${tris.toLocaleString('en-GB')} triangles) is too big for the browser to write: the limit is ${MAX_TRIANGLES.toLocaleString('en-GB')}. Download Values (.npy + .json, zip) for every result as numbers.`;
+/** Why `format` (and `mode`) is refused for a model of `tris` triangles, or null. */
+export function tooBig(format: Format, mode: ExportMode, tris: number): string | null {
+  if (format === 'values' || (format === 'usdz' && mode === 'replace') || tris <= MAX_TRIANGLES) return null;
+  return `A ${format}${isUsd(format) && mode === 'variants' ? ' with variants' : ''} file of this model (${tris.toLocaleString('en-GB')} triangles) is too big for the browser to write: the limit is ${MAX_TRIANGLES.toLocaleString('en-GB')}. Download a .usdz with the results replacing the materials, or Values (.npy + .json, zip) for every result as numbers.`;
 }
 
 /** NumPy v1.0 header for `<f4` data of `shape`, Fortran order (column-major: a run's columns one after another). */
@@ -86,9 +86,9 @@ export function valuesFiles(r: RunResult, objects: readonly ObjectRow[]): [strin
 
 export async function download(format: Format, mode: ExportMode, o: DownloadOptions): Promise<void> {
   const { usd } = o, stem = o.model.root.replace(/^.*\//, '').replace(/\.\w+$/, '');
-  const big = tooBig(format, o.objects.reduce((n, x) => n + x.tris, 0));
+  const big = tooBig(format, mode, o.objects.reduce((n, x) => n + x.tris, 0));
   if (big) throw new Error(big);
-  if (format === 'values') return save([usdz(valuesFiles(o.result, o.objects)) as Uint8Array<ArrayBuffer>], `${stem}_daylight_values.zip`);
+  if (format === 'values') return save([await usdz(valuesFiles(o.result, o.objects))], `${stem}_daylight_values.zip`);
   if (!isUsd(format)) return drawnFile(format, o, stem);
   const r = o.result, perFace = r.on === 'faces';
   const rows = new Map(o.objects.map((x) => [x.id, x])), items = new Map(usd.three.items().map((it) => [it.object, it])); // one lookup per receiver
@@ -104,7 +104,8 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
     const columns = r.columns.map((name, c) => {
       const raw = rowsOf(r.data[c]);
       const data = perFace ? toPolygons(raw, poly.polygonOf, poly.counts.length, rowsOf(r.weights)) : toCorners(raw, poly.corners);
-      return { name, data, rgb: rgbFor(o.scales[c], data, null).map(lin) };
+      // replace writes the shown column's colours only: no 12 B per element for the others (0.2 GB a column at bhs)
+      return { name, data, rgb: mode === 'variants' || c === o.column ? rgbFor(o.scales[c], data, null).map(lin) : new Float32Array(0) };
     });
     return {
       path: row.path, interp: perFace ? 'uniform' : 'faceVarying',
@@ -115,8 +116,8 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
   const taken = (await usd.usd.children('/')).map((s) => s.name), root = freeName('Daylight', taken);
   const mount = /^\/drop\/\d+\//.exec(o.model.info.url)?.[0], assets: [string, string][] = mount ? [[mount, './']] : [];
   const name = `${stem}_daylight${mode === 'variants' ? '_variants' : ''}`;
-  /** The picked files the core says the export uses (a .usdz member counts as its package). */
-  const used = async (paths: string[]) => { const u = new Set(paths.map((p) => p.replace(/\[.*$/, ''))); return Promise.all(o.model.files.filter(([p]) => u.has(p)).map(read)); };
+  /** The picked files the core says the export uses (a .usdz member counts as its package), as the Files they are. */
+  const used = (paths: string[]) => { const u = new Set(paths.map((p) => p.replace(/\[.*$/, ''))); return o.model.files.filter(([p]) => u.has(p)); };
   /** The overlay's receivers: blocks for authored data the new polygons do not fit, and their subsets. */
   const overlayMeshes = () => Promise.all(meshes.map(async (m): Promise<OverlayMesh> => {
     const info = await usd.usd.prim(m.path);
@@ -135,11 +136,11 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
       : { spec: { set: '', selection: '', material: '', geometryRoot: '', prims: [], assets, overlay: overlay({ meta: [], subLayers: [], root, meshes: await overlayMeshes(), shown: o.column }).join('') }, floats: new Float32Array(), ints: new Int32Array() };
     const out = await usd.usd.exportVariants({ ...spec.spec, format: format === 'usda' ? 'usda' : 'usdc' }, spec.floats, spec.ints);
     if (out.error !== undefined) throw new Error(out.error);
-    const files = await used(out.assets);
+    const files = used(out.assets);
     if (!files.length) return save([out.bytes], `${name}.${format}`);
-    return save([usdz([[`${name}.${format}`, out.bytes], ...files]) as Uint8Array<ArrayBuffer>], `${name}.zip`); // a stored zip, the layer first
+    return save([await usdz([[`${name}.${format}`, out.bytes], ...files])], `${name}.zip`); // a stored zip, the layer first
   }
-  let files: [string, Uint8Array][];
+  let files: [string, Blob | Uint8Array][];
   if (mode === 'replace') {
     const session = (await usd.usd.layers()).find((l) => l.session);
     const sessionText = session ? await usd.usd.exportLayer(session.identifier, 'usda') : null;
@@ -147,15 +148,20 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
       ...(i.defaultPrim ? [`defaultPrim = "${i.defaultPrim.replace(/^\//, '')}"`] : []), `metersPerUnit = ${i.metersPerUnit}`, `upAxis = "${i.upAxis}"`,
       ...(i.hasTimeRange ? [`startTimeCode = ${i.startTimeCode}`, `endTimeCode = ${i.endTimeCode}`, `timeCodesPerSecond = ${i.timeCodesPerSecond}`] : []),
     ];
-    const layer = overlay({ meta, subLayers: [...(sessionText ? ['./_session.usda'] : []), `./${o.model.root}`], root, meshes: await overlayMeshes(), shown: o.column });
-    files = [['_daylight.usda', await bytes(layer)], ...(sessionText ? [['_session.usda', sessionText] as [string, Uint8Array]] : []), ...(await Promise.all(o.model.files.map(read)))];
+    // The overlay as usdc, its arrays written by the core from binary (text would pass a browser's string limit at
+    // a few million values): nothing is flattened, and the model's files go in as they are.
+    const om = await overlayMeshes(), { prims, floats, ints } = overlayArrays(om, o.column);
+    const text = overlay({ meta, subLayers: [...(sessionText ? ['./_session.usda'] : []), `./${o.model.root}`], root, meshes: om, shown: o.column, arrays: false }).join('');
+    const out = await usd.usd.exportVariants({ set: '', selection: '', material: '', geometryRoot: '', prims, overlay: text, flatten: false }, floats, ints);
+    if (out.error !== undefined) throw new Error(out.error);
+    files = [['_daylight.usdc', out.bytes], ...(sessionText ? [['_session.usda', sessionText] as [string, Uint8Array]] : []), ...o.model.files];
   } else {
     const { spec, floats, ints } = variantsSpec(meshes, { columns: r.columns, shown: o.column, root, geometryRoot: freeName(`${root}_Geometry`, taken), assets });
     const out = await usd.usd.exportVariants(spec, floats, ints);
     if (out.error !== undefined) throw new Error(out.error);
-    files = [[`${stem}_daylight.usdc`, out.bytes], ...(await used(out.assets))];
+    files = [[`${stem}_daylight.usdc`, out.bytes], ...used(out.assets)];
   }
-  save([usdz(files) as Uint8Array<ArrayBuffer>], `${name}.usdz`);
+  save([await usdz(files)], `${name}.usdz`);
 }
 
 /** glTF / GLB / OBJ: every visible mesh as drawn, in metres; receivers with the shown result and every value. */
