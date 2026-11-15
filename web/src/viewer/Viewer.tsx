@@ -1,6 +1,6 @@
 // A 3D view, one per model. Its USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation
-// and selection (kept in step with the store); on top of it: the result colours as overlays on the receivers, the hover
-// tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
+// and selection (kept in step with the store), and paints the result colours from the receivers' values; on top of it:
+// the hover tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
 // several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
 // and north. A click or a key pressed in the view makes its model the active one (focus alone does not: Tab passes
 // the views without changing the model the panels and the run bar act on). The viewer's section cuts the model, its
@@ -10,10 +10,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, t
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { applyToThree } from 'daylight-mesh';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
-import { lin, rgbFor, type Scale } from '../lib/gradients';
+import { paintStyleOf, type Scale } from '../lib/gradients';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult } from '../store';
 import { Alert, Illustration } from '../ui';
@@ -26,21 +25,21 @@ export const selectionFill = (byValue: boolean) => ({ color: `#${new THREE.Color
 // keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
 const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m < 0.04 ? 0.4 * Math.sqrt(m) - m : 0.04; return c.setRGB(c.r + off, c.g + off, c.b + off); };
-/** A view's paint material and hover tint, per view: a mesh has one parent, and each view's [meshes] cleanup resets
- *  its tint. Node materials, made once (each new one compiles its shaders), so that the viewer can section them. */
+/** A view's hover tint, per view: a mesh has one parent, and each view's [meshes] cleanup resets it. A node material,
+ *  made once (each new one compiles its shaders), so that the viewer can section it. */
 function look() {
-  // Result colours: unlit, so with tone mapping off (the Value view) they are exactly the legend's
-  const PAINT = new MeshBasicNodeMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-  // The hover tint, over the paint (-1) and the viewer's selection fill (-2); it borrows the hovered object's geometry
+  // Over the viewer's selection fill (-2); it borrows the hovered object's geometry
   const TINT = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
   const EMPTY = new THREE.BufferGeometry();
   const tint = new THREE.Mesh(EMPTY, TINT); // never dispose its geometry: it is the viewer's
   tint.raycast = () => {}; // the viewer's pick walks its objects' children
-  return { PAINT, TINT, EMPTY, tint };
+  return { TINT, EMPTY, tint };
 }
 /** Lets the renderer forget a mesh: it keeps a render object (holding the geometry) per mesh until the mesh fires 'dispose'. */
 const release = (m: THREE.Mesh) => (m as unknown as THREE.EventDispatcher<{ dispose: object }>).dispatchEvent({ type: 'dispose' });
-const drop = (m: THREE.Mesh) => { m.removeFromParent(); m.geometry.dispose(); release(m); }; // a result overlay, for good
+/** The most vertices a painted mesh gets the hover tint for: the viewer's paint freed its own GPU copy, which the tint
+ *  uploads again while it shows. */
+const TINT_PAINTED = 65_536;
 
 interface Props {
   usd: UsdViewerElement; slot: number; // this view's viewer (./usd.ts) and its model's slot
@@ -76,14 +75,13 @@ function SceneInfo({ objects, unit, section, stats }: { objects: ObjectRow[]; un
 }
 
 export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, section }: Props) {
-  const [{ PAINT, TINT, EMPTY, tint }] = useState(look);
-  // cut with the model from the first section on; registered per mount, as a dispose lets go of them (StrictMode runs
+  const [{ TINT, EMPTY, tint }] = useState(look);
+  // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
   useEffect(() => {
-    usd.three.section(PAINT);
     usd.three.section(TINT);
-    return () => { PAINT.dispose(); TINT.dispose(); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- the view's own materials, for its life
+    return () => TINT.dispose();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- the view's own material, for its life
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
   const at = useRef({ x: 0, y: 0 }); // the cursor in the canvas, where the floating readout sits
@@ -96,7 +94,6 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   const labelsEl = useRef<HTMLDivElement>(null);
   const stats = useRef<HTMLSpanElement>(null); // the frame line of the scene info, written per frame
   const ctx = useRef<Ctx | null>(null);
-  const paint = useRef(new Map<string, THREE.Mesh>()); // receiver id -> its result overlay, a child of the viewer's object
   const [ready, setReady] = useState(false); // the core is up: until then the viewer shows its own status
   const byObject = useMemo(() => new Map([...meshes].map(([id, o]) => [o, id])), [meshes]);
   // receiver id -> its index in the result's receivers (manifest.meshes order): the probe, the paint and the tint look
@@ -333,51 +330,40 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.highlight = selectionFill(!!byValue);
   }, [!!byValue, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
-  // Paint: each receiver gets a result overlay (its geometry copied, coloured per element, a child of the viewer's
-  // object); a scale, range or bin change repaints in place.
+  // Paint: the viewer draws the receivers from their values (views into the result column, no copies: one value per
+  // drawn triangle, or vertex, in its geometry's order, as the run was sent), the colours from the scale and the hovered
+  // bin as a style of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new
+  // scale, range or bin) only restyle.
   useEffect(() => {
-    let stale = false;
-    (async () => {
-      const keep = new Set<string>(), role = new Map(objects.map((o) => [o.id, o.role]));
+    if (scale) usd.paintStyle = paintStyleOf(scale, bin);
+  }, [scale, bin]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
+  useEffect(() => {
+    const items: { rid: number; values: Float32Array }[] = [];
+    if (byValue && scale) {
+      const role = new Map(objects.map((o) => [o.id, o.role])), col = byValue.data[column];
       for (const [id, obj] of meshes) {
-        const k = byValue && role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1;
-        if (!byValue || !scale || k < 0) continue;
-        keep.add(id);
-        const g = byValue.manifest.meshes[k], vals = new Float64Array(g.count), perFace = byValue.on === 'faces';
-        for (let i = 0; i < g.count; i++) vals[i] = byValue.data[column][g.first + i];
-        const rgb = rgbFor(scale, vals, bin).map(lin);
-        const m = paint.current.get(id), attr = m?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
-        if (attr && attr.count === (perFace ? 3 * g.count : g.count)) { // repaint in place
-          const arr = attr.array as Float32Array;
-          if (perFace) for (let i = 0; i < arr.length; i++) arr[i] = rgb[3 * Math.floor(i / 9) + (i % 3)];
-          else arr.set(rgb);
-          attr.needsUpdate = true;
-          continue;
-        }
-        if (m) { drop(m); paint.current.delete(id); }
-        const next = new THREE.Mesh((obj as THREE.Mesh).geometry.clone(), PAINT); // a copy: the viewer's geometry gets no colour stream
-        next.raycast = () => {}; // the viewer's pick walks its objects' children
-        await applyToThree(next, vals, { material: false, rgb }); // per face: non-indexed, one colour per triangle
-        if (stale) { next.geometry.dispose(); return; }
-        obj.add(next); // follows the object and leaves with it when the stage closes
-        paint.current.set(id, next);
+        const k = role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1;
+        if (k < 0) continue;
+        const g = byValue.manifest.meshes[k];
+        items.push({ rid: obj.userData.rid as number, values: col.subarray(g.first, g.first + g.count) });
       }
-      for (const [id, m] of paint.current) if (!keep.has(id)) { drop(m); paint.current.delete(id); }
-      usd.three.invalidate();
-    })();
-    return () => { stale = true; };
-  }, [meshes, objects, byValue, recv, column, scale, bin]);
+    }
+    void usd.paint(items, byValue?.on === 'vertices' ? 'vertex' : 'face'); // the viewer warns about what it skips (its log)
+  }, [meshes, objects, byValue, recv, column, !!scale]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above
 
   // Hover: a light accent tint over the mesh, fainter over results.
   useEffect(() => {
     const o = hovered ? meshes.get(hovered) : undefined;
     if (!o || (o as THREE.InstancedMesh).isInstancedMesh) return; // ponytail: no tint on instanced shades (a child draws once, not per instance)
-    tint.geometry = (o as THREE.Mesh).geometry;
+    const g = (o as THREE.Mesh).geometry, painted = !!byValue && recv.has(hovered!);
+    if (painted && g.attributes.position.count > TINT_PAINTED) return; // ponytail: none on big painted meshes; the paint's own pieces if that is missed
+    tint.geometry = g;
     TINT.color.set(solid('--accent'));
-    TINT.opacity = byValue && recv.has(hovered!) ? 0.1 : 0.22; // from the props: the paint lands asynchronously
+    TINT.opacity = painted ? 0.1 : 0.22;
     o.add(tint);
     usd.three.invalidate();
-    return () => { tint.removeFromParent(); usd.three.invalidate(); };
+    // a painted mesh's GPU copy goes again with the tint (the viewer's paint freed it; its arrays stay for picks)
+    return () => { tint.removeFromParent(); if (painted) g.dispose(); usd.three.invalidate(); };
   }, [hovered, meshes, byValue, recv, theme]);
   // A new model: the tint lets go of the last one's geometry (the renderer would hold it until the next hover).
   useEffect(() => () => { tint.geometry = EMPTY; release(tint); }, [meshes]);

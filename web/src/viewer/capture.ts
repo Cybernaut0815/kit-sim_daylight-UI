@@ -61,6 +61,13 @@ export async function capture(el: UsdViewerElement, s: Shot): Promise<Blob> {
   // which a hidden tab never draws: wait for the warm-up itself.
   // ponytail: a private field of the viewer; ask it for a public promise if this one moves
   await (el as unknown as { viewport?: { warming?: Promise<void> | null } }).viewport?.warming;
+  // Likewise the result paint (usd.paint, from Viewer.tsx), which builds a piece per frame (in a hidden tab, all at once).
+  // ponytail: a private field of the viewer too
+  await (el as unknown as { painting?: Promise<void> }).painting;
+  // A frame drawn while the view moved left the batched and painted parts out of that camera's view (or under a pixel)
+  // undrawn: show them all for this camera, as the viewer's screenshot() does (a moving view culls again next frame).
+  // ponytail: private too
+  (el as unknown as { viewport?: { sync?: { cullDetail(camera: null, height: number): void } } }).viewport?.sync?.cullDetail(null, 0);
   const three = el.three, r = three.renderer, cam = camera(s.view ?? el.view, W / H);
   const box = new Box3(); // the stage and the overlay shown (sun path, grid) in one sphere
   for (const o of three.overlay.children) if (o.visible) box.expandByObject(o);

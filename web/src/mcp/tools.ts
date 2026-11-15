@@ -387,8 +387,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       el.sectionGizmo = null;
       el.section = toStage(look.section ?? NONE, el.stage?.metersPerUnit ?? 1, el.stage?.upAxis ?? 'Y');
     }
-    // ponytail: one MessageChannel task lets Viewer.tsx's paint (it awaits a dynamic import before colouring a receiver
-    // the first time) land; wait for a paint-done signal from the Viewer if a shot ever shows a receiver uncoloured
+    // one MessageChannel task lets Viewer.tsx's effects run (its usd.paint call); capture() then waits for the paint
     await tick();
     return await fn();
   } finally {
