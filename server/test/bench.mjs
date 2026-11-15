@@ -409,8 +409,7 @@ async function browserMode() {
       const button = page.locator('button[popovertarget="download-menu"]');
       await button.click().catch(async (e) => { // what stood in the way (once seen in Firefox: a timeout, then fine)
         const state = await button.evaluate((b) => { const r = b.getBoundingClientRect(), at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return { disabled: b.disabled, rect: [r.x, r.y, r.width, r.height].map(Math.round), on: at === b || b.contains(at) ? 'itself' : at?.outerHTML.slice(0, 160) }; }).catch(() => null);
-        throw new Error(`${e.message.split('
-')[0]}; the button: ${JSON.stringify(state)}`);
+        throw new Error(`${e.message.replace(/\s+/g, ' ').slice(0, 300)}; the button: ${JSON.stringify(state)}`);
       });
       const menu = page.locator('#download-menu');
       await menu.locator('select[aria-label="Format"]').selectOption('usdz');
