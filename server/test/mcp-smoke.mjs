@@ -151,6 +151,37 @@ if (off) await part('api', async () => {
   check('api: the same request again -> cache hit', again.status === 200 && /"response": "hit"/.test(again.text), `${again.status} ${brief(again.text.slice(again.text.indexOf('"cache"')))}`);
   const h = parse(await http(OFF, 'GET', '/health'));
   check('api: /health ok after a failed job', h.status === 'ok' && h.jobs_retained >= 1, JSON.stringify(h));
+
+  // binary values: a job's JSON links them (no values_b64 unless ?inline=1); GET .../values is float32 column-major,
+  // equal to the inline values (float64 row-major) rounded to float32; ?col=k is one column
+  const fd = new FormData();
+  fd.append('sensors', 'smoke-quad');
+  for (const a of [...NOON, '--sides', 'both']) fd.append('args', a);
+  const sub = await (await fetch(`http://127.0.0.1:${OFF}/jobs`, { method: 'POST', body: fd })).json();
+  let job = sub;
+  for (let k = 0; k < 10 && !['done', 'error', 'cancelled'].includes(job.state); k++) job = parse(await http(OFF, 'GET', `/jobs/${sub.id}?wait=25`));
+  check('api: a done job links its values, no values_b64', job.state === 'done' && job.values?.url === `/jobs/${sub.id}/values` && job.rows === 1 && job.cols === 2 && !('values_b64' in job),
+    brief(JSON.stringify({ state: job.state, values: job.values, rows: job.rows, cols: job.cols, b64: 'values_b64' in job })));
+  const inl = parse(await http(OFF, 'GET', `/jobs/${sub.id}?inline=1`)), b64 = Buffer.from(inl.values_b64 ?? '', 'base64');
+  const rowMajor = Array.from({ length: b64.length / 8 }, (_, i) => b64.readDoubleLE(8 * i)); // [rows x cols]
+  const bin = await http(OFF, 'GET', `/jobs/${sub.id}/values`), col1 = await http(OFF, 'GET', `/jobs/${sub.id}/values?col=1`);
+  const f32 = (b) => Array.from({ length: b.length / 4 }, (_, i) => b.readFloatLE(4 * i));
+  const colMajor = f32(bin.body), want = [0, 1].flatMap((c) => [Math.fround(rowMajor[c])]); // 1 row: column c is value c
+  check('api: /values = float32 column-major of the inline values', bin.status === 200 && bin.body.length === 8 && JSON.stringify(colMajor) === JSON.stringify(want),
+    `${bin.status} ${bin.body.length} B ${JSON.stringify(colMajor)} vs ${JSON.stringify(want)}`);
+  check('api: /values?col=1 is column 1', col1.status === 200 && JSON.stringify(f32(col1.body)) === JSON.stringify([want[1]]), `${col1.status} ${JSON.stringify(f32(col1.body))}`);
+
+  // POST /run answers its values inline: a result over 4,194,304 values is refused before it is queued (a 1000 x 1000
+  // quad grid named five times = 5M rows; never traced)
+  const n = 1000, g = Buffer.alloc(32 + (n + 1) * (n + 1) * 24 + n * n * 20);
+  g.write('DLM1', 0, 'ascii'); g.writeBigUInt64LE(BigInt((n + 1) * (n + 1)), 8); g.writeBigUInt64LE(BigInt(n * n), 16); g.writeBigUInt64LE(BigInt(4 * n * n), 24);
+  let o = 32;
+  for (let y = 0; y <= n; y++) for (let x = 0; x <= n; x++, o += 24) { g.writeDoubleLE(x, o); g.writeDoubleLE(y, o + 8); g.writeDoubleLE(0, o + 16); }
+  for (let f = 0; f < n * n; f++, o += 4) g.writeInt32LE(4, o);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) for (const [dx, dy] of [[0, 0], [1, 0], [1, 1], [0, 1]]) { g.writeInt32LE((y + dy) * (n + 1) + x + dx, o); o += 4; }
+  const putGrid = await http(OFF, 'PUT', '/mesh/smoke-grid', { headers: { 'Content-Type': 'application/octet-stream' }, body: g });
+  const big = await runSync(OFF, Array(5).fill('smoke-grid'), NOON);
+  check('api: POST /run over the inline cap -> 413', putGrid.status === 204 && big.status === 413 && /POST \/jobs/.test(big.text), `${putGrid.status}; ${big.status} ${brief(big.text)}`);
 });
 
 // 2. With --mcp: this machine only, then MCP over HTTP

@@ -19,9 +19,12 @@ putSession, deleteSession.
    ids, `args` = CLI flags, one token per field (e.g. --lat 52.52 --lon 13.41 --tz 1 --quantity radiation,sunhours),
    weather = an `epw` file part, an `epw_url`, or the --clear-sky flag. 404 {"missing": [...]}: upload those, resubmit.
 3. GET /jobs/{id}?wait=25 until `state` is done, error or cancelled (each call returns early when something changes).
-4. done: `values_b64` = base64 float64 little-endian, row-major [sum(meshes[].count) x columns.length]; rows of mesh k
-   are meshes[k].first .. first+count-1, one per face (per vertex with --on vertices) in upload order.
-5. DELETE /jobs/{id} cancels. POST /run = steps 2-4 in one blocking call.
+4. done: GET /jobs/{id}/values = float32 little-endian, column-major: column 0 for every row, then column 1, ...
+   (rows = sum(meshes[].count), ?col=k for one column); rows of mesh k are meshes[k].first .. first+count-1, one per
+   face (per vertex with --on vertices) in upload order. GET /jobs/{id}?inline=1 adds `values_b64` (base64 float64,
+   row-major, the float32 values widened) up to 4,194,304 values.
+5. DELETE /jobs/{id} cancels. POST /run = steps 2-4 in one blocking call, values inline as `values_b64` (413 above
+   4,194,304 values: use the jobs).
 
 ## Conventions
 
