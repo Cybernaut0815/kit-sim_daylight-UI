@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { Agent, createServer, request } from 'node:http';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -24,7 +24,7 @@ both: [--root F:/claude-scratch/large-models] [--epw <EPW>, default validate/_dl
      [--lib <client lib index.ts>, default the app's kit-sim_daylight/bindings/ts/src/index.ts; an older server needs
       the lib of its time, as a file beside it (same node_modules), e.g. index.base.ts from git show]`;
 const here = fileURLToPath(new URL('.', import.meta.url));
-const { values: opt } = parseArgs({ options: { selftest: { type: 'boolean' },
+const { values: opt } = parseArgs({ options: { selftest: { type: 'boolean' }, download: { type: 'boolean' },
   ...Object.fromEntries('mode root exe epw mesh cases tag port browser web model playwright lib'.split(' ').map((k) => [k, { type: 'string' }])) } });
 const LIB = pathToFileURL(resolve(opt.lib ?? join(here, '../../kit-sim_daylight/bindings/ts/src/index.ts'))).href;
 const R = resolve(opt.root ?? 'F:/claude-scratch/large-models'), EPW = resolve(opt.epw ?? 'F:/Github/kit-sim_daylight/validate/_dl/epw/USA_MA_Boston-City.WSO_TMY.epw');
@@ -297,10 +297,11 @@ const step = async (name, args) => sure(name, await until(name, args, () => fals
 const INIT = () => {
   window.__lt = PerformanceObserver.supportedEntryTypes.includes('longtask') ? [] : null;
   if (window.__lt) new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__lt.push(e.duration); }).observe({ type: 'longtask', buffered: true });
-  const f = window.fetch, put = (window.__put = { n: 0, bytes: 0 });
+  const f = window.fetch, put = (window.__put = { n: 0, bytes: 0, first: 0, last: 0 }); // first / last: page clock, ms
   window.fetch = function (input, init) {
-    if (init?.method === 'PUT') { put.n++; put.bytes += init.body?.byteLength ?? init.body?.size ?? 0; }
-    return f.apply(this, arguments);
+    if (init?.method !== 'PUT') return f.apply(this, arguments);
+    put.n++; put.bytes += init.body?.byteLength ?? init.body?.size ?? 0; put.first ||= performance.now();
+    return f.apply(this, arguments).finally(() => { put.last = performance.now(); });
   };
 };
 /** The page's memory (Chrome's measureUserAgentSpecificMemory: the app is cross-origin isolated; null elsewhere or after
@@ -328,9 +329,11 @@ async function browserMode() {
   const page = ctx.pages()[0] ?? (await ctx.newPage()), log = [], open = new WeakMap();
   let crashed = null, put = { n: 0, bytes: 0 }, info = {};
   page.on('crash', () => { gone = crashed = 'page crash'; }).on('close', () => { gone ??= 'page closed'; }).on('pageerror', (e) => console.log(`page error: ${brief(e.message)}`));
-  page.on('request', (r) => { const e = { method: r.method(), path: new URL(r.url()).pathname, t0: now(), t1: 0, bytes: 0 }; open.set(r, e); log.push(e); });
-  page.on('requestfailed', (r) => { if (open.has(r)) open.get(r).t1 = now(); });
-  page.on('requestfinished', async (r) => { // answers carry Content-Length (httplib); PUT bodies come from the page's counter
+  // BENCH_LEAN=1: no request listeners (DevTools then sends no request bodies to this process); the page's own PUT
+  // counter and clock still time the upload (upload_page_s)
+  if (!process.env.BENCH_LEAN) page.on('request', (r) => { const e = { method: r.method(), path: new URL(r.url()).pathname, t0: now(), t1: 0, bytes: 0 }; open.set(r, e); log.push(e); });
+  if (!process.env.BENCH_LEAN) page.on('requestfailed', (r) => { if (open.has(r)) open.get(r).t1 = now(); });
+  if (!process.env.BENCH_LEAN) page.on('requestfinished', async (r) => { // answers carry Content-Length (httplib); PUT bodies come from the page's counter
     const e = open.get(r);
     if (!e) return;
     e.t1 = now();
@@ -340,7 +343,8 @@ async function browserMode() {
   async function checkpoint(name, t0, fields) {
     if (fields.error && srv.exitCode === null) await Promise.race([srv.exited, sleep(2e3)]);
     const t = now(), p = await pageStats(page), died = srv.exitCode !== null;
-    if (fields.phases && p.put) Object.assign(fields.phases, { puts: p.put.n - put.n, put_gb: gb(p.put.bytes - put.bytes) });
+    if (fields.phases && p.put) Object.assign(fields.phases, { puts: p.put.n - put.n, put_gb: gb(p.put.bytes - put.bytes), ...(p.put.n > put.n ? { upload_page_s: +((p.put.last - p.put.first) / 1e3).toFixed(3) } : {}) });
+    await page.evaluate(() => { if (window.__put) window.__put.first = 0; }).catch(() => {}); // the next upload's first PUT starts its clock
     put = p.put ?? put;
     const rec = { tag: TAG, layer: BROWSER, mesh: MESH, case: name, ok: !fields.error && !crashed && !died, when: new Date().toISOString(), build: b, ...fields,
       ...(crashed || died ? { error: crashed ?? `server exited ${hex(srv.exitCode)}${fields.error ? `: ${fields.error}` : ''}` } : {}), page_gb: p.page_gb, lt: p.lt, ...info,
@@ -390,6 +394,26 @@ async function browserMode() {
     await checkpoint(id, t0, { error, wall_s: sec(t0, end), phases: phases(log.slice(from), end), paint_s: ts[1] && sec(ts[0], ts[1]),
       results_s: ts[2] && sec(ts[1], ts[2]), app: res?.json?.models?.[0]?.run ?? null }); // app: the run's args and timing as the app sent and saw them
     if (crashed) break;
+  }
+  // --download: the usdz the Download menu writes with the colours replacing the materials (P9: an overlay usdc of binary
+  // arrays, the model's files packed as they are), saved beside the profile
+  if (opt.download && load.ok && !crashed) {
+    const t0 = now(), file = join(dir, `${BROWSER}-${MESH}.usdz`);
+    let error;
+    try {
+      rmSync(file, { force: true });
+      await page.locator('button[popovertarget="download-menu"]').click();
+      const menu = page.locator('#download-menu');
+      await menu.locator('select[aria-label="Format"]').selectOption('usdz');
+      await menu.locator('input[name="usd-mode"][value="replace"]').check();
+      const failed = menu.locator('.alert').first().waitFor({ timeout: STEP_MS }).then(async () => { throw new Error(`download: ${brief(await menu.locator('.alert').first().innerText())}`); });
+      const [dl] = await Promise.all([Promise.race([page.waitForEvent('download', { timeout: STEP_MS }), failed]), menu.getByRole('button', { name: 'Download', exact: true }).click()]);
+      failed.catch(() => {});
+      await dl.saveAs(file);
+      const why = await dl.failure();
+      if (why) throw new Error(`download: ${why}`);
+    } catch (e) { error = e.message; }
+    await checkpoint('usdz', t0, { error, wall_s: sec(t0, now()), file, file_gb: existsSync(file) ? gb(statSync(file).size) : null });
   }
   await ctx.close();
 }
