@@ -73,11 +73,14 @@ values average it out; raise M to 4096-16384 for a single `--time` instant). Row
 `400`; rows the run's meshes do not resolve (unknown or ambiguous name, slot out of range, a row given twice) fail the
 job (500).
 
+A run the machine has no memory for (host RAM, or GPU memory for the scene) fails its job with `507` and the server
+keeps running; a result over 134,217,728 values (rows x columns) is refused with `413` before it is queued.
+
 ## Flags
 
 `--port 8080`, `--web DIR` (static files), `--cache DIR` (default `%LOCALAPPDATA%\daylight_server`), `--max-mb 2048`
 (request body limit), `--mesh-cache-mb 2048`, `--client-jobs 2`, `--max-queue 32`, `--job-ttl-min 15` (how long finished
-jobs stay readable), `--gpu-scenes 4`, `--mcp` (the agent routes, below), `--browser PATH` (Chrome or Edge for report
+jobs stay readable), `--results-mb 1024` (finished jobs' results kept at most; the oldest go first), `--gpu-scenes 4`, `--mcp` (the agent routes, below), `--browser PATH` (Chrome or Edge for report
 PDFs and the hidden instance; default the one registered under Windows App Paths), `--app-url URL` (the app the hidden
 instance opens; default this server's `--web` app).
 
@@ -146,3 +149,6 @@ build\RelWithDebInfo\daylight_server.exe --web ..\web\dist --mcp
 - **Smoke test:** `node test\mcp-smoke.mjs --web ..\web\dist` starts servers of its own (ports 18100 and 18101, a fresh
   cache) and checks the agent routes end to end in Claude-only mode: `404` without `--mcp`, the gate, the handshake, the
   fixture [test/building.usda](test/building.usda) through the tools to two PDF reports, and `mcp-stdio.mjs`.
+- **Large-model bench:** `node test\bench.mjs --selftest`; `--mode server` (the client lib on a server of its own) and
+  `--mode browser` (Chrome or Playwright's Firefox through these tools) time the core's `validate/big.py` models and cases
+  into `<root>\results.jsonl`; usage at the top of [test/bench.mjs](test/bench.mjs).
