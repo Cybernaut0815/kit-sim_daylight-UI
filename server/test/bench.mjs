@@ -379,6 +379,9 @@ async function browserMode() {
   for (const id of load.ok ? IDS : []) {
     const t0 = now(), from = log.length, ts = [];
     let error, shot, res;
+    // BENCH_PROFILE=1 (Chrome): the page's CPU profile over the case, <dir>/<browser>-<mesh>-<case>.cpuprofile
+    const cdp = process.env.BENCH_PROFILE && BROWSER === 'chrome' ? await page.context().newCDPSession(page) : null;
+    if (cdp) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 500 }); await cdp.send('Profiler.start'); }
     try {
       await step('update_settings', CASES[id].app);
       const run = await until('run', {}, (r) => r.json?.status === 'running', RUN_MS); // run joins the batch going on
@@ -389,6 +392,7 @@ async function browserMode() {
       res = await step('results', {});
       ts.push(now());
     } catch (e) { error = e.message; }
+    if (cdp) writeFileSync(join(dir, `${BROWSER}-${MESH}-${id}.cpuprofile`), JSON.stringify((await cdp.send('Profiler.stop').catch(() => ({ profile: null }))).profile));
     const img = shot?.images[0], end = ts[0] ?? now();
     if (img) writeFileSync(join(dir, `${BROWSER}-${MESH}-${id}.${img.mimeType.split('/')[1]}`), Buffer.from(img.data, 'base64'));
     await checkpoint(id, t0, { error, wall_s: sec(t0, end), phases: phases(log.slice(from), end), paint_s: ts[1] && sec(ts[0], ts[1]),
