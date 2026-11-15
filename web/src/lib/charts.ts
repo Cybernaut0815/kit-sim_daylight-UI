@@ -118,7 +118,7 @@ export function dataOf(r: RunResult, col: number, objects: readonly ObjectRow[],
   // ponytail: per result at most 3 full columns' worth of elements (12 B each), and over 1M rows 2 entries (0.2 GB each
   // at 17M rows), least recent out; raise it if many charts thrash it
   const full = r.weights.length, size = () => [...held.values()].reduce((n, x) => n + x.cum.v.length, 0);
-  while (held.size > 1 && ((full > 1e6 && held.size > 2) || size() > 3 * full)) held.delete(held.keys().next().value!);
+  while (held.size > 1 && size() > (full > 1e6 ? 2 : 3) * full) held.delete(held.keys().next().value!); // by elements: a whole column beside small parts subsets
   return d;
 }
 

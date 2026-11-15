@@ -1,3 +1,4 @@
+import { crc32 } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { unzipSync } from 'three/addons/libs/fflate.module.js';
 import { freeName, overlay, overlayArrays, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh } from './usdexport';
@@ -119,17 +120,18 @@ describe('helpers', () => {
     const big = new Uint8Array(40 << 20).map((_, i) => i * 31); // past one 16 MiB CRC chunk, as a Blob (a picked File)
     const files: [string, Uint8Array | Blob][] = [['root.usdc', new TextEncoder().encode('PXR-USDC')], ['tex/a.png', new Uint8Array(100).fill(7)], ['b.usda', new Uint8Array(3)], ['model/ü.usdc', new Blob([big])]];
     const zip = new Uint8Array(await (await usdz(files)).arrayBuffer()), view = new DataView(zip.buffer, zip.byteOffset);
-    const offsets: number[] = [], names: string[] = [];
-    for (let o = 0; view.getUint32(o, true) === 0x04034b50;) {
+    const offsets: number[] = [], names: string[] = [], bytesOf = (k: number) => (k === 3 ? big : (files[k][1] as Uint8Array));
+    for (let o = 0, k = 0; view.getUint32(o, true) === 0x04034b50; k++) {
       const method = view.getUint16(o + 8, true), size = view.getUint32(o + 18, true), n = view.getUint16(o + 26, true), e = view.getUint16(o + 28, true);
       expect(method).toBe(0);
+      expect(view.getUint32(o + 14, true)).toBe(crc32(bytesOf(k))); // the big one's CRC chained over 16 MiB chunks
       names.push(new TextDecoder().decode(zip.subarray(o + 30, o + 30 + n)));
       offsets.push(o + 30 + n + e);
       o += 30 + n + e + size;
     }
     expect(names).toEqual(files.map(([f]) => f));
     expect(offsets.map((o) => o % 64)).toEqual([0, 0, 0, 0]);
-    const out = unzipSync(zip); // fflate checks every CRC-32
+    const out = unzipSync(zip);
     expect(out['tex/a.png']).toEqual(files[1][1]);
     expect(out['model/ü.usdc'].length).toBe(big.length);
     expect(out['model/ü.usdc'][12345]).toBe(big[12345]);

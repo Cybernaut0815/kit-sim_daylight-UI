@@ -488,7 +488,7 @@ export default function App() {
               const onUpload = (d: number, total: number) => {
                 if (d && d < total && performance.now() - shown < 250) return;
                 shown = performance.now();
-                if (mine()) dispatch({ type: 'RUN', slot, run: { status: 'queued', position: 0, upload: [d, total] } });
+                if (mine() && !own.signal.aborted) dispatch({ type: 'RUN', slot, run: { status: 'queued', position: 0, upload: [d, total] } });
               };
               const res = await runRemote('', {
                 sensors: meshes.slice(0, n), context: meshes.slice(n), onUpload,
@@ -513,6 +513,7 @@ export default function App() {
               });
               dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(p.sim) } } });
             } finally {
+              own.abort(); // the run is over: a PUT still on its way after another failed stops (and reports no progress)
               signal.removeEventListener('abort', off);
               if (jobs.current[slot] === own) delete jobs.current[slot];
             }

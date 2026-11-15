@@ -492,15 +492,16 @@ void worker(Server& S) {
     // Everything a run allocates lives in this block: an exception (std::bad_alloc on a model too big for this machine)
     // unwinds it, frees its buffers and ends only this job. The process, its mesh cache and the next jobs go on.
     try {
-      // views of the shared cache entries (no copy), names made unique per run as the TS binding does
+      // views of the shared cache entries (no copy), names made unique per run exactly as the TS binding's dmeshStems
+      // (name, name_2, ...: a suffix taken by another name moves on), so a client knows each mesh's core name
       std::vector<MeshView> views;
       views.reserve(j->meshes.size());
-      std::unordered_map<std::string, int> seen;
+      std::unordered_set<std::string> used;
+      const auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
       for (const auto& [mesh, sensor] : j->meshes) {
         MeshView v{mesh.get(), mesh->name, sensor};
-        std::string lower = v.name;
-        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (const int n = seen[lower]++) v.name += "_" + std::to_string(n + 1);
+        for (int i = 2; used.count(lower(v.name)); ++i) v.name = mesh->name + "_" + std::to_string(i);
+        used.insert(lower(v.name));
         views.push_back(std::move(v));
       }
       Options opt = j->args.opt;

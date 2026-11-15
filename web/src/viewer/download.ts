@@ -123,7 +123,7 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
     const info = await usd.usd.prim(m.path);
     const blocks = info.attributes
       .filter((a) => a.authored && (m.geometry
-        ? BLOCK.test(a.name) && a.name !== 'primvars:displayColor' && !(a.name === 'normals' && m.geometry.normals)
+        ? BLOCK.test(a.name) && a.name !== 'primvars:displayColor' && !(a.name === 'normals' && m.geometry.normals) && !m.values.some((v) => a.name === `primvars:daylight_${v.name}`) // authored again below
         : a.name === 'primvars:displayColor:indices'))
       .map((a) => ({ name: a.name, type: a.typeName, uniform: a.variability === 'uniform' }));
     const subsets = (await usd.usd.children(m.path)).filter((s) => s.typeName === 'GeomSubset').map((s) => s.name);

@@ -175,7 +175,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
           <div className="stack">
             <div className="skeleton" aria-hidden="true">&nbsp;<br />&nbsp;</div>
             <div className="skeleton chart-ph" aria-hidden="true" />
-            <p className="text-muted"><span className="spinner" aria-hidden="true" /> {run.status === 'queued' || ahead ? `Waiting for the GPU${ahead ? `, ${ahead} job${ahead > 1 ? 's' : ''} ahead` : ''}` : 'Tracing on the GPU'}</p>
+            <p className="text-muted"><span className="spinner" aria-hidden="true" /> {ahead ? `Waiting for the GPU, ${ahead} job${ahead > 1 ? 's' : ''} ahead` : progressOf(run) ?? (run.status === 'queued' ? 'Waiting for the GPU' : 'Tracing on the GPU')}</p>
           </div>
         );
       })()}
