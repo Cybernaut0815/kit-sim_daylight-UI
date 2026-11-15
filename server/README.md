@@ -39,8 +39,9 @@ Change an endpoint: edit `server.cpp` and `openapi.json` together.
 - **Fairness.** Each client (header `X-Client-Id`, else the network address) may have `--client-jobs` jobs (default 2)
   queued or running (`429` beyond that); the queue holds `--max-queue` jobs (default 32, then `503`). `GET /jobs` lists
   only the caller's own jobs.
-- **Isolation without accounts.** No authentication; meshes and jobs are addressed by random UUIDs that only their
-  owner knows. No CORS headers, so other web pages cannot drive the server.
+- **Isolation without accounts.** No authentication; jobs are addressed by random UUIDs that only their owner knows,
+  meshes by ids their clients choose: the daylight-mesh client's are the bytes' SHA-256, so only a client holding the
+  same geometry can name one (and the server never sends mesh bytes back). No CORS headers, so other web pages cannot drive the server.
 
 ## Caching
 

@@ -1,0 +1,55 @@
+#usda 1.0
+(
+    defaultPrim = "Twins"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+# mcp-smoke.mjs: two walls with the same points (the same .dmesh bytes, so one content id) and different materials (so
+# each gets its own --optics row: the core must see them as h/0 and h_2/0)
+def Xform "Twins"
+{
+    def Material "White"
+    {
+        token outputs:surface.connect = </Twins/White/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.9, 0.9, 0.9)
+            token outputs:surface
+        }
+    }
+
+    def Material "Grey"
+    {
+        token outputs:surface.connect = </Twins/Grey/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.4, 0.4, 0.4)
+            token outputs:surface
+        }
+    }
+
+    def Mesh "A" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (10, 0, 0), (10, 0, 10), (0, 0, 10)]
+        rel material:binding = </Twins/White>
+    }
+
+    def Mesh "B" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (10, 0, 0), (10, 0, 10), (0, 0, 10)]
+        rel material:binding = </Twins/Grey>
+    }
+}

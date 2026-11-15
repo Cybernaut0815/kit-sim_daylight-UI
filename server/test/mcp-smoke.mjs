@@ -28,7 +28,7 @@ if (!opt.web || !existsSync(exe)) {
   process.exit(2);
 }
 const web = resolve(opt.web), OFF = Number(opt.port), ON = OFF + 1, cache = mkdtempSync(join(tmpdir(), 'mcp-smoke-')), t0 = Date.now();
-const BUILDING = join(here, 'building.usda'), FAC = [...'NESW'].map((s) => `/Site/Block/Facade_${s}`).concat('/Site/Block/Roof');
+const TWINS = join(here, 'twins.usda'), BUILDING = join(here, 'building.usda'), FAC = [...'NESW'].map((s) => `/Site/Block/Facade_${s}`).concat('/Site/Block/Roof');
 const NAMES = JSON.parse(readFileSync(join(here, '../mcp.json'), 'utf8')).tools.map((t) => t.name);
 const JSONH = { 'Content-Type': 'application/json' }, PING = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), brief = (s) => s.replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -342,6 +342,27 @@ if (on) await part('walk', async () => {
   await step('save_report with a stale updated -> refused', 'save_report', { spec: one, updated: '2000-01-01T00:00:00.000Z' }, (r) => r.err && /changed in the app since/.test(r.text));
   await step(`delete_report ${one.id}`, 'delete_report', { id: one.id });
   await step(`get_report ${one.id} after it -> isError`, 'get_report', { id: one.id }, (r) => r.err);
+
+  // C1 content ids, in A after everything above: twin receivers (the same bytes, one id) with optics of their own run
+  // with reflections (the core sees h/0 and h_2/0); a twin as the shade of the other runs under a salted id; the same
+  // file read again (new rows, the same bytes and args) is answered from the server's response cache
+  const twins = async () => {
+    await step('open_model twins.usda -> A', 'open_model', { paths: [TWINS], model: 'A' }, (r) => r.json?.model === 'A');
+    await step('set_roles /Twins/A and /Twins/B receiver', 'set_roles', { model: 'A', paths: ['/Twins/A', '/Twins/B'], role: 'receiver' });
+  };
+  await twins();
+  await step('update_settings: radiation, physical, 1 bounce of 64 samples', 'update_settings', { sim: { quantities: ['radiation'], mode: 'physical', bounces: 1, bounceSamples: 64 } });
+  run = await again('run', {}, running);
+  const tw = (await tool('results', { models: ['A'], column: 'radiation_front' })).json?.models?.[0], twArgs = tw?.run?.args?.join(' ') ?? '';
+  check('twin receivers with optics of their own run with --bounces 1 (core names h and h_2)', done(run) && /--optics \S*\/Twins\/A\/0=\S*\/Twins\/B\/0=/.test(twArgs) && tw?.rows?.length !== 0,
+    `${brief(run.text)}; ${/--optics \S+/.exec(twArgs)?.[0] ?? 'no --optics'}`);
+  await step('set_roles /Twins/B shade', 'set_roles', { model: 'A', paths: ['/Twins/B'], role: 'shade' });
+  run = await again('run', {}, running);
+  check('a shade with the bytes of a receiver runs (its id salted)', done(run), brief(run.text));
+  await twins();
+  run = await again('run', {}, running);
+  const hit = (await tool('results', { models: ['A'], column: 'radiation_front' })).json?.models?.[0]?.run?.cache;
+  check('the same model read again runs from the response cache (content ids)', done(run) && hit?.response === 'hit', `${brief(run.text)}; cache ${JSON.stringify(hit)}`);
 });
 
 // 4. Claude Desktop's relay: stdin lines in, the same answers out; a notification gets none
