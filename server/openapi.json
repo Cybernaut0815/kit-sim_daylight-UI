@@ -48,6 +48,19 @@
         }
       }
     },
+    "/meshes/missing": {
+      "post": {
+        "tags": ["meshes"],
+        "operationId": "meshesMissing",
+        "summary": "Which mesh ids the server lacks",
+        "description": "One call before uploading a model: the ids (for example content hashes of the .dmesh bytes) the server does not hold, in request order; upload only those with `putMesh`. The ids it holds count as used for its mesh cache (LRU), so they stay for the run that follows.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["ids"], "properties": { "ids": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" } } } }, "example": { "ids": ["3f2a9c", "77b0e1"] } } } },
+        "responses": {
+          "200": { "description": "The ids to upload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Missing" }, "example": { "missing": ["77b0e1"] } } } },
+          "400": { "description": "Not `{\"ids\": [...]}`, or a bad id.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: bad mesh id \"a b\"\n" } } }
+        }
+      }
+    },
     "/jobs": {
       "post": {
         "tags": ["jobs"],

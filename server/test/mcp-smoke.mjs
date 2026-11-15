@@ -142,6 +142,8 @@ async function runSync(port, sensors, args) {
 if (off) await part('api', async () => {
   const put = await http(OFF, 'PUT', '/mesh/smoke-quad', { headers: { 'Content-Type': 'application/octet-stream' }, body: quad() });
   check('api: PUT /mesh/smoke-quad -> 204', put.status === 204, `${put.status} ${brief(put.text)}`);
+  const miss = await http(OFF, 'POST', '/meshes/missing', { headers: JSONH, body: JSON.stringify({ ids: ['nope-1', 'smoke-quad', 'nope-2'] }) });
+  check('api: /meshes/missing names the unknown ids in order', miss.status === 200 && JSON.stringify(parse(miss).missing) === '["nope-1","nope-2"]', `${miss.status} ${brief(miss.text)}`);
   const NOON = ['--quantity', 'sunhours', '--lat', '51.5', '--lon', '0', '--tz', '0', '--time', '06-21T12:00'];
   const bad = await runSync(OFF, ['smoke-quad'], [...NOON, '--no-occlude', 'nosuchmesh']);
   check('api: a job that fails in the core -> 500, with the reason', bad.status === 500 && /no mesh of that name/.test(bad.text), `${bad.status} ${brief(bad.text)}`);

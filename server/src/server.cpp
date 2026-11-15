@@ -856,6 +856,24 @@ int main(int argc, char** argv) {
     S.meshes[id] = MeshEntry{mesh, req.body.size(), ++S.tick};
     res.status = 204;
   });
+  // Which of these mesh ids the server lacks, in request order: a client uploads only those (with content-hash ids a
+  // reload or a second run sends no geometry). The ids found count as used for the mesh cache's LRU.
+  svr.Post("/meshes/missing", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string ids = member(req.body, "ids");
+    const std::vector<std::string> tokens = elements(ids);
+    if (tokens.empty() && ids != "[]") return text(res, 400, "error: the body is {\"ids\": [\"<mesh id>\", ...]}\n");
+    std::string out = "{\"missing\": [";
+    bool none = true;
+    std::lock_guard<std::mutex> lock(S.meshMu);
+    for (const std::string& t : tokens) {
+      const std::string id = t.size() >= 2 && t.front() == '"' && t.back() == '"' ? t.substr(1, t.size() - 2) : std::string();
+      if (!valid_id(id)) return text(res, 400, "error: bad mesh id " + t.substr(0, 80) + "\n");
+      if (auto it = S.meshes.find(id); it != S.meshes.end()) { it->second.used = ++S.tick; continue; }
+      out += (none ? "\"" : ", \"") + id + "\"";
+      none = false;
+    }
+    json(res, 200, out + "]}");
+  });
 
   // ---- weather downloads
   svr.Get("/proxy", [&](const httplib::Request& req, httplib::Response& res) {

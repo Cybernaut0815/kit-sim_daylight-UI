@@ -14,7 +14,7 @@ putSession, deleteSession.
 
 1. PUT /mesh/{id} with one .dmesh image per mesh (id: your UUID; layout in uploadMesh, optionally with one uint16
    optics slot per face, header flags bit 0). Upload once; meshes stay cached. ?name= names it in results, --optics
-   and --no-occlude.
+   and --no-occlude. With content-hash ids, POST /meshes/missing {"ids": [...]} first says which ones to upload.
 2. POST /jobs (multipart/form-data): `sensors` = receiving mesh ids (repeat the field), `context` = shading-only mesh
    ids, `args` = CLI flags, one token per field (e.g. --lat 52.52 --lon 13.41 --tz 1 --quantity radiation,sunhours),
    weather = an `epw` file part, an `epw_url`, or the --clear-sky flag. 404 {"missing": [...]}: upload those, resubmit.
