@@ -20,7 +20,7 @@ export function viewer(slot: number): Slot {
   if (pool[slot]) return pool[slot];
   const el = document.createElement('usd-viewer');
   el.setAttribute('panels', 'none'); // a bare viewport: the app has its own panels
-  el.setAttribute('readonly', ''); // no edits from the view: the meshes are converted once per load
+  el.setAttribute('readonly', ''); // no edits from the view: a mesh's geometry and matrix change only with a re-read (new rows)
   el.purposes = ['default', 'render']; // what the core's own USD readers keep
   el.sky = 'colour'; // the stage's lighting, never its dome texture behind the model
   el.backgroundColor = 'transparent'; // the page's token background shows through

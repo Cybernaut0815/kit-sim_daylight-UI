@@ -1,8 +1,9 @@
-// The USD viewer's drawn meshes -> daylight meshes (metres, Z-up). fromThree reads the viewer's own geometry, so result
-// rows map 1:1 to the drawn triangles and vertices; stand-ins carry the world matrix, which also keeps the viewer's
-// highlight overlays (children of its objects) out.
+// The USD viewer's drawn meshes -> daylight meshes (metres, Z-up), built on demand from the viewer's own geometry (so
+// result rows map 1:1 to the drawn triangles and vertices) and world matrix as they are at the call: nothing is kept (a
+// bhs-size model would hold 0.6 GB). Stand-ins carry the world matrix, which also keeps the viewer's highlight overlays
+// (children of its objects) out. A run names each mesh by its content (jobMeshes, C1).
 import { Matrix4, Mesh, type BufferGeometry, type Object3D } from 'three';
-import { fromThree, type ObjMesh } from 'daylight-mesh';
+import { dmeshStems, fromThree, meshIds, toDmesh, type ObjMesh } from 'daylight-mesh';
 
 /**
  * What the viewer's three.items() lists (only what is used here). `material` (rid, 0 = none) and `subsets` (index ranges
@@ -16,10 +17,13 @@ export interface RenderItem {
   instances?: Float32Array | null;
   material?: number; subsets?: readonly { start: number; count: number; material: number }[] | null;
 }
-/** A drawn mesh: converted now (`obj`), or for an instanced one built on first use (`make`), since a scatter of many
- *  detailed copies would cost gigabytes at load even when it is never given a role. `materials[k]`: the material rid
- *  of optics slot k (one slot without subsets); `ObjMesh.slots` holds the slot of each triangle, which toDmesh sends. */
-export interface Extracted { item: RenderItem; instances: number; tris: number; verts: number; materials: number[]; obj?: ObjMesh; make?: () => ObjMesh }
+/**
+ * A drawn mesh, built on demand: dmesh() its .dmesh bytes, make() the same mesh as an ObjMesh (views of those bytes:
+ * weights, meshOf, the agent tools), stamp() what both read (arrays, groups, the world matrix): equal stamps, equal
+ * bytes. An instanced one's copies are fixed at extract (its instance matrices and the root's). `materials[k]`: the
+ * material rid of optics slot k (one slot without subsets); the bytes hold the slot of each triangle.
+ */
+export interface Extracted { item: RenderItem; instances: number; tris: number; verts: number; materials: number[]; make: () => ObjMesh; dmesh: () => Uint8Array<ArrayBuffer>; stamp: () => unknown[] }
 
 const stand = (geometry: BufferGeometry, world: Matrix4) => {
   const s = new Mesh(geometry);
@@ -34,6 +38,12 @@ function slotsOf(g: BufferGeometry, tris: number): Uint16Array | undefined {
   const s = new Uint16Array(tris);
   g.groups.forEach((r, k) => s.fill(k, Math.ceil(r.start / 3), Math.ceil((r.start + r.count) / 3)));
   return s;
+}
+
+/** .dmesh bytes as an ObjMesh of views of them: fromThree's doubles and indices, no second copy. */
+function viewOf(name: string, b: Uint8Array<ArrayBuffer>): ObjMesh {
+  const d = new DataView(b.buffer), N = Number(d.getBigUint64(8, true)), F = Number(d.getBigUint64(16, true)), M = Number(d.getBigUint64(24, true)), at = 32 + 24 * N + 4 * F;
+  return { name, positions: new Float64Array(b.buffer, 32, 3 * N), indices: new Int32Array(b.buffer, at, M), ...(d.getUint32(4, true) & 1 ? { slots: new Uint16Array(b.buffer, at + 4 * M, F) } : {}) };
 }
 
 /**
@@ -52,10 +62,13 @@ export function extract(items: readonly RenderItem[], root: Object3D, scale: num
     if (item.kind !== 'mesh' || !o || !(o.visible || keep?.(item.path))) continue;
     const g = (o as Mesh).geometry;
     const materials = item.subsets?.length ? item.subsets.map((s) => s.material) : [item.material ?? 0];
+    const arrays = () => [g.attributes.position?.array, g.index?.array, g.groups];
     if (!item.instances) {
-      const obj = fromThree([stand(g, o.matrixWorld)], { scale })[0], slots = slotsOf(g, obj.indices.length / 3);
-      if (slots) obj.slots = slots;
-      out.push({ item, instances: 0, tris: obj.indices.length / 3, verts: obj.positions.length / 3, materials, obj });
+      const pos = g.attributes.position;
+      if (!pos || pos.itemSize !== 3) throw new Error(`${item.path}: geometry has no xyz position attribute`); // fromThree's check, at load
+      const verts = pos.array.length / 3, tris = (g.index ? g.index.count : verts) / 3;
+      const dmesh = () => toDmesh({ name: item.path, positions: g.attributes.position.array, indices: g.index?.array ?? null, slots: slotsOf(g, tris) }, { matrix: o.matrixWorld.elements, scale });
+      out.push({ item, instances: 0, tris, verts, materials, dmesh, make: () => viewOf(item.path, dmesh()), stamp: () => [...arrays(), ...o.matrixWorld.elements] });
       continue;
     }
     const all = item.instances, n = all.length / 16, V = g.attributes.position.count, I = g.index ? g.index.count : V;
@@ -72,7 +85,33 @@ export function extract(items: readonly RenderItem[], root: Object3D, scale: num
       for (let i = 0; i < n; i++) slots.set(one, one.length * i);
       return { name: item.path, positions, indices, slots };
     };
-    out.push({ item, instances: n, tris: (I / 3) * n, verts: V * n, materials, make });
+    out.push({ item, instances: n, tris: (I / 3) * n, verts: V * n, materials, make, dmesh: () => toDmesh(make()), stamp: arrays });
   }
   return out;
+}
+
+/** Same stamps (Extracted.stamp): the same arrays, groups and matrix, so the same bytes. */
+export const same = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+/** A row as a run sends it: its builders and, once hashed, its content id and the stamp it was hashed at. */
+export type Hashed = Pick<Extracted, 'dmesh' | 'stamp'> & { id?: string; at?: readonly unknown[] };
+
+/**
+ * C1: a job's meshes for runRemote (the first `sensors` rows receive) and their core names, stems[k] for row k (dmeshStems
+ * of the ids: twins become h, h_2). A row is hashed once while its stamp holds (one meshIds call: 8 bodies at a time); a
+ * shade with a receiver's bytes is salted by meshIds. Each body is built again at its PUT and refused if its row changed
+ * since this job read it (the server cannot check bytes against an id, and its cache is shared). `stamps`: each row as
+ * this job read it; `hashed`: the rows hashed now (their bytes are new to this tab).
+ */
+export async function jobMeshes(rows: readonly Hashed[], sensors: number, signal?: AbortSignal) {
+  const stamps = rows.map((c) => c.stamp()), hashed = rows.flatMap((c, k) => (c.id && same(c.at!, stamps[k]) ? [] : [k]));
+  (await meshIds({ sensors: hashed.map((k) => ({ dmesh: rows[k].dmesh })), signal })).forEach((id, j) => Object.assign(rows[hashed[j]], { id, at: stamps[hashed[j]] }));
+  const own = rows.map((c, k) => ({
+    id: c.id!,
+    dmesh: () => {
+      if (!same(stamps[k], c.stamp())) throw new Error('a mesh changed while it was sent: run again');
+      return c.dmesh();
+    },
+  }));
+  const ids = await meshIds({ sensors: own.slice(0, sensors), context: own.slice(sensors) }); // every id given: salts only
+  return { meshes: own.map((m, k) => ({ ...m, id: ids[k] })), ids, stems: dmeshStems(ids), stamps, hashed };
 }

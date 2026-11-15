@@ -58,7 +58,7 @@ export interface Ctl {
   onVariant: (slot: number, path: string, set: string, variant: string) => void; onSubdiv: (level: number) => void;
   onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRun: () => Promise<void>; onDownload: (format: Format, mode: ExportMode) => Promise<void>;
-  meshOf: (id: string) => ObjMesh | undefined; // a mesh's ObjMesh (model metres, Z up)
+  meshOf: (id: string) => ObjMesh | undefined; // a row's ObjMesh (model metres, Z up), built per call: take it once per mesh where it is read, never keep it
   busy: () => boolean; held: () => boolean; cancel: () => void; // a batch on its way; a click waiting for the materials; Cancel
   viewer: (slot: number) => Slot;
   variants: (slot: number) => AppModel['choices']; // the variant choices made in the app since the slot's file opened
@@ -250,7 +250,7 @@ const SIDES: readonly Facing[] = ['N', 'E', 'S', 'W', 'up', 'down'];
  * face's (b - a) × (c - a), or a vertex along the sum of its faces' (the core's sensor normal); a back column's turned
  * round. Elements with no normal (degenerate) are left out.
  */
-export function bySide(col: ArrayLike<number>, meshes: readonly { first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }[], on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
+export function bySide(col: ArrayLike<number>, meshes: Iterable<{ first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }>, on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
   const out = new Map<Facing, { values: number[]; w: number[] }>(), s = back ? -1 : 1;
   for (const { first, count, positions: P, indices: I, w } of meshes) {
     const n = new Float64Array(3 * count);
@@ -283,7 +283,7 @@ export function summaries(x: Pick<Ctl, 'meshOf'>, m: Pick<Model, 'objects' | 're
   const ks = paths ? under(paths) : r.receivers.map((_, k) => k), pathOf = new Map(m.objects.map((o) => [o.id, o.path])); // mesh and facing rows: the receivers under paths
   const rows: { key: string; head: object; u: Summary }[] = by === 'parts' ? paths!.map((p) => ({ key: p, head: { path: p }, u: sum(under([p])) }))
     : by === 'mesh' ? ks.map((k) => { const p = pathOf.get(r.receivers[k]) ?? g[k].name; return { key: p, head: { mesh: p }, u: sum([k]) }; }).sort((p, o) => o.u.area - p.u.area)
-      : bySide(col, ks.flatMap((k) => { const o = x.meshOf(r.receivers[k]); return o ? [{ first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }] : []; }), r.on, northOf(r), column.endsWith('_back'))
+      : bySide(col, (function* () { for (const k of ks) { const o = x.meshOf(r.receivers[k]); if (o) yield { first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }; } })(), r.on, northOf(r), column.endsWith('_back'))
         .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.values, [{ first: 0, count: f.values.length }], [f.w], lo, hi, th) }));
   return { whole: sum(r.receivers.map((_, k) => k)), rows };
 }
@@ -328,7 +328,7 @@ function framed(x: Ctl, m: Model, a: Args, aspect: number, back: boolean): { vie
     const objs = [...ids].flatMap((id) => x.panes[m.slot]?.meshes.get(id) ?? []);
     if (!objs.length) throw new Error(`frame.paths: no meshes at or under ${f.paths?.join(', ')} in model ${letter(m.slot)}; find prims with model_tree`);
     pts = drawnPoints(objs);
-    normal ??= meanNormal(m.objects.flatMap((o) => (ids.has(o.id) && !o.instances ? x.meshOf(o.id) ?? [] : []))).map((v) => (back ? -v : v)) as Vec3;
+    if ((a.direction ?? 'auto') === 'auto') normal ??= meanNormal((function* () { for (const o of m.objects) if (ids.has(o.id) && !o.instances) { const g = x.meshOf(o.id); if (g) yield g; } })()).map((v) => (back ? -v : v)) as Vec3;
   }
   try {
     return frameView(pts, viewDir(a.direction ?? 'auto', x.state.settings.sim.north, normal, a.elevation), { fov: el.view.fov, aspect, projection: a.projection ?? el.view.projection });
@@ -899,10 +899,12 @@ export const HANDLERS: Record<string, Handler> = {
       const given = a.below !== undefined || a.above !== undefined, below: number | undefined = given ? a.below : range?.lo ?? undefined, above: number | undefined = given ? a.above : range?.hi ?? undefined;
       if (below === undefined && above === undefined) throw new Error(`below: the problem range of ${q} is empty; give below or above (${unitFor(column).value}), or set the range with update_settings viz`);
       const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(r), rows = new Map(m.objects.map((o) => [o.id, o]));
-      const meshes = r.receivers.flatMap((id, k) => {
-        const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
-        return o && row ? [{ id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] }] : [];
-      });
+      const meshes = (function* () { // one built at a time (meshOf builds per call)
+        for (const [k, id] of r.receivers.entries()) {
+          const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
+          if (o && row) yield { id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] };
+        }
+      })();
       const out = findCritical({ values: r.data[col], column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);
       return ok({
         model: L, column, unit: unitFor(column).value, below: below ?? null, above: above ?? null, problemArea: roundNum(out.problemArea), problemShare: roundPct(out.problemShare),
