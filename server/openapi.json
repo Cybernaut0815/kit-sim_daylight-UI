@@ -539,6 +539,8 @@
           "values_b64": { "type": "string", "contentEncoding": "base64", "description": "float64 little-endian, row-major `[sum(meshes.count) x columns.length]`, the float32 values widened. Always in a `POST /run` answer; on a job only with `inline=1` and up to 4,194,304 values (else read `getJobValues`)." },
           "rows": { "type": "integer", "description": "Result rows: `sum(meshes.count)`." },
           "cols": { "type": "integer", "description": "Result columns: `columns.length`." },
+          "timing": { "type": "object", "description": "Where `run_s` went, in ms: host prep (triangles, sensors), sky (sun, sky model, weights), build (upload + acceleration structure), reduce (sums, downloads included), and the GPU's own trace and bounce time; `totalMs` = run_s.", "properties": { "prepMs": { "type": "number" }, "skyMs": { "type": "number" }, "buildMs": { "type": "number" }, "traceMs": { "type": "number" }, "reduceMs": { "type": "number" }, "bounceMs": { "type": "number" }, "totalMs": { "type": "number" } } },
+          "gpu": { "type": "object", "description": "What the GPU did in this run: sensor x direction slots traced (hemisphere-culled ones included), kernel launches, acceleration-structure bytes.", "properties": { "rays": { "type": "integer" }, "launches": { "type": "integer" }, "gasBytes": { "type": "integer" } } },
           "values": { "type": "object", "description": "Where the values are (`getJobValues`): float32 little-endian, column-major.", "properties": { "url": { "type": "string" }, "dtype": { "type": "string", "const": "<f4" }, "order": { "type": "string", "const": "column-major" }, "shape": { "type": "array", "items": { "type": "integer" }, "description": "[cols, rows]" }, "bytes": { "type": "integer" } } },
           "run_s": { "type": "number", "description": "Seconds the GPU worker spent on this run." },
           "total_s": { "type": "number", "description": "Seconds from submission to the result (queue wait included)." },
@@ -557,7 +559,9 @@
           "started": { "type": ["string", "null"], "format": "date-time" },
           "finished": { "type": ["string", "null"], "format": "date-time" },
           "status": { "type": "integer", "description": "`error`: the HTTP status `runSync` would answer (507 out of memory, 500 runtime, also an `--optics` row the run's meshes do not resolve, or a `--no-occlude` NAME that is unknown, ambiguous or a context mesh); `cancelled`: 409." },
-          "error": { "type": "string", "description": "`error` / `cancelled`: the message, first line `error: <cause>`." }
+          "error": { "type": "string", "description": "`error` / `cancelled`: the message, first line `error: <cause>`." },
+          "progress": { "type": "number", "minimum": 0, "maximum": 1, "description": "`running`: the share of sensors traced so far (the long poll answers within 2 s while a job runs)." },
+          "eta_s": { "type": "number", "description": "`running`: seconds left at the pace so far, once `progress` > 0." }
         }
       },
       "Job": {

@@ -148,6 +148,9 @@ if (off) await part('api', async () => {
   const ok = await runSync(OFF, ['smoke-quad'], NOON), again = await runSync(OFF, ['smoke-quad'], NOON);
   lastJob = Date.now();
   check('api: the next job runs -> 200 with values', ok.status === 200 && /"values_b64"/.test(ok.text), `${ok.status} ${brief(ok.text)}`);
+  const okJson = ok.status === 200 ? JSON.parse(ok.text) : {};
+  check('api: a run reports where its time went', okJson.timing?.traceMs > 0 && okJson.gpu?.rays > 0 && okJson.timing.totalMs > 0,
+    brief(JSON.stringify({ timing: okJson.timing, gpu: okJson.gpu })));
   check('api: the same request again -> cache hit', again.status === 200 && /"response": "hit"/.test(again.text), `${again.status} ${brief(again.text.slice(again.text.indexOf('"cache"')))}`);
   const h = parse(await http(OFF, 'GET', '/health'));
   check('api: /health ok after a failed job', h.status === 'ok' && h.jobs_retained >= 1, JSON.stringify(h));

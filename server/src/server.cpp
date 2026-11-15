@@ -78,6 +78,7 @@ struct Job {
   std::vector<std::pair<std::shared_ptr<const Mesh>, bool>> meshes;   // mesh, sensor
   std::string sceneKey;
   std::atomic<bool> cancel{false};
+  std::atomic<double> progress{0};                // running: the share of sensors traced, set by the core per chunk
   // outputs and state, guarded by Server::jobsMu
   State state = State::Queued;
   std::time_t created = 0, started = 0, ended = 0;
@@ -289,6 +290,13 @@ std::string view(const Server& S, const Job& j, bool inline_ = false) {
   std::string v = "{\"id\": " + json_str(j.id) + ", \"state\": \"" + name(j.state) + "\", \"position\": " + std::to_string(position(S, j)) +
                   ", \"created\": " + iso(j.created) + ", \"started\": " + iso(j.started) + ", \"finished\": " + iso(j.ended);
   if (j.state == State::Error || j.state == State::Cancelled) v += ", \"status\": " + std::to_string(j.status) + ", \"error\": " + json_str(j.error);
+  if (j.state == State::Running) {   // how far the trace is, and the time left at that pace (once a chunk is done)
+    const double p = j.progress.load(), elapsed = double(std::time(nullptr) - j.started);
+    char b[96];
+    std::snprintf(b, sizeof b, ", \"progress\": %.3f", p);
+    v += b;
+    if (p > 0) { std::snprintf(b, sizeof b, ", \"eta_s\": %.0f", elapsed * (1 - p) / p); v += b; }
+  }
   if (j.state == State::Done && j.res) return v + "," + result_fields(j, inline_) + "\n}";
   return v + "}";
 }
@@ -500,6 +508,7 @@ void worker(Server& S) {
       opt.residentScenes = S.gpuScenes;
       opt.cancel = &j->cancel;
       opt.f32Columns = true;   // what GET /jobs/{id}/values sends: 4 bytes per value, column-major
+      opt.progress = &j->progress;
       Result r;
       const auto t1 = Clock::now();
       if (run(views, j->haveWeather ? &j->weather : nullptr, opt, r, err)) {
@@ -509,9 +518,15 @@ void worker(Server& S) {
         res->rows = res->cols ? r.f32.size() / res->cols : 0;
         res->scene = r.sceneReused ? "reused" : "built";
         res->weather = j->weatherCache;
-        char extra[160];
-        std::snprintf(extra, sizeof extra, "\"run_s\": %.3f,\n  \"total_s\": %.3f,\n  \"rows\": %zu,\n  \"cols\": %zu",
-                      runS, double(std::time(nullptr) - j->created), res->rows, res->cols);
+        // where the run's time went (the core's stats): the GPU's share of it is trace + bounce + build
+        const RunStats& t = r.stats;
+        char extra[512];
+        std::snprintf(extra, sizeof extra,
+                      "\"run_s\": %.3f,\n  \"total_s\": %.3f,\n  \"rows\": %zu,\n  \"cols\": %zu,\n"
+                      "  \"timing\": {\"prepMs\": %.1f, \"skyMs\": %.1f, \"buildMs\": %.1f, \"traceMs\": %.1f, \"reduceMs\": %.1f, \"bounceMs\": %.1f, \"totalMs\": %.1f},\n"
+                      "  \"gpu\": {\"rays\": %zu, \"launches\": %zu, \"gasBytes\": %zu}",
+                      runS, double(std::time(nullptr) - j->created), res->rows, res->cols, t.prepMs, t.skyMs, t.buildMs, t.traceMs, t.reduceMs,
+                      t.bounceMs, runS * 1000, t.rays, t.launches, t.gasBytes);
         res->manifest = cli::manifest_json(r, extra);
         res->manifest.erase(res->manifest.find_last_of('}'));   // fields only: view() and POST /run append theirs
         while (!res->manifest.empty() && std::isspace(static_cast<unsigned char>(res->manifest.back()))) res->manifest.pop_back();
@@ -887,7 +902,9 @@ int main(int argc, char** argv) {
     if (wait > 0 && !finished(j->state)) {   // long poll: return as soon as the state or the queue position changes
       const State s0 = j->state;
       const int p0 = position(S, *j);
-      S.jobsCv.wait_for(lock, std::chrono::seconds(wait), [&] { return j->state != s0 || position(S, *j) != p0; });
+      // a running job answers within 2 s, so its progress and ETA reach the client while it runs
+      const int w = j->state == State::Running ? std::min(wait, 2) : wait;
+      S.jobsCv.wait_for(lock, std::chrono::seconds(w), [&] { return j->state != s0 || position(S, *j) != p0; });
     }
     json(res, 200, view(S, *j, req.get_param_value("inline") == "1"));
   });
