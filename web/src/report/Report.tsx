@@ -9,7 +9,7 @@ import type { ObjMesh } from 'daylight-mesh';
 import { DASH } from '../charts/axes';
 import { Chart } from '../charts/Chart';
 import { Legend } from '../charts/Legend';
-import { chartData, type WeightsFor } from '../lib/charts';
+import { chartData } from '../lib/charts';
 import { haversineKm } from '../lib/geo';
 import { scaleFor } from '../lib/gradients';
 import { runSwitches } from '../lib/optics';
@@ -25,10 +25,10 @@ import { KIT_CSS } from './kitcss';
 import { chartSpec, imageSize, type Metric, type Report } from './spec';
 
 /** What a report page is drawn from: the stored spec; its models (in its order) with their results; the settings they
- *  ran with; element areas and meshes; per block the view images (one per model, data: URLs; [] for other blocks). */
+ *  ran with; the meshes; per block the view images (one per model, data: URLs; [] for other blocks). */
 export interface ReportInput {
   report: Report; models: { slot: number; name: string; file?: string; objects: ObjectRow[]; result: RunResult }[]; settings: Settings;
-  weightsFor: WeightsFor; meshOf: (id: string) => ObjMesh | undefined; images: string[][];
+  meshOf: (id: string) => ObjMesh | undefined; images: string[][];
   versions: { app: string; kitUi: string; core: string; viewer: string }; date: Date;
 }
 type Model = ReportInput['models'][number];
@@ -121,7 +121,8 @@ function Page(p: ReportInput) {
   let figures = 0, tables = 0;
   const numbers = r.blocks.map((b) => (b.type === 'chart' || b.type === 'view' ? ++figures : b.type === 'table' ? ++tables : 0));
   const columns = [...new Set([...(r.stats ?? []).map((x) => x.column), ...r.blocks.flatMap((b) => (b.type === 'chart' ? [b.chart.column!] : b.type === 'view' ? (b.column ? [b.column] : []) : b.type === 'table' ? [b.column] : []))])];
-  const zone = zoneAt(site.lat, site.lon), quantities = [...new Set(columns.map((c) => c.split('_')[0]))], switches = runSwitches(sim), physical = sim.mode === 'physical';
+  // the switches as the first model ran them: a model over 1M receiver elements runs fewer reflection samples (lib/args.ts simFor)
+  const zone = zoneAt(site.lat, site.lon), quantities = [...new Set(columns.map((c) => c.split('_')[0]))], switches = first.switches ?? runSwitches(sim), physical = sim.mode === 'physical';
   const period = t.mode === 'annual' ? 'Every hour of the weather year' : t.mode === 'instant' ? `${fmtDay(t.date)}, ${fmtClock(t.hour)}`
     : t.from.date === t.to.date ? `${fmtDay(t.from.date)}, ${fmtClock(t.from.hour)} to ${fmtClock(t.to.hour)}, every ${t.stepMin} min`
       : `${fmtDay(t.from.date)} to ${fmtDay(t.to.date)}, each day ${fmtClock(t.from.hour)} to ${fmtClock(t.to.hour)}, every ${t.stepMin} min`;
@@ -220,7 +221,7 @@ function Page(p: ReportInput) {
             {r.blocks.map((b, i) => {
               if (b.type === 'text') return <div key={i} className="stack stack--tight">{b.title && <h3>{b.title}</h3>}<Prose text={b.text} /></div>;
               if (b.type === 'chart') {
-                const spec = chartSpec(b.chart, r), d = chartData(spec, { models, column: b.chart.column!, viz: s.viz, weightsFor: p.weightsFor }), ms = models.filter((m) => spec.models!.includes(m.slot));
+                const spec = chartSpec(b.chart, r), d = chartData(spec, { models, column: b.chart.column!, viz: s.viz }), ms = models.filter((m) => spec.models!.includes(m.slot));
                 return (
                   <figure key={i} className="card stack stack--tight">
                     <Chart d={d} width={W} />

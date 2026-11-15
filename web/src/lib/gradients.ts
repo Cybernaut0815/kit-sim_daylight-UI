@@ -1,5 +1,6 @@
 // Result colour scales: evenly spaced hex stops (matplotlib / Ladybug data colormaps, data not UI chrome), the
 // per-quantity defaults, and the "problem range" that paints values outside [lo, hi] in two user-chosen colours.
+import type { PaintStyle } from 'usd-viewer';
 import type { Settings } from '../store';
 
 export interface Gradient { key: string; label: string; stops: string[] }
@@ -71,6 +72,15 @@ export function svgColor(s: Scale, v: number): string {
   const p = place(s, v);
   return p === 'below' ? s.below : p === 'above' ? s.above : hexAt(s.gradient, p);
 }
+
+/** rgbFor's colours as the viewer's paint draws them on the GPU (usd.paintStyle): the same stops, domain, problem range
+ *  and dimmed bin. */
+export const paintStyleOf = (s: Scale, dim: [number, number] | null): PaintStyle => ({
+  stops: s.gradient.stops, min: s.vmin, max: s.vmax,
+  below: s.lo === null ? null : { value: s.lo, color: s.below },
+  above: s.hi === null ? null : { value: s.hi, color: s.above },
+  band: dim,
+});
 
 /**
  * RGB floats (3 per value) for three.js. With `dim` = [lo, hi) every value outside that bin fades towards grey, so a

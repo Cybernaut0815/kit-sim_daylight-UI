@@ -1,17 +1,17 @@
 // Shell: app bar, inputs panel, the models' views with the run bar, results panel; owns the models (up to four, each in
-// its own USD viewer, its meshes converted once), the per-mesh conversion cache, the runs (one batch per click or Auto,
+// its own USD viewer, its meshes built on demand), the per-mesh builders and content ids, the runs (one batch per click or Auto,
 // the models one after another), the comparison (one colour scale over every model), the theme mode, the view
 // preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras) and the section every view shows.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { Object3D } from 'three';
-import { runRemote, type ObjMesh, type RemoteManifest } from 'daylight-mesh';
+import { runRemote } from 'daylight-mesh';
 import type { LocalFile, SectionGizmo, SectionSource, ViewState } from 'usd-viewer';
 import { Splitter } from './Splitter';
 import type { ChartEdit } from './charts/ChartSettings';
-import { buildArgs, derivedTz, epwRef, noOccludeArgs, validate, weatherLeap } from './lib/args';
+import { buildArgs, derivedTz, epwRef, noOccludeArgs, simFor, validate, weatherLeap } from './lib/args';
 import { zoneAt } from './lib/zone';
-import { extract } from './lib/extract';
+import { extract, jobMeshes, same, type Extracted, type Hashed } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
 import { loadFiles, png } from './lib/loaders';
 import { opticsArgs, readKey, resolveOptics, runSwitches, type TextureStats } from './lib/optics';
@@ -58,9 +58,10 @@ const media = window.matchMedia('(prefers-color-scheme: dark)');
 const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_KEY); return m === 'light' || m === 'dark' ? m : 'auto'; } catch { return 'auto'; } };
 const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths } }; } catch { return UI; } };
 
-// A mesh's conversion, kept with its model's slot; make: an instanced shade, built on first use
-interface Conv { slot: number; obj?: ObjMesh; make?: () => ObjMesh; areas?: Float64Array; vareas?: Float64Array }
-const objOf = (c: Conv) => (c.obj ??= c.make!());
+// A row's mesh, built on demand (lib/extract.ts), with its model's slot; once a run has hashed it, its content id
+type Conv = Hashed & Pick<Extracted, 'make'> & { slot: number };
+/** A mesh's server id or core name (C1: content ids, twins id_2, ...) in a server or core message. */
+const CORE = /[0-9a-f]{64}(?:_\d+)?/g;
 /** A view's model as the app holds it: the viewer's object per row id, the model's own names by prim path (glb / gltf /
  *  obj), a load in progress or its problem, and the open counter (bumped per opened model: the tree resets and the camera
  *  frames; a variant switch keeps both). */
@@ -83,7 +84,7 @@ export default function App() {
     const p = all[slot] ?? NO_PANE;
     return { ...all, [slot]: { ...p, ...(typeof patch === 'function' ? patch(p) : patch) } };
   }), []);
-  const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh (+ areas on demand): converted once, uploaded once, referenced by id
+  const conv = useRef(new Map<string, Conv>()); // row id -> its mesh's builders and, once hashed, its content id
   const dropConv = (slot: number) => { for (const [id, c] of conv.current) if (c.slot === slot) conv.current.delete(id); };
   const abort = useRef<AbortController | null>(null);
   const jobs = useRef<Record<number, AbortController>>({}); // per slot, its job on its way: removing the model ends it
@@ -231,8 +232,8 @@ export default function App() {
     dropConv(slot); // after the awaits: a run started meanwhile still found its meshes
     found.forEach((e, i) => {
       const id = crypto.randomUUID(), name = labels[i], kept = roles ? roles.get(paths[i]) ?? 'none' : lone;
-      // The core names a mesh by its id (--optics ID/SLOT); the label stays the row's.
-      conv.current.set(id, e.obj ? { slot, obj: Object.assign(e.obj, { id, name: id }) } : { slot, make: () => Object.assign(e.make!(), { id, name: id }) });
+      // The row id is the app's; the server and the core name the mesh by its content, per job (jobMeshes).
+      conv.current.set(id, { slot, make: e.make, dmesh: e.dmesh, stamp: e.stamp });
       map.set(id, e.item.object!);
       objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role: kept === 'receiver' && e.instances ? 'none' : kept, materials: e.materials, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
     });
@@ -398,13 +399,7 @@ export default function App() {
     void viewer(slot).el.close().catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- dropConv reads a ref only
 
-  const weightsFor = useCallback((id: string, on: 'faces' | 'vertices') => {
-    const c = conv.current.get(id);
-    if (!c) return undefined;
-    const { positions, indices } = objOf(c);
-    return on === 'faces' ? (c.areas ??= faceAreas(positions, indices)) : (c.vareas ??= vertexAreas(positions, indices));
-  }, []);
-  const meshOf = useCallback((id: string) => { const c = conv.current.get(id); return c && objOf(c); }, []); // a row's mesh as run (model metres, Z up)
+  const meshOf = useCallback((id: string) => conv.current.get(id)?.make(), []); // a row's mesh as run (model metres, Z up), built per call
 
   const s = state.settings;
   // Each run mesh's optics per face slot, and the textures its materials still wait for (the diffuse ones only while the
@@ -429,13 +424,15 @@ export default function App() {
     const slot = state.models[k].slot;
     void readTexture(viewer(slot).el, r).then((t) => { reading.current = false; setTexStats((all) => ({ ...all, [slot]: new Map(all[slot] ?? NO_STATS).set(readKey(r), t) })); });
   }); // every render: cheap when nothing is unread or a read is in flight
-  // Per model: its receivers and shades, its run arguments (the receivers that cast no shade among them), and everything
-  // the server's response cache keys on (an equal key gives an equal result).
+  // Per model: its receivers and shades, their faces or vertices (the rows its run returns), the settings it runs with
+  // (a big model's reflection samples: lib/args.ts simFor), its run arguments (the receivers that cast no shade among
+  // them), and everything the server's response cache keys on (an equal key gives an equal result).
   const epw = epwRef(s), base = buildArgs(s), weather = epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null;
   const per = state.models.map((m, i) => {
     const receivers = m.objects.filter((o) => o.role === 'receiver'), shades = m.objects.filter((o) => o.role === 'shade');
-    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, s.sim), ...noOccludeArgs(receivers, s.sim)];
-    return { m, receivers, shades, args, mesh: JSON.stringify(ids), key: JSON.stringify([args, weather, ...ids]) };
+    const elements = receivers.reduce((n, o) => n + (s.sim.on === 'faces' ? o.tris : o.verts), 0), sim = simFor(s.sim, elements);
+    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, sim), ...noOccludeArgs(receivers, s.sim)];
+    return { m, receivers, shades, elements, sim, args, mesh: JSON.stringify(ids), key: JSON.stringify([args, weather, ...ids]) };
   });
   const meshKeys = useRef<Record<number, string>>({}); // per slot, its receivers and shades now: a job started for others reports nothing
   meshKeys.current = Object.fromEntries(per.map((p) => [p.m.slot, p.mesh]));
@@ -447,7 +444,7 @@ export default function App() {
     if (busy.current) return; // one batch per tab: Auto re-checks when it ends, the button is disabled meanwhile
     const todo = per.filter((p) => p.receivers.length && (!auto || p.key !== lastKey.current[p.m.slot])); // no receiver: not run
     for (const p of todo) lastKey.current[p.m.slot] = p.key;
-    const errors = validate(s, per.some((p) => p.receivers.length > 0), materialsReady);
+    const errors = validate(s, per.some((p) => p.receivers.length > 0), materialsReady, Math.max(0, ...per.map((p) => p.elements)));
     dispatch({ type: 'ERRORS', errors });
     const first = Object.keys(errors)[0];
     if (first) {
@@ -464,7 +461,7 @@ export default function App() {
     const ctrl = new AbortController(), slowT = setTimeout(() => setSlow(true), 300); // an Auto batch that takes a while says so in the Results
     abort.current = ctrl;
     for (const p of todo) dispatch({ type: 'RUN', slot: p.m.slot, run: { status: 'queued', position: 0 } }); // the later ones wait their turn
-    const names = new Map(state.models.flatMap((m) => m.objects.map((o) => [o.id, o.name])));
+    const names = new Map<string, string>(); // a mesh's server id and core name -> its row's name, per job (runBatch runs one at a time)
     try {
       await runBatch(todo.map((p) => {
         const slot = p.m.slot, mine = () => meshKeys.current[slot] === p.mesh; // its model is still the one submitted
@@ -477,20 +474,46 @@ export default function App() {
             const own = (jobs.current[slot] = new AbortController()), off = () => own.abort(); // the batch's cancel, or its model removed
             signal.addEventListener('abort', off);
             try {
+              // C1: content ids (hashed once per row, 8 at a time), core names by them; the args' row ids become those
+              // names (the run key keeps the row ids)
+              const rows = [...p.receivers, ...p.shades], n = p.receivers.length, cs = rows.map((o) => conv.current.get(o.id));
+              if (!cs.every(Boolean)) throw new Error('changed');
+              const { meshes, ids, stems, stamps, hashed } = await jobMeshes(cs as Conv[], n, own.signal);
+              if (!mine()) throw new Error('changed'); // its model or roles changed during a long hash: no job
+              const core = new Map(rows.map((o, k) => [o.id, stems[k]]));
+              names.clear();
+              rows.forEach((o, k) => names.set(stems[k], o.name)); // a twin's id is its first row's core name
+              rows.forEach((o, k) => { if (!names.has(ids[k])) names.set(ids[k], o.name); });
+              let shown = 0; // the upload's progress in the run line, at most 4 times a second
+              const onUpload = (d: number, total: number) => {
+                if (d && d < total && performance.now() - shown < 250) return;
+                shown = performance.now();
+                if (mine() && !own.signal.aborted) dispatch({ type: 'RUN', slot, run: { status: 'queued', position: 0, upload: [d, total] } });
+              };
               const res = await runRemote('', {
-                sensors: p.receivers.map((o) => objOf(conv.current.get(o.id)!)),
-                context: p.shades.map((o) => objOf(conv.current.get(o.id)!)),
-                epw, args: p.args, signal: own.signal, clientId: CLIENT_ID,
-                onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }); },
+                sensors: meshes.slice(0, n), context: meshes.slice(n), onUpload,
+                epw, args: p.args.map((a) => a.replace(UUID, (id) => core.get(id) ?? id)), signal: own.signal, clientId: CLIENT_ID,
+                onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running', progress: job.progress, eta_s: job.eta_s } }); },
               });
               res.manifest.meshes.forEach((g, i) => {
                 const o = p.receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
                 if (!o || g.count !== want) throw new Error(`${o?.name ?? g.name}: the server returned ${g.count} rows, expected ${want}. Reload the model and run again.`);
               });
               if (!mine()) throw new Error('changed'); // its model changed during the job: runBatch ends it idle, never a new model's result
-              const { values_b64: _decoded, ...manifest } = res.manifest as RemoteManifest & { values_b64?: string }; // decoded into values already: not kept twice
-              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, manifest, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
+              // Every element's area, aligned with the rows: the weight of every statistic, chart, tool and export, written
+              // once here instead of per mesh on each use; the last result's when its receivers are these rows, unchanged
+              // (row ids change with any re-read).
+              const was = p.m.result, keep = was?.on === s.sim.on && was.receivers.length === n && p.receivers.every((o, i) => o.id === was.receivers[i]) && !hashed.some((k) => k < n);
+              const weights = keep ? was.weights : new Float32Array(res.manifest.meshes.reduce((a, g) => a + g.count, 0));
+              if (!keep) res.manifest.meshes.forEach((g, i) => {
+                const c = conv.current.get(p.receivers[i].id);
+                if (!c || !same(stamps[i], c.stamp())) throw new Error('changed'); // re-read, or changed since sent: ended idle as above
+                const { positions, indices } = c.make(); // one receiver at a time
+                weights.set((s.sim.on === 'faces' ? faceAreas : vertexAreas)(positions, indices), g.first);
+              });
+              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(p.sim) } } });
             } finally {
+              own.abort(); // the run is over: a PUT still on its way after another failed stops (and reports no progress)
               signal.removeEventListener('abort', off);
               if (jobs.current[slot] === own) delete jobs.current[slot];
             }
@@ -498,8 +521,8 @@ export default function App() {
         };
       }), ctrl.signal, (slot, end) => {
         if (end === 'idle') lastKey.current[slot] = null; // cancelled or changed: the same inputs may run again (Auto included)
-        // The server and the core name a mesh by its id: say the row's name (a job id matches no row and stays)
-        dispatch({ type: 'RUN', slot, run: end === 'idle' ? { status: 'idle' } : { status: 'error', message: end.message.replace(UUID, (id) => names.get(id) ?? id) } });
+        // The server and the core name a mesh by its content id or core name: say the row's name (a job id stays)
+        dispatch({ type: 'RUN', slot, run: end === 'idle' ? { status: 'idle' } : { status: 'error', message: end.message.replace(CORE, (t) => names.get(t) ?? t) } });
       });
     } finally {
       busy.current = false;
@@ -553,7 +576,9 @@ export default function App() {
   const staleKey = stale.map(Number).join('');
   const compared = useMemo<Compared[]>(() => state.models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [state.models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves
   const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = state.models[ai], ap = panes[am.slot] ?? NO_PANE;
-  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ result: RunResult; message: string } | null>(null); // one download at a time; its error is its result's
+  // one download at a time; its error is its result's, by run key (holding the result itself would keep a replaced one's
+  // values alive)
+  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ key: string; message: string } | null>(null);
   const onDownload = useCallback(async (format: Format, mode: ExportMode) => {
     const picked = model.current[am.slot]?.picked, col = cols[ai], result = am.result;
     if (!result || col < 0 || !picked) return;
@@ -561,15 +586,15 @@ export default function App() {
     setExportError(null);
     try {
       await download(format, mode, {
-        usd: viewer(am.slot).el, result, objects: am.objects, meshes: ap.meshes, column: col, model: picked, weightsFor,
+        usd: viewer(am.slot).el, result, objects: am.objects, meshes: ap.meshes, column: col, model: picked,
         scales: result.columns.map((c) => scaleFor(c, unionRange(results, c), s.viz)), // the colours on screen: one scale over every model
       });
     } catch (e) {
-      setExportError({ result, message: (e as Error).message });
+      setExportError({ key: result.key, message: (e as Error).message });
     } finally {
       setExporting(false);
     }
-  }, [am, ai, ap.meshes, cols[ai], results, s.viz, weightsFor]); // eslint-disable-line react-hooks/exhaustive-deps -- cols by its active entry
+  }, [am, ai, ap.meshes, cols[ai], results, s.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- cols by its active entry
   const probed: Model | undefined = state.probe ? state.models.find((m) => m.objects.some((o) => o.id === state.probe!.id)) : undefined; // its tip only in its own view
   const probeLabel = state.probe && probed && shown
     ? `${probed.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(shown).value}`
@@ -587,7 +612,7 @@ export default function App() {
   useLayoutEffect(() => {
     ctl.current = {
       state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection: (s) => onSection(s, null), views, setViews, optics, materialsReady, per, shown, scale, domain,
-      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, weightsFor, meshOf,
+      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, meshOf,
       busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
       variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
     };
@@ -656,7 +681,7 @@ export default function App() {
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={(s) => onSection(s, null)} />
                     <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
-                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
+                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports; a generation's failure shows as its lastError */}
                     {reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}
                   </div>
@@ -684,7 +709,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} reports={reports} reportError={reportError} onReportChart={onReportChart} />
+              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} dispatch={dispatch} reports={reports} reportError={reportError} onReportChart={onReportChart} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

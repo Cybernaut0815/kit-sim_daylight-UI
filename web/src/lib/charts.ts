@@ -89,35 +89,36 @@ export function putChart(charts: readonly ChartSpec[], raw: unknown): ChartSpec[
   return there ? charts.map((x) => (x.id === c.id ? c : x)) : [...charts, c];
 }
 
-export type WeightsFor = (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
 export interface Markers { mean: number; median: number; p10: number; p90: number }
-export interface Row { id: string; name: string; g: RunResult['manifest']['meshes'][number]; w: ArrayLike<number>; stats: Stats }
+/** A receiver's rows in a result: `w` its element areas (a view of RunResult.weights, index 0 at row g.first). */
+export interface Row { id: string; name: string; g: RunResult['manifest']['meshes'][number]; w: Float32Array; stats: Stats }
 export interface Data { r: RunResult; col: number; rows: Row[]; total: number; cum: Cumulative; markers: Markers; bins: number; step: number }
 
 // Per result, column and receiver subset: cumulative() sorts every element, and a selection or a run status re-renders
 // the panel; a result's rows never change while it lives (a load, a re-read or a role change drops it).
 const cache = new WeakMap<RunResult, Map<string, Data>>();
 /** A result's receiver rows (every one, or those in `ids`) in one column: their stats, the cumulative area, the markers. */
-export function dataOf(r: RunResult, col: number, objects: readonly ObjectRow[], weightsFor: WeightsFor, ids?: readonly string[]): Data {
+export function dataOf(r: RunResult, col: number, objects: readonly ObjectRow[], ids?: readonly string[]): Data {
   let held = cache.get(r);
   if (!held) cache.set(r, (held = new Map()));
   const key = `${col} ${ids ? ids.join() : '*'}`, hit = held.get(key);
   if (hit) { held.delete(key); held.set(key, hit); return hit; } // the most recently used last
-  const keep = ids && new Set(ids), groups = r.manifest.meshes;
+  const keep = ids && new Set(ids), groups = r.manifest.meshes, values = r.data[col], names = new Map(objects.map((o) => [o.id, o.name]));
   const rows = r.receivers.flatMap((id, i) => {
     if (keep && !keep.has(id)) return [];
-    const o = objects.find((x) => x.id === id), g = groups[i], w = weightsFor(id, r.on) ?? new Float64Array(g.count).fill(1);
-    return [{ id, name: o?.name ?? g.name, g, w, stats: columnStats(r.values, col, g, w) }];
+    const g = groups[i], w = r.weights.subarray(g.first, g.first + g.count);
+    return [{ id, name: names.get(id) ?? g.name, g, w, stats: columnStats(values, g, w) }];
   });
   const total = rows.reduce((s, x) => s + x.stats.total, 0), area = rows.reduce((s, x) => s + x.stats.area, 0);
-  const cum = cumulative(r.values, col, rows.map((x) => x.g), rows.map((x) => x.w));
+  const cum = cumulative(values, rows.map((x) => x.g), rows.map((x) => x.w));
   const bins = Math.min(64, Math.max(12, Math.round(1.5 * Math.sqrt(cum.v.length)))); // more detail with more elements
   const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
   const d = { r, col, rows, total, cum, markers, bins, step: stepOf(cum.v) };
   held.set(key, d);
-  // ponytail: per result at most 3 full columns' worth of elements (16 B each), least recent out; raise it if many charts thrash it
-  const full = groups.reduce((n, g) => n + g.count, 0), size = () => [...held.values()].reduce((n, x) => n + x.cum.v.length, 0);
-  while (held.size > 1 && size() > 3 * full) held.delete(held.keys().next().value!);
+  // ponytail: per result at most 3 full columns' worth of elements (12 B each), and over 1M rows 2 entries (0.2 GB each
+  // at 17M rows), least recent out; raise it if many charts thrash it
+  const full = r.weights.length, size = () => [...held.values()].reduce((n, x) => n + x.cum.v.length, 0);
+  while (held.size > 1 && size() > (full > 1e6 ? 2 : 3) * full) held.delete(held.keys().next().value!); // by elements: a whole column beside small parts subsets
   return d;
 }
 
@@ -128,6 +129,10 @@ export function stepOf(v: ArrayLike<number>): number {
   let q = Infinity;
   for (let i = 1; i < v.length; i++) { const d = v[i] - v[i - 1]; if (d > 1e-6 * span && d < q) q = d; }
   if (!(q < Infinity) || span / q > 1000) return 0;
+  // the step over the whole span: a neighbour difference of float32 values (results are float32) can be off by an ulp
+  // of the largest, which v / q multiplies by the steps counted (up to 1000) past the 1e-3 below; the span's own
+  // rounding is spread over all of them
+  q = span / Math.round(span / q);
   for (let i = 0; i < v.length; i++) if (Math.abs(v[i] / q - Math.round(v[i] / q)) > 1e-3) return 0;
   return q;
 }
@@ -136,7 +141,6 @@ export interface ChartInput {
   models: readonly Pick<Model, 'slot' | 'objects' | 'result'>[]; // every open model: the colour scale spans them all
   column: string; // the column shown: a spec without its own draws it
   viz: Settings['viz'];
-  weightsFor: WeightsFor;
 }
 type Common = { scale: Scale; unit: string; grid: boolean };
 /** What a chart draws, its look's defaults filled in; several of its models open: a series / curve / bar per model with
@@ -153,7 +157,7 @@ export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
   const scale = scaleFor(column, unionRange(results, column), input.viz), unit = unitFor(column).value, grid = spec.grid ?? true;
   const mine = input.models.filter((m) => !spec.models || spec.models.includes(m.slot)), ms = mine.filter((m) => m.result?.columns.includes(column));
   if (!ms.length) return { kind: 'empty', reason: 'No result for this column' };
-  const data = (m: (typeof ms)[number], ids?: readonly string[]) => dataOf(m.result!, m.result!.columns.indexOf(column), m.objects, input.weightsFor, ids);
+  const data = (m: (typeof ms)[number], ids?: readonly string[]) => dataOf(m.result!, m.result!.columns.indexOf(column), m.objects, ids);
 
   if (spec.kind === 'parts') { // a row per prim path (matched across models), a bar per model
     const metric = spec.metric ?? 'mean', all = ms.map((m) => ({ m, d: data(m) })), pathOf = new Map(ms.flatMap((m) => m.objects.map((o) => [o.id, o.path] as const)));
@@ -163,7 +167,7 @@ export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
       name: names[i] || path, path,
       bars: all.map(({ m, d }) => {
         const under = new Set(idsUnder([path], m.objects)), rows = d.rows.filter((x) => under.has(x.id));
-        return { slot: m.slot, v: rows.length ? summarize(d.r.values, d.col, rows.map((x) => x.g), rows.map((x) => x.w), scale.lo, scale.hi)[metric] : NaN };
+        return { slot: m.slot, v: rows.length ? summarize(d.r.data[d.col], rows.map((x) => x.g), rows.map((x) => x.w), scale.lo, scale.hi)[metric] : NaN };
       }),
     }));
     // the value axis: shares 0 to 1; else as set, the colour scale, or from 0 to the largest bar (absolute, and the
@@ -192,7 +196,7 @@ export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
       span = [lo, lo + bins * k * q];
     }
   }
-  const hs = ds.map(({ d }) => histogram(d.r.values, d.col, d.rows.map((x) => x.g), d.rows.map((x) => x.w), bins, span));
+  const hs = ds.map(({ d }) => histogram(d.r.data[d.col], d.rows.map((x) => x.g), d.rows.map((x) => x.w), bins, span));
   return {
     kind: 'histogram', scale, unit, grid, show, height: spec.height ?? 200, edges: hs[0].edges, shares: hs[0].shares, counts: hs[0].counts, markers: first.markers,
     below: hs[0].below, above: Math.max(...hs.map((h) => h.above)), // several: the largest share above of any (the last bin's hover stops at the top)

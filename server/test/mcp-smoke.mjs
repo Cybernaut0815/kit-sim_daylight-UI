@@ -1,4 +1,6 @@
-// Smoke test of daylight_server --mcp in Claude-only mode (no app tab): the agent routes off without --mcp; the
+// Smoke test of daylight_server: the job API on a plain server (a job that fails in the core fails alone, the next
+// runs, an identical request is a cache hit, finished jobs go after their TTL); then --mcp in Claude-only mode (no app
+// tab): the agent routes off without --mcp; the
 // local-only gate; the MCP handshake; the fixture (building.usda) walked through tools/call in the hidden instance the
 // server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only; a shot's own), a
 // parts chart, a receiver that casts no shade (set_roles shade false), and guide 'report''s two example reports generated
@@ -26,7 +28,7 @@ if (!opt.web || !existsSync(exe)) {
   process.exit(2);
 }
 const web = resolve(opt.web), OFF = Number(opt.port), ON = OFF + 1, cache = mkdtempSync(join(tmpdir(), 'mcp-smoke-')), t0 = Date.now();
-const BUILDING = join(here, 'building.usda'), FAC = [...'NESW'].map((s) => `/Site/Block/Facade_${s}`).concat('/Site/Block/Roof');
+const TWINS = join(here, 'twins.usda'), BUILDING = join(here, 'building.usda'), FAC = [...'NESW'].map((s) => `/Site/Block/Facade_${s}`).concat('/Site/Block/Roof');
 const NAMES = JSON.parse(readFileSync(join(here, '../mcp.json'), 'utf8')).tools.map((t) => t.name);
 const JSONH = { 'Content-Type': 'application/json' }, PING = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), brief = (s) => s.replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -107,14 +109,91 @@ process.on('SIGINT', () => process.exit(130));
 
 console.log(`daylight_server ${exe}\napp ${web}\nports ${OFF} (agent routes off) and ${ON} (--mcp), cache ${cache}`);
 
-// 1. Without --mcp every agent route answers 404
+// 1. Without --mcp every agent route answers 404. This plain server also takes the job API steps, and stays up until the
+// end so its finished jobs can outlive their 1-minute TTL meanwhile.
+let off, lastJob = 0;
 await part('off', async () => {
-  const off = await start(OFF, []);
+  off = await start(OFF, ['--job-ttl-min', '1']);
   for (const [method, path] of [['POST', '/mcp'], ['GET', '/bridge/next'], ['GET', '/files?path=C:/x.usda'], ['GET', '/reports'], ['GET', '/session']]) {
     const r = await http(OFF, method, path, method === 'POST' ? { headers: JSONH, body: PING } : {});
     check(`off: ${method} ${path} -> 404`, r.status === 404, `${r.status} ${brief(r.text)}`);
   }
-  await stop(off);
+});
+
+// A 10 m roof quad facing up as a .dmesh, from x = x0: "DLM1", flags, n_points, n_faces, n_indices, xyz float64, counts,
+// indices int32.
+function quad(x0 = 0) {
+  const b = Buffer.alloc(32 + 4 * 24 + 4 + 16);
+  b.write('DLM1', 0, 'ascii'); b.writeBigUInt64LE(4n, 8); b.writeBigUInt64LE(1n, 16); b.writeBigUInt64LE(4n, 24);
+  [[x0, 0, 3], [x0 + 10, 0, 3], [x0 + 10, 10, 3], [x0, 10, 3]].flat().forEach((v, i) => b.writeDoubleLE(v, 32 + 8 * i));
+  b.writeInt32LE(4, 128);
+  [0, 1, 2, 3].forEach((v, i) => b.writeInt32LE(v, 132 + 4 * i));
+  return b;
+}
+/** POST /run (multipart) with sensor (and context) mesh ids and CLI args: {status, text}. */
+async function runSync(port, sensors, args, context = []) {
+  const fd = new FormData();
+  for (const s of sensors) fd.append('sensors', s);
+  for (const c of context) fd.append('context', c);
+  for (const a of args) fd.append('args', a);
+  const r = await fetch(`http://127.0.0.1:${port}/run`, { method: 'POST', body: fd });
+  return { status: r.status, text: await r.text() };
+}
+
+// 1b. The job API: a failing job fails alone (the server stays up and takes the next), an identical request is a cache hit
+if (off) await part('api', async () => {
+  const put = await http(OFF, 'PUT', '/mesh/smoke-quad', { headers: { 'Content-Type': 'application/octet-stream' }, body: quad() });
+  check('api: PUT /mesh/smoke-quad -> 204', put.status === 204, `${put.status} ${brief(put.text)}`);
+  const miss = await http(OFF, 'POST', '/meshes/missing', { headers: JSONH, body: JSON.stringify({ ids: ['nope-1', 'smoke-quad', 'nope-2'] }) });
+  check('api: /meshes/missing names the unknown ids in order', miss.status === 200 && JSON.stringify(parse(miss).missing) === '["nope-1","nope-2"]', `${miss.status} ${brief(miss.text)}`);
+  const NOON = ['--quantity', 'sunhours', '--lat', '51.5', '--lon', '0', '--tz', '0', '--time', '06-21T12:00'];
+  const bad = await runSync(OFF, ['smoke-quad'], [...NOON, '--no-occlude', 'nosuchmesh']);
+  check('api: a job that fails in the core -> 500, with the reason', bad.status === 500 && /no mesh of that name/.test(bad.text), `${bad.status} ${brief(bad.text)}`);
+  const ok = await runSync(OFF, ['smoke-quad'], NOON), again = await runSync(OFF, ['smoke-quad'], NOON);
+  lastJob = Date.now();
+  check('api: the next job runs -> 200 with values', ok.status === 200 && /"values_b64"/.test(ok.text), `${ok.status} ${brief(ok.text)}`);
+  const okJson = ok.status === 200 ? JSON.parse(ok.text) : {};
+  check('api: a run reports where its time went', okJson.timing?.traceMs > 0 && okJson.gpu?.rays > 0 && okJson.timing.totalMs > 0,
+    brief(JSON.stringify({ timing: okJson.timing, gpu: okJson.gpu })));
+  check('api: the same request again -> cache hit', again.status === 200 && /"response": "hit"/.test(again.text), `${again.status} ${brief(again.text.slice(again.text.indexOf('"cache"')))}`);
+  const h = parse(await http(OFF, 'GET', '/health'));
+  check('api: /health ok after a failed job', h.status === 'ok' && h.jobs_retained >= 1, JSON.stringify(h));
+  // without bounces or transmission the scene is the set of meshes, whichever of them receive: swapped roles reuse it
+  const put2 = await http(OFF, 'PUT', '/mesh/smoke-quad-2', { headers: { 'Content-Type': 'application/octet-stream' }, body: quad(20) });
+  const ab = await runSync(OFF, ['smoke-quad'], NOON, ['smoke-quad-2']), ba = await runSync(OFF, ['smoke-quad-2'], NOON, ['smoke-quad']);
+  check('api: sensor and context swapped -> the scene is reused', put2.status === 204 && ab.status === 200 && /"scene": "built"/.test(ab.text) && ba.status === 200 && /"scene": "reused"/.test(ba.text),
+    `${put2.status}; ${ab.status} ${brief(ab.text.slice(ab.text.indexOf('"cache"')))}; ${ba.status} ${brief(ba.text.slice(ba.text.indexOf('"cache"')))}`);
+
+  // binary values: a job's JSON links them (no values_b64 unless ?inline=1); GET .../values is float32 column-major,
+  // equal to the inline values (float64 row-major) rounded to float32; ?col=k is one column
+  const fd = new FormData();
+  fd.append('sensors', 'smoke-quad');
+  for (const a of [...NOON, '--sides', 'both']) fd.append('args', a);
+  const sub = await (await fetch(`http://127.0.0.1:${OFF}/jobs`, { method: 'POST', body: fd })).json();
+  let job = sub;
+  for (let k = 0; k < 10 && !['done', 'error', 'cancelled'].includes(job.state); k++) job = parse(await http(OFF, 'GET', `/jobs/${sub.id}?wait=25`));
+  check('api: a done job links its values, no values_b64', job.state === 'done' && job.values?.url === `/jobs/${sub.id}/values` && job.rows === 1 && job.cols === 2 && !('values_b64' in job),
+    brief(JSON.stringify({ state: job.state, values: job.values, rows: job.rows, cols: job.cols, b64: 'values_b64' in job })));
+  const inl = parse(await http(OFF, 'GET', `/jobs/${sub.id}?inline=1`)), b64 = Buffer.from(inl.values_b64 ?? '', 'base64');
+  const rowMajor = Array.from({ length: b64.length / 8 }, (_, i) => b64.readDoubleLE(8 * i)); // [rows x cols]
+  const bin = await http(OFF, 'GET', `/jobs/${sub.id}/values`), col1 = await http(OFF, 'GET', `/jobs/${sub.id}/values?col=1`);
+  const f32 = (b) => Array.from({ length: b.length / 4 }, (_, i) => b.readFloatLE(4 * i));
+  const colMajor = f32(bin.body), want = [0, 1].flatMap((c) => [Math.fround(rowMajor[c])]); // 1 row: column c is value c
+  check('api: /values = float32 column-major of the inline values', bin.status === 200 && bin.body.length === 8 && JSON.stringify(colMajor) === JSON.stringify(want),
+    `${bin.status} ${bin.body.length} B ${JSON.stringify(colMajor)} vs ${JSON.stringify(want)}`);
+  check('api: /values?col=1 is column 1', col1.status === 200 && JSON.stringify(f32(col1.body)) === JSON.stringify([want[1]]), `${col1.status} ${JSON.stringify(f32(col1.body))}`);
+
+  // POST /run answers its values inline: a result over 4,194,304 values is refused before it is queued (a 1000 x 1000
+  // quad grid named five times = 5M rows; never traced)
+  const n = 1000, g = Buffer.alloc(32 + (n + 1) * (n + 1) * 24 + n * n * 20);
+  g.write('DLM1', 0, 'ascii'); g.writeBigUInt64LE(BigInt((n + 1) * (n + 1)), 8); g.writeBigUInt64LE(BigInt(n * n), 16); g.writeBigUInt64LE(BigInt(4 * n * n), 24);
+  let o = 32;
+  for (let y = 0; y <= n; y++) for (let x = 0; x <= n; x++, o += 24) { g.writeDoubleLE(x, o); g.writeDoubleLE(y, o + 8); g.writeDoubleLE(0, o + 16); }
+  for (let f = 0; f < n * n; f++, o += 4) g.writeInt32LE(4, o);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) for (const [dx, dy] of [[0, 0], [1, 0], [1, 1], [0, 1]]) { g.writeInt32LE((y + dy) * (n + 1) + x + dx, o); o += 4; }
+  const putGrid = await http(OFF, 'PUT', '/mesh/smoke-grid', { headers: { 'Content-Type': 'application/octet-stream' }, body: g });
+  const big = await runSync(OFF, Array(5).fill('smoke-grid'), NOON);
+  check('api: POST /run over the inline cap -> 413', putGrid.status === 204 && big.status === 413 && /POST \/jobs/.test(big.text), `${putGrid.status}; ${big.status} ${brief(big.text)}`);
 });
 
 // 2. With --mcp: this machine only, then MCP over HTTP
@@ -263,6 +342,27 @@ if (on) await part('walk', async () => {
   await step('save_report with a stale updated -> refused', 'save_report', { spec: one, updated: '2000-01-01T00:00:00.000Z' }, (r) => r.err && /changed in the app since/.test(r.text));
   await step(`delete_report ${one.id}`, 'delete_report', { id: one.id });
   await step(`get_report ${one.id} after it -> isError`, 'get_report', { id: one.id }, (r) => r.err);
+
+  // C1 content ids, in A after everything above: twin receivers (the same bytes, one id) with optics of their own run
+  // with reflections (the core sees h/0 and h_2/0); a twin as the shade of the other runs under a salted id; the same
+  // file read again (new rows, the same bytes and args) is answered from the server's response cache
+  const twins = async () => {
+    await step('open_model twins.usda -> A', 'open_model', { paths: [TWINS], model: 'A' }, (r) => r.json?.model === 'A');
+    await step('set_roles /Twins/A and /Twins/B receiver', 'set_roles', { model: 'A', paths: ['/Twins/A', '/Twins/B'], role: 'receiver' });
+  };
+  await twins();
+  await step('update_settings: radiation, physical, 1 bounce of 64 samples', 'update_settings', { sim: { quantities: ['radiation'], mode: 'physical', bounces: 1, bounceSamples: 64 } });
+  run = await again('run', {}, running);
+  const tw = (await tool('results', { models: ['A'], column: 'radiation_front' })).json?.models?.[0], twArgs = tw?.run?.args?.join(' ') ?? '';
+  check('twin receivers with optics of their own run with --bounces 1 (core names h and h_2)', done(run) && /--optics \S*\/Twins\/A\/0=\S*\/Twins\/B\/0=/.test(twArgs) && tw?.rows?.length !== 0,
+    `${brief(run.text)}; ${/--optics \S+/.exec(twArgs)?.[0] ?? 'no --optics'}`);
+  await step('set_roles /Twins/B shade', 'set_roles', { model: 'A', paths: ['/Twins/B'], role: 'shade' });
+  run = await again('run', {}, running);
+  check('a shade with the bytes of a receiver runs (its id salted)', done(run), brief(run.text));
+  await twins();
+  run = await again('run', {}, running);
+  const hit = (await tool('results', { models: ['A'], column: 'radiation_front' })).json?.models?.[0]?.run?.cache;
+  check('the same model read again runs from the response cache (content ids)', done(run) && hit?.response === 'hit', `${brief(run.text)}; cache ${JSON.stringify(hit)}`);
 });
 
 // 4. Claude Desktop's relay: stdin lines in, the same answers out; a notification gets none
@@ -280,6 +380,13 @@ if (on) await part('stdio', async () => {
   check('stdio: initialize answers as POST /mcp', JSON.stringify(answer(1)) === await viaHttp(init), brief(JSON.stringify(answer(1)) ?? 'no answer'));
   check('stdio: tools/list answers as POST /mcp', JSON.stringify(answer(2)) === await viaHttp(list), `${answer(2)?.result?.tools?.length ?? 0} tools`);
   check('stdio: no answer to a notification', lines.length === 2, `${lines.length} lines out for 3 in`);
+});
+
+// 5. The plain server's finished jobs go once their TTL (1 min) has passed
+if (off && lastJob) await part('retention', async () => {
+  await sleep(Math.max(0, lastJob + 62e3 - Date.now()));
+  const h = parse(await http(OFF, 'GET', '/health'));
+  check('retention: finished jobs dropped after their TTL', h.jobs_retained === 0, JSON.stringify(h));
 });
 
 for (const p of servers) await stop(p);

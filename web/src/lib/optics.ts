@@ -193,8 +193,9 @@ export function derive(net: MaterialNetwork | undefined, stats: ReadonlyMap<stri
   return clamp({ rho: albedo, tau: 0, kind: 'opaque', source: 'derived' });
 }
 
-/** A mesh of the run: `id` is its core name (the App names run meshes by their ids); `optics[k]` is face slot k's, for
- *  every slot up to its highest face slot (the core refuses a slot past it). */
+/** A mesh of the run: `id` is its row id, which the App sends as the mesh's core name (lib/extract.ts jobMeshes: twins
+ *  become h, h_2, since the core refuses a NAME/SLOT row given twice); `optics[k]` is face slot k's, for every slot up to
+ *  its highest face slot (the core refuses a slot past it). */
 export interface RunMesh { id: string; role: Role; optics: readonly Optics[] }
 
 /** A Materials-table edit, by key: a material's prim path, or a default row's DEFAULT_KEY / GLASS_KEY (no '/'). */

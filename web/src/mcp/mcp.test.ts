@@ -173,7 +173,7 @@ describe('results by facing', () => {
     [[0, 0, 6], [10, 0, 6], [10, 20, 6], [0, 20, 6]], // +Z
   ];
   const one = { first: 0, count: 10, positions: quads.flat(2), indices: quads.flatMap((_, k) => [0, 1, 2, 0, 2, 3].map((i) => 4 * k + i)), w: Array.from({ length: 10 }, (_, f) => f + 1) };
-  const values = Array.from({ length: 10 }, (_, f) => Float64Array.of(f)), sides = (r: ReturnType<typeof bySide>) => r.map((g) => `${g.facing} ${g.rows.map((x) => x[0]).join()} ${g.w.join()}`);
+  const values = Array.from({ length: 10 }, (_, f) => f), sides = (r: ReturnType<typeof bySide>) => r.map((g) => `${g.facing} ${g.values.join()} ${g.w.join()}`); // face f's value: f
   it('faces of a single-mesh model by the side they face, in compass order; north turns them; a back column faces the other way', () => {
     expect(sides(bySide(values, [one], 'faces', 0, false))).toEqual(['N 6,7 7,8', 'E 2,3 3,4', 'S 4,5 5,6', 'W 0,1 1,2', 'up 8,9 9,10']);
     expect(sides(bySide(values, [one], 'faces', 90, false)).map((g) => g.split(' ').slice(0, 2).join(' '))).toEqual(['N 0,1', 'E 6,7', 'S 2,3', 'W 4,5', 'up 8,9']); // north 90: model -X
@@ -182,7 +182,7 @@ describe('results by facing', () => {
   it('vertices along their faces\' normals, rows from each mesh\'s first; a degenerate element is left out', () => {
     const wall = { first: 0, count: 4, positions: quads[1].flat(), indices: [0, 1, 2, 0, 2, 3], w: [1, 1, 1, 1] };
     const roof = { first: 4, count: 5, positions: [...quads[4].flat(), 5, 5, 6], indices: [0, 1, 2, 0, 2, 3], w: [2, 2, 2, 2, 2] }; // vertex 4: on no face
-    const rows = Array.from({ length: 9 }, (_, i) => Float64Array.of(i));
+    const rows = Array.from({ length: 9 }, (_, i) => i);
     expect(sides(bySide(rows, [wall, roof], 'vertices', 0, false))).toEqual(['E 0,1,2,3 1,1,1,1', 'up 4,5,6,7 2,2,2,2']);
   });
 });

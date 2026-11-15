@@ -88,7 +88,7 @@ export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch
             <select className="select" id="bounce-samples" value={sim.bounceSamples} disabled={sim.mode === 'ladybug' || !sim.bounces} onChange={(e) => set({ bounceSamples: Number(e.target.value) })}>
               {SAMPLES.map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
-            <span className="field__help">With Reflections: paths per sensor. Noise falls as 1 / √samples; raise them for a single instant or small differences.</span>
+            <span className="field__help">With Reflections: paths per sensor. Noise falls as 1 / √samples; raise them for a single instant or small differences. The default 1024 runs as 256 on a model over 1,000,000 receiver faces or vertices.</span>
           </div>
           <label className="slider-row">
             <span>Ground reflectance</span>

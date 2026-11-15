@@ -86,10 +86,9 @@ describe('viewDir', () => {
 describe('findCritical', () => {
   const mesh = (on: 'faces' | 'vertices', per: number): CriticalMesh[] =>
     BLOCK.map((q, k) => ({ ...q, first: per * k, count: per, w: (on === 'faces' ? faceAreas : vertexAreas)(q.positions, q.indices) }));
-  const rows = (v: number[]) => v.map((x) => Float64Array.of(x));
   // sun hours per face (two a wall); below 2 h: all of Facade_N, half the roof, half of Facade_W
-  const hours = rows([0.5, 1, 8, 8, 1, 3, 4, 4, 10, 1.5]);
-  const run = (column: string) => findCritical({ values: hours, col: 0, column, on: 'faces', meshes: mesh('faces', 2), north: 90, mpu: 1, below: 2 });
+  const hours = [0.5, 1, 8, 8, 1, 3, 4, 4, 10, 1.5];
+  const run = (column: string) => findCritical({ values: hours, column, on: 'faces', meshes: mesh('faces', 2), north: 90, mpu: 1, below: 2 });
   it('groups the problem by mesh and facing (north 90), largest first; areas, shares, a view from where it faces', () => {
     const r = run('sunhours_front');
     expect([r.problemArea, r.problemShare]).toEqual([250, 250 / 560]);
@@ -107,8 +106,8 @@ describe('findCritical', () => {
   });
   it('a back-side column faces the other way; vertices face as their faces do', () => {
     expect(run('sunhours_back').clusters.map((c) => [c.path, c.facing])).toEqual([['/Site/Block/Facade_N', 'S'], ['/Site/Block/Roof', 'down'], ['/Site/Block/Facade_W', 'E']]);
-    const corners4 = rows(BLOCK.flatMap((q) => Array<number>(4).fill(q.name === 'Facade_N' ? 0 : 5)));
-    const v = findCritical({ values: corners4, col: 0, column: 'sunhours_front', on: 'vertices', meshes: mesh('vertices', 4), north: 90, mpu: 1, below: 2 });
+    const corners4 = BLOCK.flatMap((q) => Array<number>(4).fill(q.name === 'Facade_N' ? 0 : 5));
+    const v = findCritical({ values: corners4, column: 'sunhours_front', on: 'vertices', meshes: mesh('vertices', 4), north: 90, mpu: 1, below: 2 });
     expect(v.clusters.map((c) => [c.path, c.facing, c.area, c.share])).toEqual([['/Site/Block/Facade_N', 'N', 120, 1]]);
   });
 });

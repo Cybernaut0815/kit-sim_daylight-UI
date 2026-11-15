@@ -1,6 +1,7 @@
+import { crc32 } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { unzipSync } from 'three/addons/libs/fflate.module.js';
-import { freeName, overlay, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh } from './usdexport';
+import { freeName, overlay, overlayArrays, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh } from './usdexport';
 import { usdz } from './usdz';
 
 // A quad (corners 0 1 2 3) and a triangle (1 4 2) as the viewer draws them: the quad fanned into two triangles.
@@ -75,11 +76,33 @@ describe('variantsSpec', () => {
     expect([spec.selection, spec.material, spec.geometryRoot]).toEqual(['direct_front', '/Daylight/Result', '/Daylight_Geometry']);
     expect(spec.prims[0].geometry).toBeUndefined();
     expect(spec.prims[1].geometry!.map((a) => a.name)).toEqual(['points', 'faceVertexCounts', 'faceVertexIndices', 'extent', 'orientation', 'subdivisionScheme']);
-    const colour = spec.prims[0].variants[1].primvars[0];
+    const colour = spec.prims[0].variants![1].primvars[0];
     expect([colour.name, colour.interpolation, [...floats.subarray(colour.data![0], colour.data![0] + colour.data![1])]]).toEqual(['primvars:displayColor', 'uniform', [0, 0, 1, 1, 1, 1]]);
     const counts = spec.prims[1].geometry![1];
     expect([...ints.subarray(counts.data![0], counts.data![0] + counts.data![1])]).toEqual([3]);
     expect(spec.usda).toContain('def Material "Result"');
+  });
+});
+
+describe('overlay as usdc (flatten: false)', () => {
+  it('the text keeps the prims, bindings and subsets, the arrays go to the core as slices: shown colours, every value', () => {
+    const geometry = { points: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0), normals: null, counts: Int32Array.of(3), indices: Int32Array.of(0, 1, 2) };
+    const meshes = [mesh('/World/Box'), mesh('/World/Cone', geometry)];
+    const text = overlay({ meta: ['upAxis = "Z"'], subLayers: ['./scene.usda'], root: 'Daylight', meshes, shown: 1, arrays: false }).join('');
+    expect(text).toContain('@./scene.usda@');
+    expect(text).toContain('rel material:binding = </Daylight/Result>');
+    expect(text).toContain('over Mesh "Cone"');
+    expect(text).not.toMatch(/\[\] (primvars:displayColor|primvars:daylight_|points|faceVertex)/); // no array is authored
+    const { prims, floats, ints } = overlayArrays(meshes, 1);
+    const slice = (d: [number, number]) => [...floats.subarray(d[0], d[0] + d[1])];
+    expect(prims.map((p) => [p.path, p.geometry!.map((a) => a.name), p.primvars!.map((a) => a.name)])).toEqual([
+      ['/World/Box', [], ['primvars:displayColor', 'primvars:daylight_radiation_front', 'primvars:daylight_direct_front']],
+      ['/World/Cone', ['points', 'faceVertexCounts', 'faceVertexIndices', 'extent'], ['primvars:displayColor', 'primvars:daylight_radiation_front', 'primvars:daylight_direct_front']],
+    ]);
+    expect(slice(prims[0].primvars![0].data!)).toEqual([0, 0, 1, 1, 1, 1]); // the shown column's colours
+    expect(slice(prims[0].primvars![1].data!)).toEqual([1, NaN]);
+    expect([...ints]).toEqual([1 * 3, 0, 1, 2]);
+    expect(floats.length).toBe(2 * (6 + 4) + 9 + 6); // per mesh colours + values, the cone's points and extent: no slack
   });
 });
 
@@ -93,19 +116,24 @@ describe('overlay for one flattened file', () => {
 
 describe('helpers', () => {
   it('freeName', () => expect(freeName('Daylight', ['Daylight', 'Daylight_2'])).toBe('Daylight_3'));
-  it('usdz: stored files, data 64-byte aligned, the root layer first', () => {
-    const files: [string, Uint8Array][] = [['root.usdc', new TextEncoder().encode('PXR-USDC')], ['tex/a.png', new Uint8Array(100).fill(7)], ['b.usda', new Uint8Array(3)]];
-    const zip = usdz(files), view = new DataView(zip.buffer, zip.byteOffset);
-    const offsets: number[] = [], names: string[] = [];
-    for (let o = 0; view.getUint32(o, true) === 0x04034b50;) {
+  it('usdz: stored files, data 64-byte aligned, the root layer first; a File goes in as it is', async () => {
+    const big = new Uint8Array(40 << 20).map((_, i) => i * 31); // past one 16 MiB CRC chunk, as a Blob (a picked File)
+    const files: [string, Uint8Array | Blob][] = [['root.usdc', new TextEncoder().encode('PXR-USDC')], ['tex/a.png', new Uint8Array(100).fill(7)], ['b.usda', new Uint8Array(3)], ['model/ü.usdc', new Blob([big])]];
+    const zip = new Uint8Array(await (await usdz(files)).arrayBuffer()), view = new DataView(zip.buffer, zip.byteOffset);
+    const offsets: number[] = [], names: string[] = [], bytesOf = (k: number) => (k === 3 ? big : (files[k][1] as Uint8Array));
+    for (let o = 0, k = 0; view.getUint32(o, true) === 0x04034b50; k++) {
       const method = view.getUint16(o + 8, true), size = view.getUint32(o + 18, true), n = view.getUint16(o + 26, true), e = view.getUint16(o + 28, true);
       expect(method).toBe(0);
+      expect(view.getUint32(o + 14, true)).toBe(crc32(bytesOf(k))); // the big one's CRC chained over 16 MiB chunks
       names.push(new TextDecoder().decode(zip.subarray(o + 30, o + 30 + n)));
       offsets.push(o + 30 + n + e);
       o += 30 + n + e + size;
     }
     expect(names).toEqual(files.map(([f]) => f));
-    expect(offsets.map((o) => o % 64)).toEqual([0, 0, 0]);
-    expect(unzipSync(zip)['tex/a.png']).toEqual(files[1][1]);
+    expect(offsets.map((o) => o % 64)).toEqual([0, 0, 0, 0]);
+    const out = unzipSync(zip);
+    expect(out['tex/a.png']).toEqual(files[1][1]);
+    expect(out['model/ü.usdc'].length).toBe(big.length);
+    expect(out['model/ü.usdc'][12345]).toBe(big[12345]);
   });
 });

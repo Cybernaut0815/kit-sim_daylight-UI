@@ -182,7 +182,8 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
 - With reflections, Monte Carlo noise falls as 1 / sqrt(sim.bounceSamples). At the default 1024 per element: annual
   facade values about 0.5 % (median) and 2.3 % (95th percentile); a single instant 2.3 % and 14 %. Use 4096-16384 for
   instants and for small differences between options. The sampling is deterministic: a re-run repeats the numbers, so
-  noise shows only against a run with more samples.
+  noise shows only against a run with more samples. A model over 1,000,000 receiver faces (or vertices) runs the
+  default 1024 as 256, about twice the noise; any other value runs as set.
 - The core is validated against Ladybug Tools, Radiance and pvlib.
 
 ## 6. Not computed

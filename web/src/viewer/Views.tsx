@@ -223,7 +223,7 @@ export const SectionMenu = memo(function SectionMenu({ usd, section, selected, d
 
 const FORMAT_LABEL: Record<Format, string> = {
   usdz: '.usdz: USD package', usda: '.usda: USD text', usdc: '.usdc: USD binary', usd: '.usd: USD binary',
-  glb: '.glb: glTF binary', gltf: '.gltf: glTF text', obj: '.obj: Wavefront OBJ',
+  glb: '.glb: glTF binary', gltf: '.gltf: glTF text', obj: '.obj: Wavefront OBJ', values: 'Values (.npy + .json, zip)',
 };
 const MODE_HELP: Record<ExportMode, string> = {
   replace: 'The result colours replace the receivers’ materials, on the faces they were simulated on (subdivided where the run was), with every result as a value primvar.',
@@ -236,6 +236,7 @@ const help = (format: Format, mode: ExportMode) => ({
   glb: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*).',
   gltf: 'The model as drawn, in metres, receivers coloured as shown (unlit), every result as a value per corner (_DAYLIGHT_*). One text file.',
   obj: 'The model as drawn, in metres, receivers coloured as shown (vertex colours). OBJ holds no values.',
+  values: 'Every result as numbers, any model size: values.npy (float32, one row per face or vertex, one column per result), weights.npy (each row’s area) and values.json (the columns, each receiver’s rows, what ran).',
 })[format === 'usdc' || format === 'usd' ? 'usda' : format];
 
 export function DownloadMenu({ model, ready, exporting, error, onDownload }: { model?: string; ready: boolean; exporting: boolean; error: string | null; onDownload: (format: Format, mode: ExportMode) => void }) {

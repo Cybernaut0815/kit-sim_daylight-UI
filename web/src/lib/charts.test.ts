@@ -3,13 +3,24 @@ import { defaultSettings, type ObjectRow, type RunResult } from '../store';
 import { chartData, cleanSpec, dataOf, putChart, stepOf, type ChartInput, type ChartKind, type ChartSpec, type Drawn } from './charts';
 
 const obj = (id: string, path: string): ObjectRow => ({ id, name: id, path, tris: 2, verts: 4, role: 'receiver' });
-/** A 'radiation_front' result with one mesh per receiver: values[k] are the rows of receivers[k]. */
+/** A 'radiation_front' result with one mesh per receiver: values[k] are the rows of receivers[k]; every element weighs 1. */
 const result = (receivers: string[], values: number[][]): RunResult => {
   let first = 0;
   const meshes = values.map((v, k) => { const g = { name: receivers[k], first, count: v.length }; first += v.length; return g; });
-  return { values: values.flat().map((v) => Float64Array.of(v)), columns: ['radiation_front'], receivers, on: 'faces', key: 'k', elapsed: 0, manifest: { columns: ['radiation_front'], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes } };
+  return { data: [Float32Array.from(values.flat())], weights: new Float32Array(first).fill(1), columns: ['radiation_front'], receivers, on: 'faces', key: 'k', elapsed: 0, manifest: { columns: ['radiation_front'], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes } };
 };
-const input = (models: ChartInput['models'], viz = defaultSettings().viz): ChartInput => ({ models, column: 'radiation_front', viz, weightsFor: () => undefined }); // every element weighs 1
+const input = (models: ChartInput['models'], viz = defaultSettings().viz): ChartInput => ({ models, column: 'radiation_front', viz });
+
+// BIG=1 npx vitest run src/lib/charts.test.ts: a bhs-size result (17.24M rows over 14,342 meshes) through dataOf
+it.skipIf(!process.env.BIG)('dataOf over 17.24M rows takes under 2 s (BIG=1)', () => {
+  const meshes = 14_342, per = Math.ceil(17_244_108 / meshes), values: number[][] = [];
+  let seed = 1;
+  for (let k = 0; k < meshes; k++) values.push(Array.from({ length: per }, () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 1500));
+  const ids = values.map((_, k) => `m${k}`), r = result(ids, values), objects = ids.map((id) => obj(id, `/W/${id}`));
+  const t0 = performance.now(), d = dataOf(r, 0, objects), ms = performance.now() - t0;
+  expect(d.rows.length).toBe(meshes);
+  expect(ms).toBeLessThan(2000);
+}, 120_000);
 const draw = <K extends ChartKind>(kind: K, spec: Omit<ChartSpec, 'id' | 'kind'>, models: ChartInput['models'], viz?: ChartInput['viz']) => {
   const d = chartData({ id: 'c', kind, ...spec }, input(models, viz));
   if (d.kind !== kind) throw new Error(`drew ${d.kind}`);
@@ -74,6 +85,7 @@ describe('chartData', () => {
     expect([stepOf([0, 0.25, 0.5, 1.75]), stepOf([0, 0.1, 0.35]), stepOf([0, 0.123, 0.5, 0.987]), stepOf([1, 1])]).toEqual([0.25, 0, 0, 0]);
     expect(stepOf([0, 1e-9, 1])).toBeCloseTo(1, 6); // float noise is no step
     expect(stepOf(Float32Array.from([0, 1 / 6, 2 / 6, 5 / 6]))).toBeCloseTo(1 / 6, 6); // float32 thirds: a 10 min step
+    expect(stepOf(Float32Array.from({ length: 400 }, (_, i) => i / 10))).toBeCloseTo(0.1, 6); // float32 tenths up to 39.9: neighbours differ by 0.1 ± 2e-6
     const S = { slot: 0, objects: [obj('s', '/W/s')], result: result(['s'], [range(1760, (i) => (i % 31) / 4)]) }; // 0 to 7.5 h
     const h = draw('histogram', {}, [S]); // 1760 elements: 63 bins of 0.12 h would leave every other one empty
     expect([h.edges.length, h.edges[0], h.edges[1] - h.edges[0], h.counts.every((c) => c > 0)]).toEqual([32, -0.125, 0.25, true]);
@@ -87,7 +99,7 @@ describe('chartData', () => {
     viz.scales.radiation = { min: 0, max: 100 };
     const h = draw('histogram', {}, [A, B], viz);
     expect([h.edges[0], h.edges[h.edges.length - 1]]).toEqual([0, 100]);
-    expect(draw('curve', { range: 'absolute' }, [A, B], viz).domain).toEqual([0, 39.9]);
+    expect(draw('curve', { range: 'absolute' }, [A, B], viz).domain).toEqual([0, Math.fround(39.9)]); // the data's own: float32
     expect(draw('histogram', { range: [5, 15], bins: 4 }, [A, B], viz).edges).toEqual([5, 7.5, 10, 12.5, 15]);
     expect(draw('curve', { range: [5, 15] }, [A, B], viz).domain).toEqual([5, 15]);
     expect(chartData({ id: 'c', kind: 'curve', column: 'sunhours_front' }, input([A, B])).kind).toBe('empty');
@@ -97,9 +109,8 @@ describe('chartData', () => {
     const h = draw('histogram', { parts: ['/S/S'], range: 'absolute' }, [M]);
     expect([h.counts.reduce((a, b) => a + b), h.edges[0], h.edges[h.edges.length - 1], h.markers.mean]).toEqual([3, 5, 35, 20]); // 10, 20, 30 in steps of 10
     expect(draw('curve', { parts: ['/S'] }, [M]).cum.v).toHaveLength(5);
-    const w = () => undefined;
-    expect(dataOf(M.result, 0, M.objects, w)).toBe(dataOf(M.result, 0, M.objects, w));
-    expect(dataOf(M.result, 0, M.objects, w, ['s']).rows.map((x) => x.id)).toEqual(['s']);
+    expect(dataOf(M.result, 0, M.objects)).toBe(dataOf(M.result, 0, M.objects));
+    expect(dataOf(M.result, 0, M.objects, ['s']).rows.map((x) => x.id)).toEqual(['s']);
   });
   it('parts: a row per prim path, matched across models; a path a model lacks has no bar', () => {
     const P = { slot: 0, objects: [obj('a1', '/S/N'), obj('a2', '/S/S')], result: result(['a1', 'a2'], [[1, 2], [10, 20, 30]]) };

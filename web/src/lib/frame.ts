@@ -55,7 +55,7 @@ function faceCross(P: ArrayLike<number>, I: ArrayLike<number>, f: number): Vec3 
 }
 /** The area-weighted mean of meshes' unit face normals (model space), Σ cross / Σ |cross|: 1 long for a plane, about 0
  *  for a closed shape. viewDir('auto')'s `normal` for prims. */
-export function meanNormal(meshes: readonly { positions: ArrayLike<number>; indices: ArrayLike<number> }[]): Vec3 {
+export function meanNormal(meshes: Iterable<{ positions: ArrayLike<number>; indices: ArrayLike<number> }>): Vec3 {
   const s: Vec3 = [0, 0, 0];
   let len = 0;
   for (const { positions, indices } of meshes) {
@@ -177,13 +177,16 @@ function pointsOf(m: CriticalMesh, i: number, vertex: boolean): Vec3[] {
  * by connectivity if the shots get too wide.
  */
 export function findCritical(o: {
-  values: Float64Array[]; col: number; column: string; on: 'faces' | 'vertices'; meshes: readonly CriticalMesh[];
+  values: ArrayLike<number>; column: string; on: 'faces' | 'vertices'; meshes: Iterable<CriticalMesh>; // values: the column's, per result row
   north: number; mpu: number; below?: number; above?: number; limit?: number;
 }): { problemArea: number; problemShare: number; clusters: Cluster[] } {
   const flip = o.column.endsWith('_back') ? -1 : 1, all = new Map<string, number>(), vertex = o.on === 'vertices'; // area per mesh × facing
   const groups = new Map<string, { m: CriticalMesh; key: string; facing: Facing; side: 'below' | 'above'; els: number[]; a: number; av: number; worst: number; ap: Vec3; an: Vec3; lo: Vec3; hi: Vec3 }>();
-  let total = 0, problem = 0;
-  o.meshes.forEach((m, k) => {
+  let total = 0, problem = 0, k = -1;
+  // ponytail: groups keep their mesh (positions) for framing, so the peak is the meshes with a problem element; rebuild
+  // per group if that hurts
+  for (const m of o.meshes) {
+    k++;
     const P = m.positions, I = m.indices;
     let vn: Float64Array | null = null; // per vertex: Σ of its faces' crosses
     if (vertex) {
@@ -194,7 +197,7 @@ export function findCritical(o: {
       }
     }
     for (let i = 0; i < m.count; i++) {
-      const v = o.values[m.first + i][o.col], a = m.w[i], raw: Vec3 = vn ? [vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]] : faceCross(P, I, i), l = Math.hypot(...raw);
+      const v = o.values[m.first + i], a = m.w[i], raw: Vec3 = vn ? [vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]] : faceCross(P, I, i), l = Math.hypot(...raw);
       if (!Number.isFinite(v) || !(a > 0) || !(l > 0)) continue;
       const n: Vec3 = [(flip * raw[0]) / l, (flip * raw[1]) / l, (flip * raw[2]) / l], facing = facingOf(n, o.north), key = `${k} ${facing}`;
       all.set(key, (all.get(key) ?? 0) + a);
@@ -218,7 +221,7 @@ export function findCritical(o: {
         }
       }
     }
-  });
+  }
   const clusters = [...groups.values()].filter((g) => g.a >= 0.005 * problem).sort((p, q) => q.a - p.a).slice(0, o.limit ?? 12).map((g): Cluster => {
     const mean: Vec3 = [g.an[0] / g.a, g.an[1] / g.a, g.an[2] / g.a];
     // framed by the group's own points: a box around a wall at an angle to the axes juts out in front of it, and its

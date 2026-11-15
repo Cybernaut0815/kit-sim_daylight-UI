@@ -1,5 +1,6 @@
 // Result maths: element weights (areas), per-mesh statistics, histogram bins, the summary every quoted number comes
-// from, units and number formatting.
+// from, units and number formatting. A result is read one column at a time (RunResult.data[c]: the column's value per
+// row); weights[k] are the element areas of groups[k], index 0 at its first row.
 export interface Group { first: number; count: number }
 
 /** Triangle areas 0.5 * |(b - a) x (c - a)|, one per face. */
@@ -25,10 +26,10 @@ export function vertexAreas(positions: ArrayLike<number>, indices: ArrayLike<num
 export interface Stats { count: number; min: number; max: number; mean: number; total: number; area: number }
 
 /** One mesh's column: min, max, area-weighted mean, Σ weight × value (the donut share) over its rows [first, first + count). */
-export function columnStats(values: Float64Array[], col: number, g: Group, weights: ArrayLike<number>): Stats {
+export function columnStats(col: ArrayLike<number>, g: Group, weights: ArrayLike<number>): Stats {
   let min = Infinity, max = -Infinity, total = 0, area = 0;
   for (let i = 0; i < g.count; i++) {
-    const v = values[g.first + i][col];
+    const v = col[g.first + i];
     if (!Number.isFinite(v)) continue;
     if (v < min) min = v;
     if (v > max) max = v;
@@ -39,20 +40,20 @@ export function columnStats(values: Float64Array[], col: number, g: Group, weigh
 }
 
 /** Finite [min, max] of one column over all rows. */
-export function globalRange(values: Float64Array[], col: number): [number, number] {
+export function globalRange(col: ArrayLike<number>): [number, number] {
   let lo = Infinity, hi = -Infinity;
-  for (const row of values) { const v = row[col]; if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+  for (let i = 0; i < col.length; i++) { const v = col[i]; if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
   return [lo, hi];
 }
 
 /** Finite [min, max] of the column named `name` over several results (one without it adds nothing): one colour scale
  *  for every model. */
-export function unionRange(results: readonly { values: Float64Array[]; columns: readonly string[] }[], name: string): [number, number] {
+export function unionRange(results: readonly { data: readonly ArrayLike<number>[]; columns: readonly string[] }[], name: string): [number, number] {
   let lo = Infinity, hi = -Infinity;
   for (const r of results) {
     const c = r.columns.indexOf(name);
     if (c < 0) continue;
-    const [a, b] = globalRange(r.values, c);
+    const [a, b] = globalRange(r.data[c]);
     lo = Math.min(lo, a);
     hi = Math.max(hi, b);
   }
@@ -64,14 +65,14 @@ export function unionRange(results: readonly { values: Float64Array[]; columns: 
  * `counts[bin]` = elements; every finite row inside the range lands in exactly one bin, `below` / `above` = the shares
  * outside it. `weights[k]` belongs to `groups[k]`.
  */
-export function histogram(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[], bins = 24, range = globalRange(values, col)): { edges: number[]; shares: number[]; counts: number[]; below: number; above: number } {
+export function histogram(col: ArrayLike<number>, groups: Group[], weights: ArrayLike<number>[], bins = 24, range = globalRange(col)): { edges: number[]; shares: number[]; counts: number[]; below: number; above: number } {
   const [lo, hi] = range, span = hi - lo || 1;
   const edges = Array.from({ length: bins + 1 }, (_, i) => lo + (span * i) / bins);
   const shares = new Array<number>(bins).fill(0), counts = new Array<number>(bins).fill(0);
   let total = 0, below = 0, above = 0;
   groups.forEach((g, k) => {
     for (let i = 0; i < g.count; i++) {
-      const v = values[g.first + i][col], w = weights[k][i];
+      const v = col[g.first + i], w = weights[k][i];
       if (!Number.isFinite(v)) continue;
       total += w;
       if (v < lo) below += w;
@@ -87,15 +88,38 @@ export function histogram(values: Float64Array[], col: number, groups: Group[], 
 }
 
 /** Values ascending with the cumulative share of weight (area) at or below each: percentiles, range shares, the area curve. */
-export interface Cumulative { v: Float64Array; cw: Float64Array }
+export interface Cumulative { v: Float32Array; cw: Float64Array }
 
-export function cumulative(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[]): Cumulative {
-  const pairs: [number, number][] = [];
-  groups.forEach((g, k) => { for (let i = 0; i < g.count; i++) { const v = values[g.first + i][col]; if (Number.isFinite(v)) pairs.push([v, weights[k][i]]); } });
-  pairs.sort((a, b) => a[0] - b[0]);
-  const total = pairs.reduce((s, p) => s + p[1], 0) || 1, v = new Float64Array(pairs.length), cw = new Float64Array(pairs.length);
+/**
+ * The finite values in ascending order, in O(n) (a comparison sort of 17M values took 5-20 s): an LSD radix sort, 4
+ * passes of 8 bits (a pass whose digit every value shares is skipped), of the float32 bits made order-preserving, carrying
+ * each value's weight. Radix sorting is stable, so equal values keep the rows' order and every sum is the one a stable
+ * sort by value gives. Values and weights are read as float32, which results are: nothing is rounded.
+ */
+export function cumulative(col: ArrayLike<number>, groups: Group[], weights: ArrayLike<number>[]): Cumulative {
+  let n = 0;
+  for (const g of groups) for (let i = 0; i < g.count; i++) if (Number.isFinite(col[g.first + i])) n++;
+  let key = new Uint32Array(n), w = new Float32Array(n), key2 = new Uint32Array(n), w2 = new Float32Array(n);
+  const f = new Float32Array(key.buffer), counts = new Uint32Array(4 * 256);
+  n = 0;
+  groups.forEach((g, k) => { for (let i = 0; i < g.count; i++) { const v = col[g.first + i]; if (Number.isFinite(v)) { f[n] = v + 0; w[n++] = weights[k][i]; } } }); // + 0: -0 ties with 0 (and comes back as 0)
+  for (let i = 0; i < n; i++) { // negative: every bit flipped (the larger magnitude first); positive: above them all
+    const b = key[i], u = (key[i] = b & 0x80000000 ? ~b : b | 0x80000000);
+    counts[u & 255]++; counts[256 + ((u >>> 8) & 255)]++; counts[512 + ((u >>> 16) & 255)]++; counts[768 + (u >>> 24)]++;
+  }
+  for (let d = 0; d < 4; d++) {
+    const c = counts.subarray(256 * d, 256 * (d + 1)), s = 8 * d;
+    if (!n || c[(key[0] >>> s) & 255] === n) continue;
+    for (let j = 0, at = 0; j < 256; j++) { const m = c[j]; c[j] = at; at += m; }
+    for (let i = 0; i < n; i++) { const u = key[i], p = c[(u >>> s) & 255]++; key2[p] = u; w2[p] = w[i]; }
+    [key, key2, w, w2] = [key2, key, w2, w];
+  }
+  for (let i = 0; i < n; i++) { const u = key[i]; key[i] = u & 0x80000000 ? u ^ 0x80000000 : ~u; } // the float bits again
+  const v = new Float32Array(key.buffer), cw = new Float64Array(n);
   let acc = 0;
-  pairs.forEach((p, i) => { v[i] = p[0]; acc += p[1]; cw[i] = acc / total; });
+  for (let i = 0; i < n; i++) cw[i] = acc += w[i];
+  const total = acc || 1;
+  for (let i = 0; i < n; i++) cw[i] /= total;
   return { v, cw };
 }
 
@@ -126,8 +150,8 @@ export interface Summary { elements: number; area: number; min: number; p10: num
  * tools, the charts and the reports quote. below / within / above: the shares of the problem range [lo, hi] (null =
  * open); atLeast[i]: the share at or above thresholds[i]. Values and shares are NaN where no element has a value.
  */
-export function summarize(values: Float64Array[], col: number, groups: Group[], weights: ArrayLike<number>[], lo: number | null = null, hi: number | null = null, thresholds: readonly number[] = []): Summary {
-  const s = groups.map((g, k) => columnStats(values, col, g, weights[k])), c = cumulative(values, col, groups, weights), n = c.v.length;
+export function summarize(col: ArrayLike<number>, groups: Group[], weights: ArrayLike<number>[], lo: number | null = null, hi: number | null = null, thresholds: readonly number[] = []): Summary {
+  const s = groups.map((g, k) => columnStats(col, g, weights[k])), c = cumulative(col, groups, weights), n = c.v.length;
   const sum = (f: (x: Stats) => number) => s.reduce((a, x) => a + f(x), 0), area = sum((x) => x.area), total = sum((x) => x.total);
   const share = (v: number) => (n ? v : NaN), r = rangeShares(c, lo, hi); // the shares of nothing would read as "all above"
   return {

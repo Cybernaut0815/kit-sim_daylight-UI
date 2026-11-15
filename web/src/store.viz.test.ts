@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { initialState, parseSettings, reducer, serializeSettings, type RunResult } from './store';
 
 const result: RunResult = {
-  values: [Float64Array.of(1), Float64Array.of(2)], columns: ['radiation_front'], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0.1,
+  data: [Float32Array.of(1, 2)], weights: Float32Array.of(1, 1), columns: ['radiation_front'], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0.1,
   manifest: { columns: ['radiation_front'], duration_h: 1, dirs: { sky: 145, ground: 145, sun: 1 }, meshes: [{ name: 'a', first: 0, count: 2 }] },
 };
 const defaults = { below: '#0000ff', above: '#ff0000' };
