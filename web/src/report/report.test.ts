@@ -5,14 +5,14 @@ import { defaultSettings, type ObjectRow, type RunResult } from '../store';
 import { renderReport, type ReportInput } from './Report';
 import type { Report } from './spec';
 
-// two receivers of two faces each (weights 1: no meshes): Facade_S 0.5 and 1 h, the roof 4 and 5 h
+// two receivers of two faces each (weights 1): Facade_S 0.5 and 1 h, the roof 4 and 5 h
 const objects: ObjectRow[] = [
   { id: 'm1', name: 'Facade_S', path: '/Site/Block/Facade_S', tris: 2, verts: 4, role: 'receiver' },
   { id: 'm2', name: 'Roof', path: '/Site/Block/Roof', tris: 2, verts: 4, role: 'receiver' },
 ];
 const args = ['--lat', '51.5074', '--lon', '-0.1278', '--clear-sky', '--quantity', 'sunhours', '--north', '0', '--from', '03-21T08:00', '--to', '03-21T18:00', '--step', '15'];
 const result = (slot: number): RunResult => ({
-  values: [0.5, 1, 4, 5].map((v) => Float64Array.of(v + slot)), columns: ['sunhours_front'], receivers: ['m1', 'm2'], on: 'faces', elapsed: 0.42,
+  data: [Float32Array.from([0.5, 1, 4, 5], (v) => v + slot)], weights: new Float32Array(4).fill(1), columns: ['sunhours_front'], receivers: ['m1', 'm2'], on: 'faces', elapsed: 0.42,
   manifest: { columns: ['sunhours_front'], duration_h: 10, dirs: { sky: 145, ground: 145, sun: 40 }, meshes: [{ name: 'm1', first: 0, count: 2 }, { name: 'm2', first: 2, count: 2 }], run_s: 0.12, id: `job-${slot}`, started: '2026-10-29T10:00:00Z', finished: '2026-10-29T10:00:01Z' } as RunResult['manifest'],
   key: JSON.stringify([args, null, ['m1', 'm2'], []]),
 });
@@ -37,7 +37,7 @@ const report = (models: string[], title = 'Sun on <b>21 March</b>'): Report => (
 });
 const input = (models: string[], title?: string): ReportInput => ({
   report: report(models, title), models: models.map((l) => { const slot = 'ABCD'.indexOf(l); return { slot, name: 'building', objects, result: result(slot) }; }),
-  settings, weightsFor: () => undefined, meshOf: () => undefined, images: [[], [], [], models.map(() => 'data:image/png;base64,AAAA'), [], []],
+  settings, meshOf: () => undefined, images: [[], [], [], models.map(() => 'data:image/png;base64,AAAA'), [], []],
   versions: { app: '0.1.0', kitUi: '0.2.0', core: 'abc1234', viewer: 'def5678' }, date: new Date('2026-10-29T12:00:00Z'),
 });
 
@@ -76,7 +76,7 @@ describe('renderReport', () => {
     expect(out).toContain('Figure 1. <strong>Per facade. </strong>Mean sun hours per part, in h.');
     // 60 receiver meshes of one face each
     const ids = Array.from({ length: 60 }, (_, k) => `m${k}`), many = { ...p, report: { ...r, stats: [], blocks: [r.blocks[5]] }, images: [[]] };
-    many.models = [{ ...p.models[0], objects: ids.map((id) => ({ id, name: id, path: `/S/${id}`, tris: 1, verts: 3, role: 'receiver' as const })), result: { ...result(0), values: ids.map((_, k) => Float64Array.of(k)), receivers: ids, manifest: { ...result(0).manifest, meshes: ids.map((name, k) => ({ name, first: k, count: 1 })) } } }];
+    many.models = [{ ...p.models[0], objects: ids.map((id) => ({ id, name: id, path: `/S/${id}`, tris: 1, verts: 3, role: 'receiver' as const })), result: { ...result(0), data: [Float32Array.from(ids, (_, k) => k)], weights: new Float32Array(ids.length).fill(1), receivers: ids, manifest: { ...result(0).manifest, meshes: ids.map((name, k) => ({ name, first: k, count: 1 })) } } }];
     const capped = renderReport(many);
     expect(capped).toContain('Per mesh. The 50 largest of 60 receiver meshes.');
     expect(capped.match(/<th scope="row"/g)).toHaveLength(50);

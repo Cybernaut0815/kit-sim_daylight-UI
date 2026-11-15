@@ -26,7 +26,6 @@ export interface DownloadOptions {
   usd: UsdViewerElement; // the model's viewer
   result: RunResult; objects: ObjectRow[]; meshes: ReadonlyMap<string, Object3D>; column: number; model: PickedModel;
   scales: Scale[]; // per result column, the scale shown (one over every model's values)
-  weightsFor: (id: string, on: 'faces' | 'vertices') => ArrayLike<number> | undefined;
 }
 
 /** What the overlay blocks on a receiver written with other polygons: authored data that no longer fits them. */
@@ -49,20 +48,20 @@ const save = (data: BlobPart[], name: string) => {
 export async function download(format: Format, mode: ExportMode, o: DownloadOptions): Promise<void> {
   const { usd } = o, stem = o.model.root.replace(/^.*\//, '').replace(/\.\w+$/, '');
   if (!isUsd(format)) return drawnFile(format, o, stem);
-  const r = o.result, perFace = r.on === 'faces', items = usd.three.items();
+  const r = o.result, perFace = r.on === 'faces';
+  const rows = new Map(o.objects.map((x) => [x.id, x])), items = new Map(usd.three.items().map((it) => [it.object, it])); // one lookup per receiver
   const meshes: ResultMesh[] = await Promise.all(r.receivers.map(async (id, k) => {
-    const row = o.objects.find((x) => x.id === id), g = r.manifest.meshes[k], object = o.meshes.get(id) as Mesh | undefined;
+    const row = rows.get(id), g = r.manifest.meshes[k], object = o.meshes.get(id) as Mesh | undefined;
     if (!row || !object) throw new Error('The model changed since this run: run it again, then download.');
-    const item = items.find((it) => it.object === object), map = item ? await usd.usd.meshMap(item.rid) : null;
+    const item = items.get(object), map = item ? await usd.usd.meshMap(item.rid) : null;
     if (!map) throw new Error(`${row.name}: the viewer has no polygons for this mesh.`);
     const geo = object.geometry, position = geo.getAttribute('position'), normal = geo.getAttribute('normal');
     const index = geo.index ? geo.index.array : Uint32Array.from({ length: position.count }, (_, i) => i);
     if ((perFace ? index.length / 3 : position.count) !== g.count || map.faces.length !== index.length / 3) throw new Error(`${row.name}: ${g.count} results for another mesh. Run again, then download.`);
-    const poly = polygonCorners(index, map), areas = perFace ? o.weightsFor(id, 'faces') : undefined;
+    const poly = polygonCorners(index, map), rowsOf = (a: Float32Array) => a.subarray(g.first, g.first + g.count); // views, no copies
     const columns = r.columns.map((name, c) => {
-      const raw = new Float64Array(g.count);
-      for (let i = 0; i < g.count; i++) raw[i] = r.values[g.first + i][c];
-      const data = perFace ? toPolygons(raw, poly.polygonOf, poly.counts.length, areas ?? new Float64Array(g.count).fill(1)) : toCorners(raw, poly.corners);
+      const raw = rowsOf(r.data[c]);
+      const data = perFace ? toPolygons(raw, poly.polygonOf, poly.counts.length, rowsOf(r.weights)) : toCorners(raw, poly.corners);
       return { name, data, rgb: rgbFor(o.scales[c], data, null).map(lin) };
     });
     return {
@@ -130,7 +129,7 @@ async function drawnFile(format: Format, o: DownloadOptions, stem: string): Prom
     if (k === undefined) { drawn.push({ name: item.path, geometry: object.geometry, matrices, material: usd.three.materials(item.rid) }); continue; }
     const g = r.manifest.meshes[k], geo = object.geometry, n = perFace ? (geo.index ? geo.index.count : geo.attributes.position.count) / 3 : geo.attributes.position.count;
     if (n !== g.count) throw new Error(`${item.path}: ${g.count} results for another mesh. Run again, then download.`);
-    const column = (c: number) => Float64Array.from({ length: g.count }, (_, i) => r.values[g.first + i][c]);
+    const column = (c: number) => r.data[c].subarray(g.first, g.first + g.count);
     drawn.push({
       name: item.path, geometry: geo, matrices, material: null,
       result: { perFace, rgb: rgbFor(shown, column(o.column), null).map(lin), values: r.columns.map((name, c) => ({ name, data: column(c) })) },

@@ -30,12 +30,12 @@ describe('roles', () => {
   it('RELOAD (a variant switch) keeps the selection, maps it onto the new rows and drops the result', () => {
     let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [{ ...obj('a'), path: '/W/G/a' }] });
     s = reducer(s, { type: 'SELECTION', slot: 0, paths: ['/W/G'], active: '/W/G', source: 'hierarchy' });
-    s = { ...s, models: [{ ...m(s), result: { values: [], columns: [], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } } }] };
+    s = { ...s, models: [{ ...m(s), result: { data: [], weights: new Float32Array(), columns: [], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } } }] };
     s = reducer(s, { type: 'RELOAD', slot: 0, objects: [{ ...obj('a2'), path: '/W/G/a' }, { ...obj('n', 'none'), path: '/W/G/new' }] });
     expect([m(s).selection.paths, [...m(s).selected], m(s).result]).toEqual([['/W/G'], ['a2', 'n'], null]);
   });
   it('SHADE: receivers only, the result kept (the run key says it is stale); a role change drops the flag, a re-read keeps it by path', () => {
-    const result: RunResult = { values: [], columns: [], receivers: ['a', 'b'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } };
+    const result: RunResult = { data: [], weights: new Float32Array(), columns: [], receivers: ['a', 'b'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } };
     let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a'), obj('b'), obj('c', 'shade')] });
     s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } });
     s = reducer(s, { type: 'SHADE', slot: 0, ids: ['a', 'c'], shade: false });
@@ -51,6 +51,14 @@ describe('roles', () => {
     expect(m(s).objects.map((o) => [o.id, o.shade])).toEqual([['a2', false], ['b2', undefined], ['n', undefined]]);
     expect(m(reducer(s, { type: 'RELOAD', slot: 0, objects: [{ ...obj('a3', 'none'), path: '/a' }] })).objects[0].shade).toBeUndefined(); // not a receiver there now
     expect(m(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('a')] })).objects[0].shade).toBeUndefined();
+  });
+  it('ROLE and RUN over 20,000 meshes look each id up once (a big model re-assigned at once, then its result landing)', () => {
+    const rows = Array.from({ length: 20_000 }, (_, i) => obj(`m${i}`, 'none')), ids = rows.map((o) => o.id), t0 = performance.now();
+    let s = reducer(reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows }), { type: 'ROLE', slot: 0, ids, role: 'receiver' });
+    const result: RunResult = { data: [], weights: new Float32Array(), columns: [], receivers: ids, on: 'faces', key: 'k', elapsed: 0, manifest: { columns: [], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes: [] } };
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } });
+    expect(m(s).result).toBe(result);
+    expect(performance.now() - t0).toBeLessThan(250); // a scan of every id per row took seconds here
   });
   it('an instanced mesh is never a receiver: Shade and Ignore only', () => {
     let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a', 'none'), { ...obj('i', 'none'), instances: 3 }] });
@@ -71,7 +79,7 @@ describe('run and selection', () => {
   });
   it('the last result stays while the next run is queued, running, failed or cancelled; LOAD and ROLE drop it', () => {
     const result: RunResult = {
-      values: [Float64Array.of(1)], columns: ['radiation_front'], receivers: ['a'], on: 'faces', key: 'k1', elapsed: 0.1,
+      data: [Float32Array.of(1)], weights: Float32Array.of(1), columns: ['radiation_front'], receivers: ['a'], on: 'faces', key: 'k1', elapsed: 0.1,
       manifest: { columns: ['radiation_front'], duration_h: 1, dirs: { sky: 145, ground: 145, sun: 1 }, meshes: [{ name: 'a', first: 0, count: 1 }] },
     };
     let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a')] });
@@ -89,7 +97,7 @@ describe('run and selection', () => {
   });
   it('a run that finishes after the model or the roles changed is dropped', () => {
     const result: RunResult = {
-      values: [Float64Array.of(1)], columns: ['radiation_front'], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0.1,
+      data: [Float32Array.of(1)], weights: Float32Array.of(1), columns: ['radiation_front'], receivers: ['a'], on: 'faces', key: 'k', elapsed: 0.1,
       manifest: { columns: ['radiation_front'], duration_h: 1, dirs: { sky: 145, ground: 145, sun: 1 }, meshes: [{ name: 'a', first: 0, count: 1 }] },
     };
     let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('b')] });
@@ -217,7 +225,7 @@ describe('optics edits', () => {
 
 describe('several models', () => {
   const result = (id: string, columns = ['radiation_front']): RunResult => ({
-    values: [Float64Array.of(1)], columns, receivers: [id], on: 'faces', key: id, elapsed: 0.1,
+    data: [Float32Array.of(1)], weights: Float32Array.of(1), columns, receivers: [id], on: 'faces', key: id, elapsed: 0.1,
     manifest: { columns, duration_h: 1, dirs: { sky: 145, ground: 145, sun: 1 }, meshes: [{ name: id, first: 0, count: 1 }] },
   });
   const two = () => {

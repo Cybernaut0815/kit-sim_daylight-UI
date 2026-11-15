@@ -99,8 +99,11 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   const paint = useRef(new Map<string, THREE.Mesh>()); // receiver id -> its result overlay, a child of the viewer's object
   const [ready, setReady] = useState(false); // the core is up: until then the viewer shows its own status
   const byObject = useMemo(() => new Map([...meshes].map(([id, o]) => [o, id])), [meshes]);
-  const latest = useRef({ result, column, sun, objects, meshes, byObject }); // read by the handlers, which are bound once
-  latest.current = { result, column, sun, objects, meshes, byObject };
+  // receiver id -> its index in the result's receivers (manifest.meshes order): the probe, the paint and the tint look
+  // up one id each, not a scan of 14k receivers per mesh
+  const recv = useMemo(() => new Map(result?.receivers.map((id, k) => [id, k])), [result]);
+  const latest = useRef({ result, column, sun, objects, meshes, byObject, recv }); // read by the handlers, which are bound once
+  latest.current = { result, column, sun, objects, meshes, byObject, recv };
   const byValue = result && scale && colourBy === 'value' ? result : null;
   const hasModel = meshes.size > 0, site = sun?.site ?? null, shown = !!sun && hasModel;
 
@@ -160,9 +163,9 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       const hit = hitAt(e), r = canvas.getBoundingClientRect();
       const id = hit && latest.current.byObject.get(hit.object);
       if (!hit || !id) return null;
-      const { result, column } = latest.current;
+      const { result, column, recv } = latest.current;
       let element: number | null = null, value = NaN;
-      const k = result?.receivers.indexOf(id) ?? -1;
+      const k = recv.get(id) ?? -1;
       if (result && k >= 0 && hit.faceIndex != null) {
         if (result.on === 'faces') element = hit.faceIndex;
         else if (hit.face) { // per-vertex results keep the geometry indexed, so the face corners are the row indices
@@ -174,7 +177,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
           }
         }
         const g = result.manifest.meshes[k];
-        if (element !== null && element < g.count) value = result.values[g.first + element][column]; else element = null;
+        if (element !== null && element < g.count) value = result.data[column][g.first + element]; else element = null;
       }
       return { id, element, value, x: e.clientX - r.left, y: e.clientY - r.top };
     };
@@ -337,11 +340,11 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     (async () => {
       const keep = new Set<string>(), role = new Map(objects.map((o) => [o.id, o.role]));
       for (const [id, obj] of meshes) {
-        const k = byValue && role.get(id) === 'receiver' ? byValue.receivers.indexOf(id) : -1;
+        const k = byValue && role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1;
         if (!byValue || !scale || k < 0) continue;
         keep.add(id);
         const g = byValue.manifest.meshes[k], vals = new Float64Array(g.count), perFace = byValue.on === 'faces';
-        for (let i = 0; i < g.count; i++) vals[i] = byValue.values[g.first + i][column];
+        for (let i = 0; i < g.count; i++) vals[i] = byValue.data[column][g.first + i];
         const rgb = rgbFor(scale, vals, bin).map(lin);
         const m = paint.current.get(id), attr = m?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
         if (attr && attr.count === (perFace ? 3 * g.count : g.count)) { // repaint in place
@@ -363,7 +366,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       usd.three.invalidate();
     })();
     return () => { stale = true; };
-  }, [meshes, objects, byValue, column, scale, bin]);
+  }, [meshes, objects, byValue, recv, column, scale, bin]);
 
   // Hover: a light accent tint over the mesh, fainter over results.
   useEffect(() => {
@@ -371,11 +374,11 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     if (!o || (o as THREE.InstancedMesh).isInstancedMesh) return; // ponytail: no tint on instanced shades (a child draws once, not per instance)
     tint.geometry = (o as THREE.Mesh).geometry;
     TINT.color.set(solid('--accent'));
-    TINT.opacity = byValue?.receivers.includes(hovered!) ? 0.1 : 0.22; // from the props: the paint lands asynchronously
+    TINT.opacity = byValue && recv.has(hovered!) ? 0.1 : 0.22; // from the props: the paint lands asynchronously
     o.add(tint);
     usd.three.invalidate();
     return () => { tint.removeFromParent(); usd.three.invalidate(); };
-  }, [hovered, meshes, byValue, theme]);
+  }, [hovered, meshes, byValue, recv, theme]);
   // A new model: the tint lets go of the last one's geometry (the renderer would hold it until the next hover).
   useEffect(() => () => { tint.geometry = EMPTY; release(tint); }, [meshes]);
 

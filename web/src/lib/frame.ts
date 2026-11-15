@@ -177,7 +177,7 @@ function pointsOf(m: CriticalMesh, i: number, vertex: boolean): Vec3[] {
  * by connectivity if the shots get too wide.
  */
 export function findCritical(o: {
-  values: Float64Array[]; col: number; column: string; on: 'faces' | 'vertices'; meshes: readonly CriticalMesh[];
+  values: ArrayLike<number>; column: string; on: 'faces' | 'vertices'; meshes: readonly CriticalMesh[]; // values: the column's, per result row
   north: number; mpu: number; below?: number; above?: number; limit?: number;
 }): { problemArea: number; problemShare: number; clusters: Cluster[] } {
   const flip = o.column.endsWith('_back') ? -1 : 1, all = new Map<string, number>(), vertex = o.on === 'vertices'; // area per mesh × facing
@@ -194,7 +194,7 @@ export function findCritical(o: {
       }
     }
     for (let i = 0; i < m.count; i++) {
-      const v = o.values[m.first + i][o.col], a = m.w[i], raw: Vec3 = vn ? [vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]] : faceCross(P, I, i), l = Math.hypot(...raw);
+      const v = o.values[m.first + i], a = m.w[i], raw: Vec3 = vn ? [vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]] : faceCross(P, I, i), l = Math.hypot(...raw);
       if (!Number.isFinite(v) || !(a > 0) || !(l > 0)) continue;
       const n: Vec3 = [(flip * raw[0]) / l, (flip * raw[1]) / l, (flip * raw[2]) / l], facing = facingOf(n, o.north), key = `${k} ${facing}`;
       all.set(key, (all.get(key) ?? 0) + a);

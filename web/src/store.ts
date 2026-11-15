@@ -50,8 +50,13 @@ export interface Settings {
 /** The element under the cursor: object id, element index within the mesh's rows, its value in the current column. */
 export interface Probe { id: string; element: number; value: number }
 
+/**
+ * A finished run: one float32 column per quantity and side, `data[c][row]` for `columns[c]` (the rows of receiver k
+ * from `manifest.meshes[k].first`), and `weights[row]`, that element's area in m² (a face's, or a vertex's share of its
+ * faces'): one array per column and one for the weights, never an object per row (a 17M-triangle model has 17M rows).
+ */
 export interface RunResult {
-  values: Float64Array[]; columns: string[]; manifest: RemoteManifest; cache?: Record<string, string>;
+  data: Float32Array[]; weights: Float32Array; columns: string[]; manifest: RemoteManifest; cache?: Record<string, string>;
   receivers: string[]; // object ids in sensor order: manifest.meshes[i] <-> receivers[i]
   on: 'faces' | 'vertices'; // element kind the rows describe (weights: face areas or vertex areas)
   key: string; // the run key (args, weather, mesh ids) it was computed for: differs from the current one = stale
@@ -174,8 +179,9 @@ export function reducer(s: State, a: Action): State {
       return n === s ? s : { ...n, hovered: null, ...(kept(n.models) ? {} : { column: 0, colourBy: 'plain' as const }) };
     }
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
+      const ids = new Set(a.ids); // a Set: a model of 14k meshes, all re-assigned, is 14k lookups, not 14k x 14k compares
       const n = put(s, a.slot, (m) => {
-        const objects = m.objects.map((o) => (a.ids.includes(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...shading(o, true), role: a.role } : o));
+        const objects = m.objects.map((o) => (ids.has(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...shading(o, true), role: a.role } : o));
         return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }; // nothing changed: keep the result
       });
       return n === s || kept(n.models) ? n : { ...n, column: 0 };
@@ -256,7 +262,10 @@ export function reducer(s: State, a: Action): State {
     case 'RUN': { // the last result stays until the next one lands; the first result of any model shows its values
       const m = s.models.find((x) => x.slot === a.slot), r = a.run, done = r.status === 'done';
       if (!m || (r.status === 'running' && m.run.status === 'running') || (r.status === 'queued' && m.run.status === 'queued' && r.position === m.run.position)) return s;
-      if (done && !r.result.receivers.every((id) => m.objects.some((o) => o.id === id && o.role === 'receiver'))) return put(s, a.slot, (x) => ({ ...x, run: IDLE })); // the model or the roles changed while it ran
+      if (done) { // the model or the roles changed while it ran: dropped (a Set: 14k receivers are 14k lookups)
+        const receiving = new Set(m.objects.flatMap((o) => (o.role === 'receiver' ? [o.id] : [])));
+        if (!r.result.receivers.every((id) => receiving.has(id))) return put(s, a.slot, (x) => ({ ...x, run: IDLE }));
+      }
       return {
         ...put(s, a.slot, (x) => ({ ...x, run: r, result: done ? r.result : x.result, error: r.status === 'error' ? r.message : done || r.status === 'idle' ? null : x.error })),
         probe: done ? null : s.probe, bin: done ? null : s.bin, colourBy: done && !kept(s.models) ? 'value' : s.colourBy, // the column is clamped where it is read

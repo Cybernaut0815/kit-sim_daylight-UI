@@ -9,7 +9,7 @@ import { Chart, chartTitle } from '../charts/Chart';
 import { ChartSettings, RANGE_HELP, ScaleFields, type ChartEdit } from '../charts/ChartSettings';
 import { Donut } from '../charts/Donut';
 import { Legend } from '../charts/Legend';
-import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row, type WeightsFor } from '../lib/charts';
+import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row } from '../lib/charts';
 import { hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, fmtDiff, fmtNum, rangeShares, shareBelow, unitFor } from '../lib/result';
 import { chartSpec, type Stored } from '../report/spec';
@@ -23,7 +23,7 @@ export type Compared = Model & { col: number; stale: boolean };
 interface Props {
   models: Compared[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; probe: Probe | null; bin: [number, number] | null;
   scale: Scale | null; domain: [number, number]; viz: Settings['viz']; charts: Settings['charts']; auto: boolean; // domain: the data range, every model's
-  weightsFor: WeightsFor; dispatch: Dispatch<Action>;
+  dispatch: Dispatch<Action>;
   reports: Stored[] | null; onReportChart: (id: string, e: ChartEdit) => void; // the stored reports; a report chart's settings changed
   reportError: { id?: string; title: string; message: string } | null; // a report change that failed: shown under that report's charts
 }
@@ -37,17 +37,21 @@ const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of share
 
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
 
-export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, weightsFor, dispatch, reports, onReportChart, reportError }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, dispatch, reports, onReportChart, reportError }: Props) {
   // what the tables and charts read of each model, kept across a selection or a run's status (each makes new models)
   const inputs = [0, 1, 2, 3].flatMap((k) => { const m = models.find((x) => x.slot === k); return [m?.objects, m?.result, m?.col]; }); // fixed length: memo deps
   const runs = useMemo(() => models.map(({ slot, objects, result, col }) => ({ slot, objects, result, col })), inputs); // eslint-disable-line react-hooks/exhaustive-deps
-  const datas = useMemo(() => runs.map((m) => (m.result && m.col >= 0 ? dataOf(m.result, m.col, m.objects, weightsFor) : null)), [runs, weightsFor]);
+  const datas = useMemo(() => runs.map((m) => (m.result && m.col >= 0 ? dataOf(m.result, m.col, m.objects) : null)), [runs]);
+  // row id -> its model (index into datas) and table row: the hover and probe readouts look up one id per move, and row
+  // ids are unique across models
+  const rowOf = useMemo(() => new Map(datas.flatMap((d, k) => (d ? d.rows.map((x) => [x.id, { k, x }] as const) : []))), [datas]);
   const many = models.length > 1;
   const lo = scale?.lo ?? null, hi = scale?.hi ?? null;
   const within = useMemo(() => datas.map((d) => d && d.rows.map((x) => { // each mesh's share of its area inside the problem range
     if (lo === null && hi === null) return 1;
     let w = 0;
-    for (let i = 0; i < x.g.count; i++) { const v = d.r.values[x.g.first + i][d.col]; if (Number.isFinite(v) && (lo === null || v >= lo) && (hi === null || v <= hi)) w += x.w[i]; }
+    const col = d.r.data[d.col];
+    for (let i = 0; i < x.g.count; i++) { const v = col[x.g.first + i]; if (Number.isFinite(v) && (lo === null || v >= lo) && (hi === null || v <= hi)) w += x.w[i]; }
     return x.stats.area ? w / x.stats.area : 0;
   })), [datas, lo, hi]);
   const k0 = datas.findIndex(Boolean), ref = k0 < 0 ? null : datas[k0]!; // the first result: the column list, quantity and unit
@@ -61,9 +65,9 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
   }), [reports]);
   // every chart's numbers, once per result, column, colour scale or chart: never per hover or cursor move
   const drawn = useMemo(() => new Map(shown ? [
-    ...charts.map((c) => [c, chartData(c, { models: runs, column: shown, viz, weightsFor })] as const),
-    ...groups.flatMap((g) => g.specs.map((c) => [c, chartData(c, { models: runs.filter((m) => g.slots.includes(m.slot)), column: shown, viz, weightsFor })] as const)),
-  ] : []), [charts, groups, runs, shown, viz, weightsFor]);
+    ...charts.map((c) => [c, chartData(c, { models: runs, column: shown, viz })] as const),
+    ...groups.flatMap((g) => g.specs.map((c) => [c, chartData(c, { models: runs.filter((m) => g.slots.includes(m.slot)), column: shown, viz })] as const)),
+  ] : []), [charts, groups, runs, shown, viz]);
   const running = models.some((m) => inFlight(m.run)), failed = models.filter((m) => m.error);
   const one = models[0];
   /** A model's run line: a job on its way (an Auto run refreshes silently, unless other users' jobs are ahead), else what it holds. */
@@ -105,9 +109,8 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
       {ref && shown && scale && (() => {
         const { r, col } = ref, [quantity, side] = shown.split('_'), unit = unitFor(shown);
         const A = datas[0]; // the differences: to the first model (A, or the first left after a removal)
-        const owner = (id: string | null) => (id === null ? -1 : datas.findIndex((d) => d?.rows.some((x) => x.id === id)));
-        const kp = probe ? owner(probe.id) : -1, kh = owner(hovered);
-        const probeRow = kp >= 0 ? datas[kp]!.rows.find((x) => x.id === probe!.id) : undefined, hov = kh >= 0 ? datas[kh]!.rows.find((x) => x.id === hovered) : undefined;
+        const pr = probe ? rowOf.get(probe.id) : undefined, hr = hovered === null ? undefined : rowOf.get(hovered);
+        const kp = pr?.k ?? -1, kh = hr?.k ?? -1, probeRow = pr?.x, hov = hr?.x;
         const letter = (k: number) => (many ? `${LETTERS[models[k].slot]} ` : '');
         const readout = probe && probeRow
           ? `${letter(kp)}${probeRow.name}, ${datas[kp]!.r.on === 'faces' ? 'face' : 'vertex'} ${probe.element + 1}: ${fmtNum(probe.value)} ${unit.value}. ${many
@@ -177,7 +180,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
           const t = lineOf(m, d);
           return <div key={m.slot} className="line" title={`Model ${LETTERS[m.slot]}${m.name ? `, ${m.name}` : ''}: ${t.text}`}><Tag slot={m.slot} /> {t.busy && <span className="spinner" aria-hidden="true" />} {t.text}</div>;
         };
-        const status = lineOf(one, ref), what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions${many ? '.' : `, ${fmtNum(r.values.length)} ${r.on} on ${ref.rows.length} ${ref.rows.length === 1 ? 'mesh' : 'meshes'}.`}`;
+        const status = lineOf(one, ref), what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions${many ? '.' : `, ${fmtNum(r.weights.length)} ${r.on} on ${ref.rows.length} ${ref.rows.length === 1 ? 'mesh' : 'meshes'}.`}`;
         return (
           <div className="stack view-fade">
             <div className="row-fill">

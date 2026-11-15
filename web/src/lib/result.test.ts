@@ -18,32 +18,32 @@ describe('areas', () => {
 });
 
 describe('stats, histogram and cumulative area', () => {
-  const rows = [10, 20, 30, 40, NaN].map((v) => Float64Array.of(v, 2 * v));
+  const col = [10, 20, 30, 40, NaN], twice = col.map((v) => 2 * v); // two columns of five rows
   const groups = [{ first: 0, count: 2 }, { first: 2, count: 3 }], weights = [[1, 1], [1, 3, 1]];
   it('weights the mean and total, skips non-finite', () => {
-    const s = columnStats(rows, 0, { first: 0, count: 5 }, [1, 1, 1, 3, 1]);
+    const s = columnStats(col, { first: 0, count: 5 }, [1, 1, 1, 3, 1]);
     expect(s.min).toBe(10);
     expect(s.max).toBe(40);
     expect(s.total).toBe(10 + 20 + 30 + 120);
     expect(s.mean).toBeCloseTo(180 / 6);
-    expect(columnStats(rows, 1, { first: 2, count: 2 }, [1, 1]).total).toBe(60 + 80);
+    expect(columnStats(twice, { first: 2, count: 2 }, [1, 1]).total).toBe(60 + 80);
   });
   it('bins every finite element exactly once over the global range, shares by weight', () => {
-    expect(globalRange(rows, 0)).toEqual([10, 40]);
-    const h = histogram(rows, 0, groups, weights, 3);
+    expect(globalRange(col)).toEqual([10, 40]);
+    const h = histogram(col, groups, weights, 3);
     expect(h.edges).toEqual([10, 20, 30, 40]);
     expect(h.counts).toEqual([1, 1, 2]); // 30 and 40 (max) land in the last bin, NaN dropped
     expect(h.shares.map((s) => Math.round(s * 100))).toEqual([17, 17, 67]); // weights 1, 1, 1 + 3 of 6
     expect([h.below, h.above]).toEqual([0, 0]);
   });
   it('bins only inside a set range; the shares outside it are counted apart', () => {
-    const h = histogram(rows, 0, groups, weights, 2, [15, 35]);
+    const h = histogram(col, groups, weights, 2, [15, 35]);
     expect(h.edges).toEqual([15, 25, 35]);
     expect(h.counts).toEqual([1, 1]); // 20 and 30; 10 below, 40 above
     expect([...h.shares, h.below, h.above].map((s) => Math.round(s * 100))).toEqual([17, 17, 17, 50]);
   });
   it('cumulative share, percentiles and range shares are area-weighted', () => {
-    const c = cumulative(rows, 0, groups, weights);
+    const c = cumulative(col, groups, weights);
     expect([...c.v]).toEqual([10, 20, 30, 40]);
     expect([...c.cw].map((w) => Math.round(w * 100))).toEqual([17, 33, 50, 100]);
     expect(shareBelow(c, 30)).toBeCloseTo(2 / 6);
@@ -56,16 +56,16 @@ describe('stats, histogram and cumulative area', () => {
     expect(percentile(c, 0.9)).toBe(40);
     expect(rangeShares(c, 15, 35)).toEqual({ below: 1 / 6, above: 0.5, within: 1 - 1 / 6 - 0.5 });
     expect(rangeShares(c, null, null)).toEqual({ below: 0, above: 0, within: 1 });
-    expect(Number.isNaN(percentile(cumulative([], 0, [], []), 0.5))).toBe(true);
+    expect(Number.isNaN(percentile(cumulative([], [], []), 0.5))).toBe(true);
   });
   it('summarize: two groups, unequal weights, the problem range and thresholds in one area-weighted summary', () => {
-    const s = summarize(rows, 0, groups, weights, 15, 35, [20, 45]);
+    const s = summarize(col, groups, weights, 15, 35, [20, 45]);
     expect(s).toEqual({
       elements: 5, area: 6, min: 10, p10: 10, median: 30, mean: 30, p90: 40, max: 40, total: 180, // 40 weighs 3: the mean is not 25
       below: 1 / 6, within: 1 - 1 / 6 - 0.5, above: 0.5, atLeast: [1 - 1 / 6, 0],
     });
-    expect(summarize(rows, 0, groups, weights).within).toBe(1); // no problem range
-    const none = summarize(rows, 0, [{ first: 4, count: 1 }], [[1]], 15, 35, [20]); // only the NaN row
+    expect(summarize(col, groups, weights).within).toBe(1); // no problem range
+    const none = summarize(col, [{ first: 4, count: 1 }], [[1]], 15, 35, [20]); // only the NaN row
     expect([none.elements, none.area, none.min, none.mean, none.above, none.atLeast[0]]).toEqual([1, 0, NaN, NaN, NaN, NaN]);
   });
 });
@@ -89,9 +89,9 @@ describe('units and formatting', () => {
 
 describe('several models', () => {
   it('unionRange: the named column over every result that has it, wherever it sits', () => {
-    const a = { columns: ['radiation_front', 'direct_front'], values: [Float64Array.of(10, 1), Float64Array.of(40, NaN)] };
-    const b = { columns: ['direct_front', 'radiation_front'], values: [Float64Array.of(2, -5), Float64Array.of(3, 20)] };
-    const c = { columns: ['sunhours_front'], values: [Float64Array.of(1000)] };
+    const a = { columns: ['radiation_front', 'direct_front'], data: [[10, 40], [1, NaN]] }; // a column per name, two rows
+    const b = { columns: ['direct_front', 'radiation_front'], data: [[2, 3], [-5, 20]] };
+    const c = { columns: ['sunhours_front'], data: [[1000]] };
     expect(unionRange([a, b, c], 'radiation_front')).toEqual([-5, 40]);
     expect(unionRange([a, b, c], 'direct_front')).toEqual([1, 3]);
     expect(unionRange([c], 'radiation_front')).toEqual([Infinity, -Infinity]);

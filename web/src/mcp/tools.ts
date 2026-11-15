@@ -12,7 +12,7 @@ import type { ObjMesh } from 'daylight-mesh';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
 import type { Pane, UiPrefs } from '../App';
 import { validate, weatherLeap } from '../lib/args';
-import { BUILT_IN, FIELDS, putChart, type ChartSpec, type WeightsFor } from '../lib/charts';
+import { BUILT_IN, FIELDS, dataOf, putChart, type ChartSpec } from '../lib/charts';
 import { boxToWorld, cornersOf, describeView, facingOf, findCritical, frameView, meanNormal, viewDir, type Box, type Facing, type Points, type Vec3 } from '../lib/frame';
 import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, photonReverse, photonSearch, proxyUrl } from '../lib/geo';
 import { gradientFor, type Scale } from '../lib/gradients';
@@ -51,14 +51,14 @@ export interface Ctl {
   section: Section; setSection: (s: Section) => void; // every view's section (model metres; lib/section.ts), view only; setting it lets the user's gizmo go
   views: SavedView[]; setViews: Dispatch<SetStateAction<SavedView[]>>;
   optics: ReturnType<typeof resolveOptics>[]; materialsReady: boolean; // optics per model, in state.models order
-  per: { m: Model; receivers: ObjectRow[]; shades: ObjectRow[]; key: string }[]; // per model, in order: its run key now
+  per: { m: Model; receivers: ObjectRow[]; shades: ObjectRow[]; elements: number; key: string }[]; // per model, in order: its receivers' faces or vertices (the rows a run returns), its run key now
   shown: string | null; scale: Scale | null; domain: [number, number]; // the column every view shows, its colour scale, every model's data range
-  exporting: boolean; exportError: { result: RunResult; message: string } | null;
+  exporting: boolean; exportError: { key: string; message: string } | null; // the last download's failure, by its result's run key
   onFiles: (slot: number, files: File[]) => Promise<void>; onRemove: (slot: number) => void;
   onVariant: (slot: number, path: string, set: string, variant: string) => void; onSubdiv: (level: number) => void;
   onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRun: () => Promise<void>; onDownload: (format: Format, mode: ExportMode) => Promise<void>;
-  weightsFor: WeightsFor; meshOf: (id: string) => ObjMesh | undefined; // a mesh's element areas; its ObjMesh (model metres, Z up)
+  meshOf: (id: string) => ObjMesh | undefined; // a mesh's ObjMesh (model metres, Z up)
   busy: () => boolean; held: () => boolean; cancel: () => void; // a batch on its way; a click waiting for the materials; Cancel
   viewer: (slot: number) => Slot;
   variants: (slot: number) => AppModel['choices']; // the variant choices made in the app since the slot's file opened
@@ -136,7 +136,7 @@ const roles = (m: Model) => {
   const free = m.objects.filter((o) => o.shade === false).length;
   return { ...Object.fromEntries((['receiver', 'shade', 'none'] as const).map((r) => [r, m.objects.filter((o) => o.role === r).length])), ...(free ? { noShade: free } : {}) };
 };
-const problems = (x: Ctl) => validate(x.state.settings, x.per.some((p) => p.receivers.length > 0), x.materialsReady);
+const problems = (x: Ctl) => validate(x.state.settings, x.per.some((p) => p.receivers.length > 0), x.materialsReady, Math.max(0, ...x.per.map((p) => p.elements)));
 const loadedSlots = (x: Ctl) => x.state.models.filter((m) => (x.panes[m.slot]?.meshes.size ?? 0) > 0).map((m) => m.slot);
 const display = (x: Ctl) => ({
   active: letter(x.state.active), column: x.shown, colourBy: x.state.colourBy, highlight: x.state.bin, theme: x.theme,
@@ -183,12 +183,12 @@ export const appView = (x: Pick<Ctl, 'shown' | 'state' | 'panes' | 'variants' | 
     };
   }),
 });
-/** A result's element areas per receiver, m² (1 each where the mesh is gone). */
-export const weightsOf = (x: Pick<Ctl, 'weightsFor'>, r: RunResult) => r.receivers.map((id, k) => x.weightsFor(id, r.on) ?? new Float64Array(r.manifest.meshes[k].count).fill(1));
-/** Per model: its run status, timing and the shown column's mean, P10 and P90. */
+/** A result's element areas per receiver, m²: views of its weights. */
+export const weightsOf = (r: RunResult) => r.manifest.meshes.map((g) => r.weights.subarray(g.first, g.first + g.count));
+/** Per model: its run status, timing and the shown column's mean, P10 and P90 (the Results panel's numbers, cached). */
 function runLines(x: Ctl) {
   return x.state.models.map((m, i) => {
-    const r = m.result, f = freshness(x, i), col = r && x.shown ? r.columns.indexOf(x.shown) : -1, sum = r && col >= 0 ? summarize(r.values, col, r.manifest.meshes, weightsOf(x, r)) : null;
+    const r = m.result, f = freshness(x, i), col = r && x.shown ? r.columns.indexOf(x.shown) : -1, sum = r && col >= 0 ? dataOf(r, col, m.objects).markers : null;
     const status = m.run.status === 'error' ? 'failed' : inFlight(m.run) ? m.run.status : !x.per[i].receivers.length ? 'no receiver' : f === 'fresh' ? 'done' : f ?? 'not run';
     return {
       model: letter(m.slot), status, ...(m.error ? { error: m.error } : {}),
@@ -245,12 +245,13 @@ export function provenance(r: RunResult, rows: readonly ObjectRow[]) {
 const SIDES: readonly Facing[] = ['N', 'E', 'S', 'W', 'up', 'down'];
 /**
  * results by 'facing': a result's elements by the side they face (frame.ts facingOf), N, E, S, W, up, down, each side with
- * its rows and areas. `meshes`: the receivers' rows [first, first + count), ObjMeshes (model metres) and element areas
- * `w`. An element faces along its face's (b - a) × (c - a), or a vertex along the sum of its faces' (the core's sensor
- * normal); a back column's turned round. Elements with no normal (degenerate) are left out.
+ * its elements' values in one column (`col`: the column's value per result row) and their areas. `meshes`: the
+ * receivers' rows [first, first + count), ObjMeshes (model metres) and element areas `w`. An element faces along its
+ * face's (b - a) × (c - a), or a vertex along the sum of its faces' (the core's sensor normal); a back column's turned
+ * round. Elements with no normal (degenerate) are left out.
  */
-export function bySide(values: readonly Float64Array[], meshes: readonly { first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }[], on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; rows: Float64Array[]; w: number[] }[] {
-  const out = new Map<Facing, { rows: Float64Array[]; w: number[] }>(), s = back ? -1 : 1;
+export function bySide(col: ArrayLike<number>, meshes: readonly { first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }[], on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
+  const out = new Map<Facing, { values: number[]; w: number[] }>(), s = back ? -1 : 1;
   for (const { first, count, positions: P, indices: I, w } of meshes) {
     const n = new Float64Array(3 * count);
     for (let f = 0; f < I.length / 3; f++) {
@@ -262,9 +263,9 @@ export function bySide(values: readonly Float64Array[], meshes: readonly { first
     for (let e = 0; e < count; e++) {
       const v: Vec3 = [s * n[3 * e], s * n[3 * e + 1], s * n[3 * e + 2]];
       if (!(Math.hypot(...v) > 0)) continue;
-      const side = facingOf(v, north), g = out.get(side) ?? { rows: [], w: [] };
+      const side = facingOf(v, north), g = out.get(side) ?? { values: [], w: [] };
       out.set(side, g);
-      g.rows.push(values[first + e]);
+      g.values.push(col[first + e]);
       g.w.push(w[e]);
     }
   }
@@ -276,14 +277,14 @@ export function bySide(values: readonly Float64Array[], meshes: readonly { first
  * receiver (`whole`) and per row: per prim path of `paths` ('parts'), per receiver mesh, the largest area first ('mesh'),
  * or per side faced ('facing'), the last two over the receivers under `paths` (every one without).
  */
-export function summaries(x: Pick<Ctl, 'weightsFor' | 'meshOf'>, m: Pick<Model, 'objects' | 'result'>, column: string, by: 'parts' | 'mesh' | 'facing', paths: readonly string[] | undefined, lo: number | null, hi: number | null, th: readonly number[] = []) {
-  const r = m.result!, col = r.columns.indexOf(column), w = weightsOf(x, r), g = r.manifest.meshes;
-  const sum = (ks: number[]) => summarize(r.values, col, ks.map((k) => g[k]), ks.map((k) => w[k]), lo, hi, th), under = (ps: readonly string[]) => { const ids = new Set(idsUnder(ps, m.objects)); return r.receivers.flatMap((id, k) => (ids.has(id) ? [k] : [])); };
+export function summaries(x: Pick<Ctl, 'meshOf'>, m: Pick<Model, 'objects' | 'result'>, column: string, by: 'parts' | 'mesh' | 'facing', paths: readonly string[] | undefined, lo: number | null, hi: number | null, th: readonly number[] = []) {
+  const r = m.result!, col = r.data[r.columns.indexOf(column)], w = weightsOf(r), g = r.manifest.meshes;
+  const sum = (ks: number[]) => summarize(col, ks.map((k) => g[k]), ks.map((k) => w[k]), lo, hi, th), under = (ps: readonly string[]) => { const ids = new Set(idsUnder(ps, m.objects)); return r.receivers.flatMap((id, k) => (ids.has(id) ? [k] : [])); };
   const ks = paths ? under(paths) : r.receivers.map((_, k) => k), pathOf = new Map(m.objects.map((o) => [o.id, o.path])); // mesh and facing rows: the receivers under paths
   const rows: { key: string; head: object; u: Summary }[] = by === 'parts' ? paths!.map((p) => ({ key: p, head: { path: p }, u: sum(under([p])) }))
     : by === 'mesh' ? ks.map((k) => { const p = pathOf.get(r.receivers[k]) ?? g[k].name; return { key: p, head: { mesh: p }, u: sum([k]) }; }).sort((p, o) => o.u.area - p.u.area)
-      : bySide(r.values, ks.flatMap((k) => { const o = x.meshOf(r.receivers[k]); return o ? [{ first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }] : []; }), r.on, northOf(r), column.endsWith('_back'))
-        .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.rows, col, [{ first: 0, count: f.rows.length }], [f.w], lo, hi, th) }));
+      : bySide(col, ks.flatMap((k) => { const o = x.meshOf(r.receivers[k]); return o ? [{ first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }] : []; }), r.on, northOf(r), column.endsWith('_back'))
+        .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.values, [{ first: 0, count: f.values.length }], [f.w], lo, hi, th) }));
   return { whole: sum(r.receivers.map((_, k) => k)), rows };
 }
 
@@ -898,12 +899,12 @@ export const HANDLERS: Record<string, Handler> = {
       if (col < 0) throw new Error(`column: not in model ${L}'s result (${r.columns.join(', ')})`);
       const given = a.below !== undefined || a.above !== undefined, below: number | undefined = given ? a.below : range?.lo ?? undefined, above: number | undefined = given ? a.above : range?.hi ?? undefined;
       if (below === undefined && above === undefined) throw new Error(`below: the problem range of ${q} is empty; give below or above (${unitFor(column).value}), or set the range with update_settings viz`);
-      const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(x, r), rows = new Map(m.objects.map((o) => [o.id, o]));
+      const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(r), rows = new Map(m.objects.map((o) => [o.id, o]));
       const meshes = r.receivers.flatMap((id, k) => {
         const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
         return o && row ? [{ id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] }] : [];
       });
-      const out = findCritical({ values: r.values, col, column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);
+      const out = findCritical({ values: r.data[col], column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);
       return ok({
         model: L, column, unit: unitFor(column).value, below: below ?? null, above: above ?? null, problemArea: roundNum(out.problemArea), problemShare: roundPct(out.problemShare),
         groups: out.clusters.map((g) => ({
@@ -1026,7 +1027,7 @@ export const HANDLERS: Record<string, Handler> = {
       flushSync(() => void c().onDownload(a.format, mode));
       if (!(await done(() => !c().exporting, end, 'the download'))) return ok({ model: L, status: 'running', note: 'still writing the file; it lands in the downloads folder by itself: do not call download_result again for it' });
       const e = c().exportError;
-      if (e && e.result === m.result) return fail(`download failed: ${e.message}`);
+      if (e && e.key === m.result.key) return fail(`download failed: ${e.message}`);
       return ok({
         model: L, format: a.format, ...(a.format.startsWith('usd') ? { mode } : {}), column: x.shown, saved: "the browser's downloads folder",
         note: "several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them",

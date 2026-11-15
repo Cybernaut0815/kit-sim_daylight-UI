@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, type Settings } from '../store';
-import { buildArgs, derivedTz, noOccludeArgs, validate } from './args';
+import { buildArgs, derivedTz, noOccludeArgs, simFor, validate } from './args';
 import { DEFAULT_GLASS, DEFAULT_OPTICS, opticsArgs, type RunMesh } from './optics';
 
 const pairs = (a: string[]) => Object.fromEntries(a.map((v, i) => [v, a[i + 1]]));
@@ -163,5 +163,19 @@ describe('validate', () => {
     s.sim.mode = 'ladybug';
     s.sim.bounces = 3;
     expect(validate(s, true, false).materials).toBeUndefined(); // Ladybug: opaque and black whatever the switches
+  });
+  it('refuses a result over 2^27 values (rows x quantities x sides), naming the numbers and the fix', () => {
+    const s = defaultSettings(), bhs = 17_244_108; // a 17M-triangle model's faces
+    s.weather.source = 'clear-sky';
+    expect(validate(s, true, true, bhs)).toEqual({}); // six quantities, one side: 103M values
+    s.sim.sides = 'both';
+    expect(validate(s, true, true, bhs).quantities).toBe('17,244,108 faces × 12 result columns = 206,929,296 values, over the 134,217,728 one run can return. Pick fewer quantities or one side, or fewer receivers.');
+    s.sim.quantities = [];
+    expect(validate(s, true, true, bhs).quantities).toBe('Pick at least one quantity.'); // the field's own problem first
+  });
+  it('a model over 1,000,000 receiver elements runs the default 1024 reflection samples as 256; a value set by hand as set', () => {
+    const sim = defaultSettings().sim;
+    expect([simFor(sim, 1e6).bounceSamples, simFor(sim, 1e6 + 1).bounceSamples, simFor({ ...sim, bounceSamples: 4096 }, 2e7).bounceSamples]).toEqual([1024, 256, 4096]);
+    expect(simFor(sim, 10)).toBe(sim);
   });
 });

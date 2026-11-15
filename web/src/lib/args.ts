@@ -5,6 +5,9 @@ import { pvgisUrl } from './geo';
 import { doy, fmtClock, fmtTime } from './time';
 import { zoneAt } from './zone';
 
+/** The most values one run returns (rows x columns, 512 MB of float32 in the tab): the server's limit too (server.cpp kMaxValues). */
+const MAX_VALUES = 2 ** 27;
+
 /** The clock of every time the user picks: the site's civil standard offset, from the place. Sent as --tz; the core keeps
  *  EPW rows in their own zone and moves these times into it, so any weather source gives the same sun. */
 export const derivedTz = (s: Settings): number => zoneAt(s.site.lat, s.site.lon).std;
@@ -36,6 +39,14 @@ export function buildArgs(s: Settings): string[] {
   return a;
 }
 
+/**
+ * The simulation settings a run of `elements` receiver faces or vertices sends: over 1,000,000 the default 1024
+ * reflection samples become 256 (the reflection pass costs elements x samples paths: at that size 1024 takes many
+ * minutes); any other number runs as set.
+ * ponytail: 1024 picked by hand reads as the default; give bounceSamples an 'auto' value if a big model must run 1024
+ */
+export const simFor = (sim: Settings['sim'], elements: number): Settings['sim'] => (sim.bounceSamples === 1024 && elements > 1e6 ? { ...sim, bounceSamples: 256 } : sim);
+
 /** A model's receivers that cast no shade, as the core's --no-occlude (mesh ids in the order of their paths, so a run key
  *  with its ids as paths stays the same across re-reads); none while receivers do not block rays, when none casts shade
  *  anyway and the core builds the same scene. */
@@ -48,9 +59,9 @@ export function noOccludeArgs(receivers: readonly Pick<ObjectRow, 'id' | 'path' 
  * Field id -> message (cause and fix), in the order of the fields. Empty when the settings can run. `materialsReady`:
  * every texture the run's materials read is decoded (or failed); until then a run whose optics count (physical,
  * Transmission or Reflections on) is held, never started on half-read materials. The hold comes last: a field error
- * keeps the focus.
+ * keeps the focus. `rows`: the receiver faces or vertices of the largest model, the rows its run returns.
  */
-export function validate(s: Settings, hasReceiver: boolean, materialsReady = true): Record<string, string> {
+export function validate(s: Settings, hasReceiver: boolean, materialsReady = true, rows = 0): Record<string, string> {
   const e: Record<string, string> = {};
   const { site, weather, time, sim } = s;
   if (!hasReceiver) e.model = 'No receiver mesh. Select a mesh and mark it as a receiver.';
@@ -59,6 +70,9 @@ export function validate(s: Settings, hasReceiver: boolean, materialsReady = tru
   if (sim.quantities.length === 0) e.quantities = 'Pick at least one quantity.';
   const invalid = sim.quantities.filter((q) => !quantitiesFor(sim.mode).includes(q));
   if (invalid.length) e.quantities = `${invalid.join(', ')} is not available in ${sim.mode} mode. Untick it or switch to physical.`;
+  // a result holds rows x columns float32 values: refused before any upload above what one run can return
+  const cols = sim.quantities.length * (sim.sides === 'both' ? 2 : 1), n = (v: number) => v.toLocaleString('en-GB');
+  if (!e.quantities && rows * cols > MAX_VALUES) e.quantities = `${n(rows)} ${sim.on} × ${cols} result columns = ${n(rows * cols)} values, over the ${n(MAX_VALUES)} one run can return. Pick fewer quantities or one side, or fewer receivers.`;
   if (sim.mode === 'ladybug' && sim.skyDensity === 4) e.skyDensity = 'Ladybug mode supports sky density 1 or 2.';
   const needsWeather = sim.quantities.some((q) => q !== 'sunhours');
   if (needsWeather) {

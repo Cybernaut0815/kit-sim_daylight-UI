@@ -1,6 +1,9 @@
 // Vite dev plugin (VITE_MOCK=1): fakes daylight_server so the UI runs offline without the GPU box.
 // PUT /mesh/:id stores the dmesh header counts; POST /jobs and POST /run answer 404 {missing} for unknown ids, else random
-// values shaped by the args (a job is queued behind a fake job for 0.5 s, then runs for 0.7 s); GET /proxy serves a 20-station index in the NREL master.geojson shape and a zero-filled EPW.
+// values shaped by the args (a job is queued behind a fake job for 0.5 s, then runs for 0.7 s). As the server: a done job's
+// JSON links its values, GET /jobs/:id/values sends them as float32 LE, column-major (?col=k: one column), and only
+// POST /run carries them inline (values_b64, row-major float64). GET /proxy serves a 20-station index in the NREL
+// master.geojson shape and a zero-filled EPW.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 
@@ -71,7 +74,10 @@ const index = () => JSON.stringify({
 /** 'MM-DDTHH:MM' -> hours since Jan 1 (non-leap). */
 const hours = (t: string) => { const m = /^(?:\d+-)?(\d+)-(\d+)T(\d+):(\d+)$/.exec(t); return m ? (Date.UTC(2001, +m[1] - 1, +m[2], +m[3], +m[4]) - Date.UTC(2001, 0, 1)) / 36e5 : 0; };
 
-async function compute(req: IncomingMessage): Promise<{ status: number; text: string }> {
+/** A finished run: its manifest fields (JSON) and its values, float32 column-major [cols][rows]. */
+type Result = { text: string; values: Float32Array; rows: number; cols: number };
+
+async function compute(req: IncomingMessage): Promise<{ status: 404; text: string } | ({ status: 200 } & Result)> {
   const fields = parts(await body(req), req.headers['content-type'] ?? '');
   const get = (n: string) => fields.filter((f) => f.name === n && f.filename === undefined).map((f) => f.data.toString());
   const sensors = get('sensors'), context = get('context'), args = get('args');
@@ -87,25 +93,36 @@ async function compute(req: IncomingMessage): Promise<{ status: number; text: st
   let first = 0;
   const mm = sensors.map((id) => { const m = meshes.get(id)!, count = on === 'vertices' ? m.points : m.faces, r = { name: m.name, first, count }; first += count; return r; });
   const scale = (col: string) => { const q = col.split('_')[0]; return q === 'sunhours' ? Math.min(duration_h, 4380) : q === 'irradiance' ? 900 : q === 'illuminance' ? 90000 : (1100 * duration_h) / 8760; };
-  const vals = new Float64Array(first * columns.length);
-  for (let r = 0; r < first; r++) for (let c = 0; c < columns.length; c++) vals[r * columns.length + c] = Math.random() * scale(columns[c]);
-  return { status: 200, text: JSON.stringify({
-    columns, duration_h, dirs: { sky: 145, ground: 145, sun: Math.round(duration_h / 2) }, meshes: mm,
-    values_b64: Buffer.from(vals.buffer).toString('base64'), run_s: 0.42,
+  const values = new Float32Array(first * columns.length); // column c's rows at c * first
+  for (let c = 0; c < columns.length; c++) for (let r = 0; r < first; r++) values[c * first + r] = Math.random() * scale(columns[c]);
+  return { status: 200, values, rows: first, cols: columns.length, text: JSON.stringify({
+    columns, duration_h, dirs: { sky: 145, ground: 145, sun: Math.round(duration_h / 2) }, meshes: mm, run_s: 0.42,
     cache: { response: 'miss', scene: 'built', weather: args.includes('--clear-sky') ? 'none' : 'miss' },
   }) };
 }
 
+/** POST /run's inline values: row-major float64 of the float32 values, base64. */
+function inline({ values, rows, cols }: Result): string {
+  const out = new Float64Array(values.length);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) out[r * cols + c] = values[c * rows + r];
+  return Buffer.from(out.buffer).toString('base64');
+}
+
 // jobs: queued for 0.5 s (one fake job ahead), running for 0.7 s, then done; the result is computed at submission
-const jobs = new Map<string, { t0: number; result: string; cancelled: boolean }>();
+const jobs = new Map<string, { t0: number; result: Result; cancelled: boolean }>();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const isDone = (id: string) => { const j = jobs.get(id)!; return !j.cancelled && Date.now() - j.t0 >= 1200; };
 function view(id: string): string {
   const j = jobs.get(id)!, dt = Date.now() - j.t0;
   const head = { id, created: new Date(j.t0).toISOString(), started: null, finished: null };
   if (j.cancelled) return JSON.stringify({ ...head, state: 'cancelled', position: 0, status: 409, error: 'error: cancelled' });
   if (dt < 500) return JSON.stringify({ ...head, state: 'queued', position: 1 });
   if (dt < 1200) return JSON.stringify({ ...head, state: 'running', position: 0 });
-  return JSON.stringify({ ...head, state: 'done', position: 0, ...JSON.parse(j.result) });
+  const { values, rows, cols } = j.result;
+  return JSON.stringify({
+    ...head, state: 'done', position: 0, ...JSON.parse(j.result.text), rows, cols,
+    values: { url: `/jobs/${id}/values`, dtype: '<f4', order: 'column-major', shape: [cols, rows], bytes: values.byteLength },
+  });
 }
 
 function send(res: ServerResponse, status: number, text: string, type = 'application/json') {
@@ -134,13 +151,30 @@ export function mock(): Plugin {
             res.statusCode = meshes.has(id) ? 204 : 404;
             return res.end();
           }
-          if (url.pathname === '/run' && req.method === 'POST') { const r = await compute(req); if (r.status === 200) await sleep(700); return send(res, r.status, r.text); }
+          if (url.pathname === '/run' && req.method === 'POST') {
+            const r = await compute(req);
+            if (r.status !== 200) return send(res, r.status, r.text);
+            await sleep(700);
+            return send(res, 200, JSON.stringify({ ...JSON.parse(r.text), values_b64: inline(r) }));
+          }
           if (url.pathname === '/jobs' && req.method === 'POST') {
             const r = await compute(req);
             if (r.status !== 200) return send(res, r.status, r.text);
             const id = crypto.randomUUID();
-            jobs.set(id, { t0: Date.now(), result: r.text, cancelled: false });
+            jobs.set(id, { t0: Date.now(), result: r, cancelled: false });
             return send(res, 202, view(id));
+          }
+          const ofJob = /^\/jobs\/([^/]+)\/values$/.exec(url.pathname)?.[1];
+          if (ofJob && req.method === 'GET') { // the server's statuses: 404 unknown (or expired), 409 not done, 400 a bad col
+            const j = jobs.get(ofJob);
+            if (!j) return send(res, 404, 'error: no such job', 'text/plain');
+            if (!isDone(ofJob)) return send(res, 409, 'error: the job is not done', 'text/plain');
+            const { values, rows, cols } = j.result, col = url.searchParams.get('col');
+            if (col !== null && !(/^\d+$/.test(col) && +col < cols)) return send(res, 400, `error: col must be 0..${cols - 1}`, 'text/plain');
+            const part = col === null ? values : values.subarray(+col * rows, (+col + 1) * rows);
+            res.statusCode = 200;
+            res.setHeader('content-type', 'application/octet-stream');
+            return res.end(Buffer.from(part.buffer, part.byteOffset, part.byteLength));
           }
           if (url.pathname.startsWith('/jobs/')) {
             const id = url.pathname.slice(6), j = jobs.get(id);

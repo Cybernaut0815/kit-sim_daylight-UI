@@ -5,11 +5,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { Object3D } from 'three';
-import { runRemote, type ObjMesh, type RemoteManifest } from 'daylight-mesh';
+import { runRemote, type ObjMesh } from 'daylight-mesh';
 import type { LocalFile, SectionGizmo, SectionSource, ViewState } from 'usd-viewer';
 import { Splitter } from './Splitter';
 import type { ChartEdit } from './charts/ChartSettings';
-import { buildArgs, derivedTz, epwRef, noOccludeArgs, validate, weatherLeap } from './lib/args';
+import { buildArgs, derivedTz, epwRef, noOccludeArgs, simFor, validate, weatherLeap } from './lib/args';
 import { zoneAt } from './lib/zone';
 import { extract } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
@@ -59,7 +59,7 @@ const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_
 const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths } }; } catch { return UI; } };
 
 // A mesh's conversion, kept with its model's slot; make: an instanced shade, built on first use
-interface Conv { slot: number; obj?: ObjMesh; make?: () => ObjMesh; areas?: Float64Array; vareas?: Float64Array }
+interface Conv { slot: number; obj?: ObjMesh; make?: () => ObjMesh }
 const objOf = (c: Conv) => (c.obj ??= c.make!());
 /** A view's model as the app holds it: the viewer's object per row id, the model's own names by prim path (glb / gltf /
  *  obj), a load in progress or its problem, and the open counter (bumped per opened model: the tree resets and the camera
@@ -83,7 +83,7 @@ export default function App() {
     const p = all[slot] ?? NO_PANE;
     return { ...all, [slot]: { ...p, ...(typeof patch === 'function' ? patch(p) : patch) } };
   }), []);
-  const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh (+ areas on demand): converted once, uploaded once, referenced by id
+  const conv = useRef(new Map<string, Conv>()); // mesh id -> ObjMesh: converted once, uploaded once, referenced by id
   const dropConv = (slot: number) => { for (const [id, c] of conv.current) if (c.slot === slot) conv.current.delete(id); };
   const abort = useRef<AbortController | null>(null);
   const jobs = useRef<Record<number, AbortController>>({}); // per slot, its job on its way: removing the model ends it
@@ -398,12 +398,6 @@ export default function App() {
     void viewer(slot).el.close().catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- dropConv reads a ref only
 
-  const weightsFor = useCallback((id: string, on: 'faces' | 'vertices') => {
-    const c = conv.current.get(id);
-    if (!c) return undefined;
-    const { positions, indices } = objOf(c);
-    return on === 'faces' ? (c.areas ??= faceAreas(positions, indices)) : (c.vareas ??= vertexAreas(positions, indices));
-  }, []);
   const meshOf = useCallback((id: string) => { const c = conv.current.get(id); return c && objOf(c); }, []); // a row's mesh as run (model metres, Z up)
 
   const s = state.settings;
@@ -429,13 +423,15 @@ export default function App() {
     const slot = state.models[k].slot;
     void readTexture(viewer(slot).el, r).then((t) => { reading.current = false; setTexStats((all) => ({ ...all, [slot]: new Map(all[slot] ?? NO_STATS).set(readKey(r), t) })); });
   }); // every render: cheap when nothing is unread or a read is in flight
-  // Per model: its receivers and shades, its run arguments (the receivers that cast no shade among them), and everything
-  // the server's response cache keys on (an equal key gives an equal result).
+  // Per model: its receivers and shades, their faces or vertices (the rows its run returns), the settings it runs with
+  // (a big model's reflection samples: lib/args.ts simFor), its run arguments (the receivers that cast no shade among
+  // them), and everything the server's response cache keys on (an equal key gives an equal result).
   const epw = epwRef(s), base = buildArgs(s), weather = epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null;
   const per = state.models.map((m, i) => {
     const receivers = m.objects.filter((o) => o.role === 'receiver'), shades = m.objects.filter((o) => o.role === 'shade');
-    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, s.sim), ...noOccludeArgs(receivers, s.sim)];
-    return { m, receivers, shades, args, mesh: JSON.stringify(ids), key: JSON.stringify([args, weather, ...ids]) };
+    const elements = receivers.reduce((n, o) => n + (s.sim.on === 'faces' ? o.tris : o.verts), 0), sim = simFor(s.sim, elements);
+    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, sim), ...noOccludeArgs(receivers, s.sim)];
+    return { m, receivers, shades, elements, sim, args, mesh: JSON.stringify(ids), key: JSON.stringify([args, weather, ...ids]) };
   });
   const meshKeys = useRef<Record<number, string>>({}); // per slot, its receivers and shades now: a job started for others reports nothing
   meshKeys.current = Object.fromEntries(per.map((p) => [p.m.slot, p.mesh]));
@@ -447,7 +443,7 @@ export default function App() {
     if (busy.current) return; // one batch per tab: Auto re-checks when it ends, the button is disabled meanwhile
     const todo = per.filter((p) => p.receivers.length && (!auto || p.key !== lastKey.current[p.m.slot])); // no receiver: not run
     for (const p of todo) lastKey.current[p.m.slot] = p.key;
-    const errors = validate(s, per.some((p) => p.receivers.length > 0), materialsReady);
+    const errors = validate(s, per.some((p) => p.receivers.length > 0), materialsReady, Math.max(0, ...per.map((p) => p.elements)));
     dispatch({ type: 'ERRORS', errors });
     const first = Object.keys(errors)[0];
     if (first) {
@@ -488,8 +484,16 @@ export default function App() {
                 if (!o || g.count !== want) throw new Error(`${o?.name ?? g.name}: the server returned ${g.count} rows, expected ${want}. Reload the model and run again.`);
               });
               if (!mine()) throw new Error('changed'); // its model changed during the job: runBatch ends it idle, never a new model's result
-              const { values_b64: _decoded, ...manifest } = res.manifest as RemoteManifest & { values_b64?: string }; // decoded into values already: not kept twice
-              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, manifest, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(s.sim) } } });
+              // Every element's area, aligned with the rows: the weight of every statistic, chart, tool and export, written
+              // once here instead of per mesh on each use.
+              const weights = new Float32Array(res.manifest.meshes.reduce((n, g) => n + g.count, 0));
+              res.manifest.meshes.forEach((g, i) => {
+                const c = conv.current.get(p.receivers[i].id);
+                if (!c) throw new Error('changed'); // re-read before React committed its new rows: ended idle as above
+                const { positions, indices } = objOf(c);
+                weights.set((s.sim.on === 'faces' ? faceAreas : vertexAreas)(positions, indices), g.first);
+              });
+              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(p.sim) } } });
             } finally {
               signal.removeEventListener('abort', off);
               if (jobs.current[slot] === own) delete jobs.current[slot];
@@ -553,7 +557,9 @@ export default function App() {
   const staleKey = stale.map(Number).join('');
   const compared = useMemo<Compared[]>(() => state.models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [state.models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves
   const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = state.models[ai], ap = panes[am.slot] ?? NO_PANE;
-  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ result: RunResult; message: string } | null>(null); // one download at a time; its error is its result's
+  // one download at a time; its error is its result's, by run key (holding the result itself would keep a replaced one's
+  // values alive)
+  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ key: string; message: string } | null>(null);
   const onDownload = useCallback(async (format: Format, mode: ExportMode) => {
     const picked = model.current[am.slot]?.picked, col = cols[ai], result = am.result;
     if (!result || col < 0 || !picked) return;
@@ -561,15 +567,15 @@ export default function App() {
     setExportError(null);
     try {
       await download(format, mode, {
-        usd: viewer(am.slot).el, result, objects: am.objects, meshes: ap.meshes, column: col, model: picked, weightsFor,
+        usd: viewer(am.slot).el, result, objects: am.objects, meshes: ap.meshes, column: col, model: picked,
         scales: result.columns.map((c) => scaleFor(c, unionRange(results, c), s.viz)), // the colours on screen: one scale over every model
       });
     } catch (e) {
-      setExportError({ result, message: (e as Error).message });
+      setExportError({ key: result.key, message: (e as Error).message });
     } finally {
       setExporting(false);
     }
-  }, [am, ai, ap.meshes, cols[ai], results, s.viz, weightsFor]); // eslint-disable-line react-hooks/exhaustive-deps -- cols by its active entry
+  }, [am, ai, ap.meshes, cols[ai], results, s.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- cols by its active entry
   const probed: Model | undefined = state.probe ? state.models.find((m) => m.objects.some((o) => o.id === state.probe!.id)) : undefined; // its tip only in its own view
   const probeLabel = state.probe && probed && shown
     ? `${probed.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(shown).value}`
@@ -587,7 +593,7 @@ export default function App() {
   useLayoutEffect(() => {
     ctl.current = {
       state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection: (s) => onSection(s, null), views, setViews, optics, materialsReady, per, shown, scale, domain,
-      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, weightsFor, meshOf,
+      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, meshOf,
       busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
       variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
     };
@@ -656,7 +662,7 @@ export default function App() {
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={(s) => onSection(s, null)} />
                     <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
-                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.result === am.result ? exportError.message : null} onDownload={onDownload} />
+                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports; a generation's failure shows as its lastError */}
                     {reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}
                   </div>
@@ -684,7 +690,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} weightsFor={weightsFor} dispatch={dispatch} reports={reports} reportError={reportError} onReportChart={onReportChart} />
+              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} dispatch={dispatch} reports={reports} reportError={reportError} onReportChart={onReportChart} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>

@@ -53,7 +53,7 @@ async function build(id: string, c: () => Ctl): Promise<Pdf> {
     const x = c(), { renderReport } = await page;
     return renderReport({
       report: spec, models: models.map((m) => ({ slot: m.slot, name: m.name, file: x.fileOf(m.slot), objects: m.objects, result: m.result! })), settings: x.state.settings,
-      weightsFor: x.weightsFor, meshOf: x.meshOf, images, versions: __VERSIONS__, date: new Date(),
+      meshOf: x.meshOf, images, versions: __VERSIONS__, date: new Date(),
     });
   });
   const r = await fetch(`/reports/${id}/pdf`, { method: 'POST', headers: { 'Content-Type': 'text/html; charset=utf-8' }, body: html }).catch(() => null);
