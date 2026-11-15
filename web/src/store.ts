@@ -56,14 +56,21 @@ export interface Probe { id: string; element: number; value: number }
  * faces'): one array per column and one for the weights, never an object per row (a 17M-triangle model has 17M rows).
  */
 export interface RunResult {
-  data: Float32Array[]; weights: Float32Array; columns: string[]; manifest: RemoteManifest; cache?: Record<string, string>;
+  data: Float32Array[]; weights: Float32Array; columns: string[]; cache?: Record<string, string>;
+  // the job's JSON, with the server's run timing in ms (C4; totalMs = run_s) when it reports one
+  manifest: RemoteManifest & { timing?: { prepMs: number; skyMs: number; buildMs: number; traceMs: number; reduceMs: number; bounceMs: number; totalMs: number } };
   receivers: string[]; // object ids in sensor order: manifest.meshes[i] <-> receivers[i]
   on: 'faces' | 'vertices'; // element kind the rows describe (weights: face areas or vertex areas)
   key: string; // the run key (args, weather, mesh ids) it was computed for: differs from the current one = stale
   elapsed: number; // s, click to result (the round trip the user waits for)
   switches?: string; // the optics switches it ran with, in words (lib/optics.ts runSwitches); '' = the defaults
 }
-export type Run = { status: 'idle' } | { status: 'queued'; position: number } | { status: 'running' } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
+/** A run's seconds on the GPU (building the scene, tracing, bounces) by the server's timing; undefined without one. */
+export const gpuSeconds = (r: RunResult) => { const t = r.manifest.timing; return t && (t.buildMs + t.traceMs + t.bounceMs) / 1000; };
+// running: the share done (0..1) and the seconds to go, once the server reports them
+// queued: its meshes uploading (meshes done of total) before the job is made; running: the share done (0..1) and the
+// seconds to go, once the server reports them
+export type Run = { status: 'idle' } | { status: 'queued'; position: number; upload?: [number, number] } | { status: 'running'; progress?: number; eta_s?: number } | { status: 'error'; message: string } | { status: 'done'; result: RunResult };
 
 /** The viewer's selection: prim paths (any prim: a parent stands for every mesh below it), the active one, who made it. */
 export interface Selection { paths: string[]; active: string | null; source: string }
@@ -261,7 +268,7 @@ export function reducer(s: State, a: Action): State {
     }
     case 'RUN': { // the last result stays until the next one lands; the first result of any model shows its values
       const m = s.models.find((x) => x.slot === a.slot), r = a.run, done = r.status === 'done';
-      if (!m || (r.status === 'running' && m.run.status === 'running') || (r.status === 'queued' && m.run.status === 'queued' && r.position === m.run.position)) return s;
+      if (!m || (r.status === 'running' && m.run.status === 'running' && r.progress === m.run.progress && r.eta_s === m.run.eta_s) || (r.status === 'queued' && m.run.status === 'queued' && r.position === m.run.position && r.upload?.[0] === m.run.upload?.[0])) return s;
       if (done) { // the model or the roles changed while it ran: dropped (a Set: 14k receivers are 14k lookups)
         const receiving = new Set(m.objects.flatMap((o) => (o.role === 'receiver' ? [o.id] : [])));
         if (!r.result.receivers.every((id) => receiving.has(id))) return put(s, a.slot, (x) => ({ ...x, run: IDLE }));

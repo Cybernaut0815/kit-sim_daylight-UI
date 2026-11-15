@@ -115,9 +115,10 @@ export function dataOf(r: RunResult, col: number, objects: readonly ObjectRow[],
   const markers = { mean: area ? total / area : NaN, median: percentile(cum, 0.5), p10: percentile(cum, 0.1), p90: percentile(cum, 0.9) };
   const d = { r, col, rows, total, cum, markers, bins, step: stepOf(cum.v) };
   held.set(key, d);
-  // ponytail: per result at most 3 full columns' worth of elements (16 B each), least recent out; raise it if many charts thrash it
-  const full = groups.reduce((n, g) => n + g.count, 0), size = () => [...held.values()].reduce((n, x) => n + x.cum.v.length, 0);
-  while (held.size > 1 && size() > 3 * full) held.delete(held.keys().next().value!);
+  // ponytail: per result at most 3 full columns' worth of elements (12 B each), and over 1M rows 2 entries (0.2 GB each
+  // at 17M rows), least recent out; raise it if many charts thrash it
+  const full = r.weights.length, size = () => [...held.values()].reduce((n, x) => n + x.cum.v.length, 0);
+  while (held.size > 1 && ((full > 1e6 && held.size > 2) || size() > 3 * full)) held.delete(held.keys().next().value!);
   return d;
 }
 

@@ -7,6 +7,8 @@
 // - usda / usdc / usd: one flattened layer, the core composing the overlay over the stage (replace) or adding the variant
 //   sets; zipped with the files it uses (textures) when it uses any.
 // glTF / GLB / OBJ: the model as drawn, receivers coloured with the shown result (lib/sceneexport).
+// values: every result as numbers, values.npy (float32, rows x columns) + weights.npy + values.json, zipped; any size.
+// Above about 4M triangles every other format is refused (tooBig): their writers pass a browser's buffer or string limits.
 import type { BufferAttribute, InterleavedBufferAttribute, Mesh, Object3D } from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import type { StageInfo, UsdViewerElement } from 'usd-viewer';
@@ -14,11 +16,12 @@ import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { exportMatrices, gltfScene, objText, type Drawn } from '../lib/sceneexport';
 import { freeName, overlay, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
 import { usdz } from '../lib/usdz';
+import { stableKey } from '../mcp/tools';
 import type { ObjectRow, RunResult } from '../store';
 
 export type ExportMode = 'replace' | 'variants';
-export type Format = 'usdz' | 'usda' | 'usdc' | 'usd' | 'glb' | 'gltf' | 'obj';
-export const FORMATS: readonly Format[] = ['usdz', 'usda', 'usdc', 'usd', 'glb', 'gltf', 'obj'];
+export type Format = 'usdz' | 'usda' | 'usdc' | 'usd' | 'glb' | 'gltf' | 'obj' | 'values';
+export const FORMATS: readonly Format[] = ['usdz', 'usda', 'usdc', 'usd', 'glb', 'gltf', 'obj', 'values'];
 export const isUsd = (f: Format) => f.startsWith('usd');
 /** The open model as picked: every file at its path in the package (the root layer among them). */
 export interface PickedModel { files: [path: string, file: File][]; root: string; info: StageInfo }
@@ -45,8 +48,47 @@ const save = (data: BlobPart[], name: string) => {
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 };
 
+/** The most triangles a model gets USD, glTF or OBJ for. ponytail: one bound for all of them (the USD layers and the
+ *  overlay are text, glTF a JSON and buffers, OBJ a string); measure per format if a bigger model needs one. */
+export const MAX_TRIANGLES = 4_000_000;
+/** Why `format` is refused for a model of `tris` triangles, or null. */
+export function tooBig(format: Format, tris: number): string | null {
+  if (format === 'values' || tris <= MAX_TRIANGLES) return null;
+  return `A ${format} file of this model (${tris.toLocaleString('en-GB')} triangles) is too big for the browser to write: the limit is ${MAX_TRIANGLES.toLocaleString('en-GB')}. Download Values (.npy + .json, zip) for every result as numbers.`;
+}
+
+/** NumPy v1.0 header for `<f4` data of `shape`, Fortran order (column-major: a run's columns one after another). */
+export function npyHeader(shape: number[]): Uint8Array {
+  let h = `{'descr': '<f4', 'fortran_order': True, 'shape': (${shape.join(', ')}${shape.length === 1 ? ',' : ''}), }`;
+  h += `${' '.repeat((64 - ((11 + h.length) % 64)) % 64)}\n`;
+  const out = new Uint8Array(10 + h.length);
+  out.set([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0, h.length & 255, h.length >> 8]); // \x93NUMPY, v1.0, header length
+  out.set(new TextEncoder().encode(h), 10);
+  return out;
+}
+
+/** The values download's files: values.npy (rows x columns, float32), weights.npy (each row's area) and values.json
+ *  (the columns, each receiver's rows by path, what ran). The columns go in as they are when they are one buffer. */
+export function valuesFiles(r: RunResult, objects: readonly ObjectRow[]): [string, Uint8Array][] {
+  const rows = r.weights.length, c0 = r.data[0], one = r.data.every((c, k) => c.buffer === c0.buffer && c.byteOffset === c0.byteOffset + 4 * rows * k);
+  const body = one ? new Uint8Array(c0.buffer, c0.byteOffset, 4 * rows * r.data.length) : new Uint8Array(r.data.reduce((b, c, k) => (b.set(new Uint8Array(c.buffer, c.byteOffset, 4 * rows), 4 * rows * k), b), new Uint8Array(4 * rows * r.data.length)).buffer);
+  const cat = (a: Uint8Array, b: Uint8Array) => { const out = new Uint8Array(a.length + b.length); out.set(a); out.set(b, a.length); return out; };
+  const path = new Map(objects.map((o) => [o.id, o.path]));
+  const meta = {
+    columns: r.columns, elements: r.on, rows, order: 'values.npy: rows x columns, float32 (column-major); weights.npy: each row\'s area in m² (vertices: its share of the faces round it)',
+    meshes: r.manifest.meshes.map((g, k) => ({ path: path.get(r.receivers[k]) ?? null, first: g.first, count: g.count })),
+    args: (JSON.parse(stableKey(r.key, objects)) as [string[]])[0], duration_h: r.manifest.duration_h, ...(r.switches ? { switches: r.switches } : {}), // mesh ids as prim paths
+  };
+  // ponytail: a header and the columns in one copy (a zip writes them in one buffer anyway); Blob parts if 2x hurts
+  return [['values.npy', cat(npyHeader([rows, r.data.length]), body)], ['weights.npy', cat(npyHeader([rows]), new Uint8Array(r.weights.buffer, r.weights.byteOffset, 4 * rows))],
+    ['values.json', new TextEncoder().encode(`${JSON.stringify(meta, null, 1)}\n`)]];
+}
+
 export async function download(format: Format, mode: ExportMode, o: DownloadOptions): Promise<void> {
   const { usd } = o, stem = o.model.root.replace(/^.*\//, '').replace(/\.\w+$/, '');
+  const big = tooBig(format, o.objects.reduce((n, x) => n + x.tris, 0));
+  if (big) throw new Error(big);
+  if (format === 'values') return save([usdz(valuesFiles(o.result, o.objects)) as Uint8Array<ArrayBuffer>], `${stem}_daylight_values.zip`);
   if (!isUsd(format)) return drawnFile(format, o, stem);
   const r = o.result, perFace = r.on === 'faces';
   const rows = new Map(o.objects.map((x) => [x.id, x])), items = new Map(usd.three.items().map((it) => [it.object, it])); // one lookup per receiver

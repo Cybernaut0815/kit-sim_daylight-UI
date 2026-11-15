@@ -13,7 +13,7 @@ import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row } from
 import { hexAt, type Scale } from '../lib/gradients';
 import { QUANTITY_HELP, SIDE_HELP, columnLabel, fmtDiff, fmtNum, rangeShares, shareBelow, unitFor } from '../lib/result';
 import { chartSpec, type Stored } from '../report/spec';
-import { inFlight, type Action, type Model, type Probe, type RunResult, type Settings } from '../store';
+import { gpuSeconds, inFlight, type Action, type Model, type Probe, type Run, type RunResult, type Settings } from '../store';
 import { Alert, Illustration, LETTERS, Segmented, Swatch, Tag, pct, rowKeys } from '../ui';
 
 /** A model as the panel compares it: its result's column for the one shown (by name; -1: none) and whether that result
@@ -31,7 +31,83 @@ interface Props {
 const cacheLine = (c: Record<string, string> | undefined) =>
   !c ? '' : c.response === 'hit' ? 'Identical run, replayed from the server cache.'
     : `Scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}.`;
-const timingOf = (r: RunResult) => `${r.manifest.run_s !== undefined && r.cache?.response !== 'hit' ? `${r.manifest.run_s.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip`;
+/** A run's times: its GPU share of the compute (a run replayed from the server cache computed nothing), the round trip. */
+export const timingOf = (r: RunResult) => {
+  const run = r.manifest.run_s, gpu = gpuSeconds(r);
+  return `${run !== undefined && r.cache?.response !== 'hit' ? `${gpu !== undefined ? `${gpu.toFixed(2)} s on the GPU of ` : ''}${run.toFixed(2)} s compute, ` : ''}${r.elapsed.toFixed(2)} s round trip`;
+};
+/** A run's upload (meshes sent of those the server lacked), or its job's share done and time to go once the server
+ *  reports them; null otherwise. */
+const progressOf = (run: Run) => run.status === 'queued' && run.upload && run.upload[0] < run.upload[1]
+  ? `Uploading meshes, ${run.upload[0].toLocaleString('en-GB')} of ${run.upload[1].toLocaleString('en-GB')}`
+  : run.status === 'running' && run.progress !== undefined
+    ? `Running ${Math.floor(100 * run.progress)} %${run.eta_s === undefined ? '' : `, about ${run.eta_s < 60 ? `${Math.max(1, Math.round(run.eta_s))} s` : `${Math.round(run.eta_s / 60)} min`} left`}`
+    : null;
+
+const ROWS = 200; // ponytail: the largest meshes only; a name search if small ones need finding here (the views, the tree and Select reach every one)
+/** The per-mesh table's rows of a result (indices into its rows): every one in receiver order up to n, else the n largest
+ *  by area, the largest first. */
+export const tableRows = (rows: readonly { stats: { area: number } }[], n = ROWS): number[] => {
+  const all = rows.map((_, i) => i);
+  return rows.length <= n ? all : all.sort((a, b) => rows[b].stats.area - rows[a].stats.area).slice(0, n);
+};
+
+/** The per-mesh table, at most ROWS rows per model. Nothing it takes changes with the hover, the cursor or a bin: those
+ *  re-render the readout and the charts only (14k rows took 0.1-0.5 s per hover). */
+const MeshTable = memo(function MeshTable({ models, datas, within, label, unit, totalUnit, dispatch }: {
+  models: Compared[]; datas: (Data | null)[]; within: (number[] | null)[]; label: string; unit: string; totalUnit: string; dispatch: Dispatch<Action>;
+}) {
+  const many = models.length > 1, k0 = datas.findIndex(Boolean), most = Math.max(0, ...datas.map((d) => d?.rows.length ?? 0));
+  const select = (slot: number, id: string, additive: boolean) => dispatch({ type: 'SELECT', slot, ids: [id], additive });
+  const meshRow = (slot: number, selected: Set<string>, x: Row, w: number, total: number) => (
+    <tr
+      key={x.id} tabIndex={0} aria-selected={selected.has(x.id)}
+      onClick={(e) => select(slot, x.id, e.shiftKey || e.ctrlKey)} onKeyDown={rowKeys(() => select(slot, x.id, true))}
+      onPointerEnter={() => dispatch({ type: 'HOVER', id: x.id })} onPointerLeave={() => dispatch({ type: 'HOVER', id: null })}
+      onFocus={() => dispatch({ type: 'HOVER', id: x.id })} onBlur={() => dispatch({ type: 'HOVER', id: null })}
+    >
+      <td>{x.name}</td>
+      <td className="num">{x.stats.count.toLocaleString('en-GB')}</td>
+      <td className="num">{fmtNum(x.stats.min)}</td>
+      <td className="num">{fmtNum(x.stats.mean)}</td>
+      <td className="num">{fmtNum(x.stats.max)}</td>
+      <td className="num">{fmtNum(x.stats.total)}</td>
+      <td className="num">{pct(total ? x.stats.total / total : 0)}</td>
+      <td className="num">{pct(w)}</td>
+    </tr>
+  );
+  const rowsOf = (m: Compared, d: Data, k: number) => tableRows(d.rows).map((i) => meshRow(m.slot, m.selected, d.rows[i], within[k]![i], d.total));
+  return (
+    <div className="table-box">
+      <table className="data-table">
+        <caption>Per receiver mesh{many ? ' and model' : ''}, {label}{most <= ROWS ? '' : many ? `; the ${ROWS} largest of each` : `; ${ROWS} of ${most.toLocaleString('en-GB')} meshes, the largest first`}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Mesh</th>
+            <th scope="col" className="num">Elements</th>
+            <th scope="col" className="num">Min <span className="th-unit">{unit}</span></th>
+            <th scope="col" className="num">Mean</th>
+            <th scope="col" className="num">Max</th>
+            <th scope="col" className="num">Total <span className="th-unit">{totalUnit}</span></th>
+            <th scope="col" className="num">Share</th>
+            <th scope="col" className="num">Within</th>
+          </tr>
+        </thead>
+        {many ? models.map((m, k) => {
+          const d = datas[k];
+          return (
+            <tbody key={m.slot}>
+              <tr><th scope="rowgroup" colSpan={8}><Tag slot={m.slot} name={m.name} /></th></tr>
+              {d
+                ? rowsOf(m, d, k)
+                : m.objects.filter((o) => o.role === 'receiver').slice(0, ROWS).map((o) => <tr key={o.id}><td>{o.name}</td>{Array.from({ length: 7 }, (_, j) => <td key={j} className="num">–</td>)}</tr>)}
+            </tbody>
+          );
+        }) : <tbody>{rowsOf(models[0], datas[k0]!, k0)}</tbody>}
+      </table>
+    </div>
+  );
+});
 
 const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of shares: percentage points
 
@@ -74,7 +150,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
   const lineOf = (m: Compared, d: Data | null): { busy: boolean; text: string } => {
     const ahead = m.run.status === 'queued' ? m.run.position : 0;
     if (ahead) return { busy: true, text: `Waiting for the GPU, ${ahead} job${ahead > 1 ? 's' : ''} ahead` };
-    if (inFlight(m.run) && !auto) return { busy: true, text: m.run.status === 'queued' && many ? 'Waiting for its turn' : 'Running with the new inputs' };
+    if (inFlight(m.run) && (!auto || progressOf(m.run))) return { busy: true, text: progressOf(m.run) ?? (m.run.status === 'queued' && many ? 'Waiting for its turn' : 'Running with the new inputs') };
     if (!many) return { busy: false, text: d ? timingOf(d.r) : '' };
     if (!m.objects.length) return { busy: false, text: 'No model yet' };
     if (!m.objects.some((o) => o.role === 'receiver')) return { busy: false, text: 'No receiver mesh: not run' };
@@ -121,7 +197,6 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             : hov
               ? `${letter(kh)}${hov.name}: ${fmtNum(hov.stats.mean)} ${unit.value} mean, ${fmtNum(hov.stats.min)} to ${fmtNum(hov.stats.max)}, ${pct(datas[kh]!.total ? hov.stats.total / datas[kh]!.total : 0)} of ${many ? `model ${LETTERS[models[kh].slot]}'s` : 'the'} total.`
               : '';
-        const select = (slot: number, id: string, additive: boolean) => dispatch({ type: 'SELECT', slot, ids: [id], additive });
         const splits = datas.map((d) => d && rangeShares(d.cum, scale.lo, scale.hi));
         /** A comparison cell: the value, then (under it) its difference to the first model; '–' where there is none. */
         const cell = (k: number, get: (d: Data, k: number) => number, fmt: (v: number) => string = fmtNum, diff: (v: number) => string = fmtNum) => {
@@ -159,23 +234,6 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             </Fragment>
           );
         });
-        const meshRow = (slot: number, selected: Set<string>, x: Row, w: number, total: number) => (
-          <tr
-            key={x.id} tabIndex={0} aria-selected={selected.has(x.id)}
-            onClick={(e) => select(slot, x.id, e.shiftKey || e.ctrlKey)} onKeyDown={rowKeys(() => select(slot, x.id, true))}
-            onPointerEnter={() => dispatch({ type: 'HOVER', id: x.id })} onPointerLeave={() => dispatch({ type: 'HOVER', id: null })}
-            onFocus={() => dispatch({ type: 'HOVER', id: x.id })} onBlur={() => dispatch({ type: 'HOVER', id: null })}
-          >
-            <td>{x.name}</td>
-            <td className="num">{x.stats.count.toLocaleString('en-GB')}</td>
-            <td className="num">{fmtNum(x.stats.min)}</td>
-            <td className="num">{fmtNum(x.stats.mean)}</td>
-            <td className="num">{fmtNum(x.stats.max)}</td>
-            <td className="num">{fmtNum(x.stats.total)}</td>
-            <td className="num">{pct(total ? x.stats.total / total : 0)}</td>
-            <td className="num">{pct(w)}</td>
-          </tr>
-        );
         const runLine = (m: Compared, d: Data | null) => {
           const t = lineOf(m, d);
           return <div key={m.slot} className="line" title={`Model ${LETTERS[m.slot]}${m.name ? `, ${m.name}` : ''}: ${t.text}`}><Tag slot={m.slot} /> {t.busy && <span className="spinner" aria-hidden="true" />} {t.text}</div>;
@@ -277,38 +335,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
                 </div>
               </div>
             )}
-            <div className="table-box">
-              <table className="data-table">
-                <caption>Per receiver mesh{many ? ' and model' : ''}, {columnLabel(r.columns[col])}</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Mesh</th>
-                    <th scope="col" className="num">Elements</th>
-                    <th scope="col" className="num">Min <span className="th-unit">{unit.value}</span></th>
-                    <th scope="col" className="num">Mean</th>
-                    <th scope="col" className="num">Max</th>
-                    <th scope="col" className="num">Total <span className="th-unit">{unit.total}</span></th>
-                    <th scope="col" className="num">Share</th>
-                    <th scope="col" className="num">Within</th>
-                  </tr>
-                </thead>
-                {many ? models.map((m, k) => {
-                  const d = datas[k];
-                  return (
-                    <tbody key={m.slot}>
-                      <tr><th scope="rowgroup" colSpan={8}><Tag slot={m.slot} name={m.name} /></th></tr>
-                      {d
-                        ? d.rows.map((x, i) => meshRow(m.slot, m.selected, x, within[k]![i], d.total))
-                        : m.objects.filter((o) => o.role === 'receiver').map((o) => <tr key={o.id}><td>{o.name}</td>{Array.from({ length: 7 }, (_, j) => <td key={j} className="num">–</td>)}</tr>)}
-                    </tbody>
-                  );
-                }) : (
-                  <tbody>
-                    {ref.rows.map((x, i) => meshRow(one.slot, one.selected, x, within[k0]![i], ref.total))}
-                  </tbody>
-                )}
-              </table>
-            </div>
+            <MeshTable models={models} datas={datas} within={within} label={columnLabel(r.columns[col])} unit={unit.value} totalUnit={unit.total} dispatch={dispatch} />
             {groups.map((g) => (
               <section key={g.id} className="stack" aria-labelledby={`h-report-${g.id}`}>
                 <h3 id={`h-report-${g.id}`}>Report: {g.title}</h3>

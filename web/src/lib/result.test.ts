@@ -58,6 +58,24 @@ describe('stats, histogram and cumulative area', () => {
     expect(rangeShares(c, null, null)).toEqual({ below: 0, above: 0, within: 1 });
     expect(Number.isNaN(percentile(cumulative([], [], []), 0.5))).toBe(true);
   });
+  it('the radix cumulative equals a stable sort by value: ties, signs, -0, non-finite values and zero weights', () => {
+    // float32 values as results are: many ties, both signs, -0 and 0, subnormals, values one ulp apart, NaN and infinities
+    const pool = [0, -0, 1, -1, 2.5, -2.5, 1e-40, -1e-40, Math.fround(0.1), Math.fround(0.1) * (1 + 2 ** -23), 3.4e38, -3.4e38, NaN, Infinity, -Infinity, 7, 7, 7];
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    const n = 5000, col = Float32Array.from({ length: n }, () => (rnd() < 0.6 ? pool[Math.floor(rnd() * pool.length)] : (rnd() - 0.5) * 1e3));
+    const groups = [{ first: 0, count: 3000 }, { first: 3000, count: 2000 }];
+    const weights = groups.map((g) => Float32Array.from({ length: g.count }, () => (rnd() < 0.1 ? 0 : rnd() * 5)));
+    const got = cumulative(col, groups, weights);
+    const pairs: [number, number][] = [];
+    groups.forEach((g, k) => { for (let i = 0; i < g.count; i++) { const v = col[g.first + i]; if (Number.isFinite(v)) pairs.push([v + 0, weights[k][i]]); } });
+    pairs.sort((a, b) => a[0] - b[0]); // stable (V8): ties keep the rows' order
+    const total = pairs.reduce((s, p) => s + p[1], 0);
+    let acc = 0;
+    expect(Array.from(got.v)).toEqual(pairs.map((p) => p[0]));
+    expect(Array.from(got.cw)).toEqual(pairs.map((p) => (acc += p[1]) / total));
+    expect(Object.is(got.v[pairs.findIndex((p) => p[0] === 0)], 0)).toBe(true); // -0 comes back as 0
+  });
   it('summarize: two groups, unequal weights, the problem range and thresholds in one area-weighted summary', () => {
     const s = summarize(col, groups, weights, 15, 35, [20, 45]);
     expect(s).toEqual({

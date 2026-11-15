@@ -10,6 +10,17 @@ const result = (receivers: string[], values: number[][]): RunResult => {
   return { data: [Float32Array.from(values.flat())], weights: new Float32Array(first).fill(1), columns: ['radiation_front'], receivers, on: 'faces', key: 'k', elapsed: 0, manifest: { columns: ['radiation_front'], duration_h: 1, dirs: { sky: 0, ground: 0, sun: 0 }, meshes } };
 };
 const input = (models: ChartInput['models'], viz = defaultSettings().viz): ChartInput => ({ models, column: 'radiation_front', viz });
+
+// BIG=1 npx vitest run src/lib/charts.test.ts: a bhs-size result (17.24M rows over 14,342 meshes) through dataOf
+it.skipIf(!process.env.BIG)('dataOf over 17.24M rows takes under 2 s (BIG=1)', () => {
+  const meshes = 14_342, per = Math.ceil(17_244_108 / meshes), values: number[][] = [];
+  let seed = 1;
+  for (let k = 0; k < meshes; k++) values.push(Array.from({ length: per }, () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 1500));
+  const ids = values.map((_, k) => `m${k}`), r = result(ids, values), objects = ids.map((id) => obj(id, `/W/${id}`));
+  const t0 = performance.now(), d = dataOf(r, 0, objects), ms = performance.now() - t0;
+  expect(d.rows.length).toBe(meshes);
+  expect(ms).toBeLessThan(2000);
+}, 120_000);
 const draw = <K extends ChartKind>(kind: K, spec: Omit<ChartSpec, 'id' | 'kind'>, models: ChartInput['models'], viz?: ChartInput['viz']) => {
   const d = chartData({ id: 'c', kind, ...spec }, input(models, viz));
   if (d.kind !== kind) throw new Error(`drew ${d.kind}`);

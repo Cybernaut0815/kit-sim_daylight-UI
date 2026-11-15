@@ -88,15 +88,38 @@ export function histogram(col: ArrayLike<number>, groups: Group[], weights: Arra
 }
 
 /** Values ascending with the cumulative share of weight (area) at or below each: percentiles, range shares, the area curve. */
-export interface Cumulative { v: Float64Array; cw: Float64Array }
+export interface Cumulative { v: Float32Array; cw: Float64Array }
 
+/**
+ * The finite values in ascending order, in O(n) (a comparison sort of 17M values took 5-20 s): an LSD radix sort, 4
+ * passes of 8 bits (a pass whose digit every value shares is skipped), of the float32 bits made order-preserving, carrying
+ * each value's weight. Radix sorting is stable, so equal values keep the rows' order and every sum is the one a stable
+ * sort by value gives. Values and weights are read as float32, which results are: nothing is rounded.
+ */
 export function cumulative(col: ArrayLike<number>, groups: Group[], weights: ArrayLike<number>[]): Cumulative {
-  const pairs: [number, number][] = [];
-  groups.forEach((g, k) => { for (let i = 0; i < g.count; i++) { const v = col[g.first + i]; if (Number.isFinite(v)) pairs.push([v, weights[k][i]]); } });
-  pairs.sort((a, b) => a[0] - b[0]);
-  const total = pairs.reduce((s, p) => s + p[1], 0) || 1, v = new Float64Array(pairs.length), cw = new Float64Array(pairs.length);
+  let n = 0;
+  for (const g of groups) for (let i = 0; i < g.count; i++) if (Number.isFinite(col[g.first + i])) n++;
+  let key = new Uint32Array(n), w = new Float32Array(n), key2 = new Uint32Array(n), w2 = new Float32Array(n);
+  const f = new Float32Array(key.buffer), counts = new Uint32Array(4 * 256);
+  n = 0;
+  groups.forEach((g, k) => { for (let i = 0; i < g.count; i++) { const v = col[g.first + i]; if (Number.isFinite(v)) { f[n] = v + 0; w[n++] = weights[k][i]; } } }); // + 0: -0 ties with 0 (and comes back as 0)
+  for (let i = 0; i < n; i++) { // negative: every bit flipped (the larger magnitude first); positive: above them all
+    const b = key[i], u = (key[i] = b & 0x80000000 ? ~b : b | 0x80000000);
+    counts[u & 255]++; counts[256 + ((u >>> 8) & 255)]++; counts[512 + ((u >>> 16) & 255)]++; counts[768 + (u >>> 24)]++;
+  }
+  for (let d = 0; d < 4; d++) {
+    const c = counts.subarray(256 * d, 256 * (d + 1)), s = 8 * d;
+    if (!n || c[(key[0] >>> s) & 255] === n) continue;
+    for (let j = 0, at = 0; j < 256; j++) { const m = c[j]; c[j] = at; at += m; }
+    for (let i = 0; i < n; i++) { const u = key[i], p = c[(u >>> s) & 255]++; key2[p] = u; w2[p] = w[i]; }
+    [key, key2, w, w2] = [key2, key, w2, w];
+  }
+  for (let i = 0; i < n; i++) { const u = key[i]; key[i] = u & 0x80000000 ? u ^ 0x80000000 : ~u; } // the float bits again
+  const v = new Float32Array(key.buffer), cw = new Float64Array(n);
   let acc = 0;
-  pairs.forEach((p, i) => { v[i] = p[0]; acc += p[1]; cw[i] = acc / total; });
+  for (let i = 0; i < n; i++) cw[i] = acc += w[i];
+  const total = acc || 1;
+  for (let i = 0; i < n; i++) cw[i] /= total;
   return { v, cw };
 }
 

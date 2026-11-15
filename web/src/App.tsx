@@ -484,10 +484,16 @@ export default function App() {
               names.clear();
               rows.forEach((o, k) => names.set(stems[k], o.name)); // a twin's id is its first row's core name
               rows.forEach((o, k) => { if (!names.has(ids[k])) names.set(ids[k], o.name); });
+              let shown = 0; // the upload's progress in the run line, at most 4 times a second
+              const onUpload = (d: number, total: number) => {
+                if (d && d < total && performance.now() - shown < 250) return;
+                shown = performance.now();
+                if (mine()) dispatch({ type: 'RUN', slot, run: { status: 'queued', position: 0, upload: [d, total] } });
+              };
               const res = await runRemote('', {
-                sensors: meshes.slice(0, n), context: meshes.slice(n),
+                sensors: meshes.slice(0, n), context: meshes.slice(n), onUpload,
                 epw, args: p.args.map((a) => a.replace(UUID, (id) => core.get(id) ?? id)), signal: own.signal, clientId: CLIENT_ID,
-                onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running' } }); },
+                onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running', progress: job.progress, eta_s: job.eta_s } }); },
               });
               res.manifest.meshes.forEach((g, i) => {
                 const o = p.receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
