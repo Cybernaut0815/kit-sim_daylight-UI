@@ -61,6 +61,7 @@
           "200": { "description": "Answered from the result cache: the job is already `done`.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/Missing" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
           "429": { "$ref": "#/components/responses/TooManyJobs" },
           "502": { "$ref": "#/components/responses/DownloadFailed" },
           "503": { "$ref": "#/components/responses/QueueFull" }
@@ -120,13 +121,15 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/Missing" },
           "409": { "description": "Cancelled while it ran (`DELETE /jobs/{id}` from another request).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cancelled\n" } } },
+          "413": { "$ref": "#/components/responses/TooLarge" },
           "429": { "$ref": "#/components/responses/TooManyJobs" },
           "500": { "description": "The simulation failed (runtime error from the core), also when an `--optics` row does not resolve against the run's meshes (a NAME no mesh has, or several have; a slot the mesh does not have; a row given twice), or a `--no-occlude` NAME that is unknown, ambiguous or a context mesh.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
             "weather": { "value": "error: weather (--epw) required for radiation/irradiance/illuminance\n" },
             "optics": { "value": "error: --optics roof/3: slot out of range (the mesh has slots 0..1)\n" }
           } } } },
           "502": { "$ref": "#/components/responses/DownloadFailed" },
-          "503": { "$ref": "#/components/responses/QueueFull" }
+          "503": { "$ref": "#/components/responses/QueueFull" },
+          "507": { "description": "The server ran out of memory for this run (host RAM, or GPU memory for the scene): the job fails, the server keeps running. Use fewer receivers or quantities, or free memory on the machine.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: out of memory: the server ran out of host memory for this run (17244108 rows x 6 columns; 1.3 GB RAM free, 2.1 GB commit free now)\n" } } }
         }
       }
     },
@@ -458,6 +461,7 @@
     "responses": {
       "BadRequest": { "description": "Invalid request: unknown flag, bad id, unusable weather, ... The text starts with `error: <cause>`; flag errors append the CLI usage.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: unknown flag --nope\nusage: daylight <mesh>... [flags]\n..." } } },
       "Missing": { "description": "The server does not hold these meshes (never uploaded, or evicted): `PUT /mesh/{id}` each and submit again.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Missing" }, "example": { "missing": ["3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11"] } } } },
+      "TooLarge": { "description": "The result would hold more than 134,217,728 values (rows = sensor faces or points, columns = quantities x sides), more than a browser can take in one piece. Nothing is queued.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: 17244108 rows x 12 columns = 206929296 values, over the 134217728 one run can return; pick fewer quantities, one side or fewer receivers\n" } } },
       "TooManyJobs": { "description": "This client already has its limit of jobs queued or running.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: 2 jobs of this client are queued or running (limit 2); wait for one to finish or DELETE /jobs/{id}\n" } } },
       "QueueFull": { "description": "The queue is full.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the queue is full (32 jobs); retry shortly\n" } } },
       "DownloadFailed": { "description": "The weather resource could not be downloaded.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: download failed (curl exit 22): https://energyplus-weather.s3.amazonaws.com/...\n" } } },
@@ -529,7 +533,7 @@
           "created": { "type": "string", "format": "date-time" },
           "started": { "type": ["string", "null"], "format": "date-time" },
           "finished": { "type": ["string", "null"], "format": "date-time" },
-          "status": { "type": "integer", "description": "`error`: the HTTP status `runSync` would answer (500 runtime, also an `--optics` row the run's meshes do not resolve, or a `--no-occlude` NAME that is unknown, ambiguous or a context mesh); `cancelled`: 409." },
+          "status": { "type": "integer", "description": "`error`: the HTTP status `runSync` would answer (507 out of memory, 500 runtime, also an `--optics` row the run's meshes do not resolve, or a `--no-occlude` NAME that is unknown, ambiguous or a context mesh); `cancelled`: 409." },
           "error": { "type": "string", "description": "`error` / `cancelled`: the message, first line `error: <cause>`." }
         }
       },

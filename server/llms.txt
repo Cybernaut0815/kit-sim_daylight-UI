@@ -57,11 +57,13 @@ putSession, deleteSession.
 
 ## Limits
 
-- Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime. An
+- Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime, 507 = out of
+  memory (the job fails, the server keeps running), 413 = a result over 134,217,728 values (rows x columns). An
   --optics row naming no mesh of the run (or several), a slot out of range or a row given twice, and a --no-occlude
   NAME that is unknown, ambiguous or a context mesh, fail the job (state error, status 500), not the submission.
 - Send X-Client-Id to identify your client: at most 2 jobs queued or running per client (429), 32 in the queue (503),
-  both with Retry-After. Finished jobs are kept 15 minutes. Identical requests are answered from a result cache.
+  both with Retry-After. Finished jobs are kept 15 minutes (the oldest go first
+  beyond 1 GB of results). Identical requests are answered from a result cache.
 - No authentication; job ids are random UUIDs only their submitter knows.
 
 ## Agents (MCP)

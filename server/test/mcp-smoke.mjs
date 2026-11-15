@@ -1,4 +1,6 @@
-// Smoke test of daylight_server --mcp in Claude-only mode (no app tab): the agent routes off without --mcp; the
+// Smoke test of daylight_server: the job API on a plain server (a job that fails in the core fails alone, the next
+// runs, an identical request is a cache hit, finished jobs go after their TTL); then --mcp in Claude-only mode (no app
+// tab): the agent routes off without --mcp; the
 // local-only gate; the MCP handshake; the fixture (building.usda) walked through tools/call in the hidden instance the
 // server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only; a shot's own), a
 // parts chart, a receiver that casts no shade (set_roles shade false), and guide 'report''s two example reports generated
@@ -107,14 +109,48 @@ process.on('SIGINT', () => process.exit(130));
 
 console.log(`daylight_server ${exe}\napp ${web}\nports ${OFF} (agent routes off) and ${ON} (--mcp), cache ${cache}`);
 
-// 1. Without --mcp every agent route answers 404
+// 1. Without --mcp every agent route answers 404. This plain server also takes the job API steps, and stays up until the
+// end so its finished jobs can outlive their 1-minute TTL meanwhile.
+let off, lastJob = 0;
 await part('off', async () => {
-  const off = await start(OFF, []);
+  off = await start(OFF, ['--job-ttl-min', '1']);
   for (const [method, path] of [['POST', '/mcp'], ['GET', '/bridge/next'], ['GET', '/files?path=C:/x.usda'], ['GET', '/reports'], ['GET', '/session']]) {
     const r = await http(OFF, method, path, method === 'POST' ? { headers: JSONH, body: PING } : {});
     check(`off: ${method} ${path} -> 404`, r.status === 404, `${r.status} ${brief(r.text)}`);
   }
-  await stop(off);
+});
+
+// A 10 m roof quad facing up as a .dmesh: "DLM1", flags, n_points, n_faces, n_indices, xyz float64, counts, indices int32.
+function quad() {
+  const b = Buffer.alloc(32 + 4 * 24 + 4 + 16);
+  b.write('DLM1', 0, 'ascii'); b.writeBigUInt64LE(4n, 8); b.writeBigUInt64LE(1n, 16); b.writeBigUInt64LE(4n, 24);
+  [[0, 0, 3], [10, 0, 3], [10, 10, 3], [0, 10, 3]].flat().forEach((v, i) => b.writeDoubleLE(v, 32 + 8 * i));
+  b.writeInt32LE(4, 128);
+  [0, 1, 2, 3].forEach((v, i) => b.writeInt32LE(v, 132 + 4 * i));
+  return b;
+}
+/** POST /run (multipart) with sensor mesh ids and CLI args: {status, text}. */
+async function runSync(port, sensors, args) {
+  const fd = new FormData();
+  for (const s of sensors) fd.append('sensors', s);
+  for (const a of args) fd.append('args', a);
+  const r = await fetch(`http://127.0.0.1:${port}/run`, { method: 'POST', body: fd });
+  return { status: r.status, text: await r.text() };
+}
+
+// 1b. The job API: a failing job fails alone (the server stays up and takes the next), an identical request is a cache hit
+if (off) await part('api', async () => {
+  const put = await http(OFF, 'PUT', '/mesh/smoke-quad', { headers: { 'Content-Type': 'application/octet-stream' }, body: quad() });
+  check('api: PUT /mesh/smoke-quad -> 204', put.status === 204, `${put.status} ${brief(put.text)}`);
+  const NOON = ['--quantity', 'sunhours', '--lat', '51.5', '--lon', '0', '--tz', '0', '--time', '06-21T12:00'];
+  const bad = await runSync(OFF, ['smoke-quad'], [...NOON, '--no-occlude', 'nosuchmesh']);
+  check('api: a job that fails in the core -> 500, with the reason', bad.status === 500 && /no mesh of that name/.test(bad.text), `${bad.status} ${brief(bad.text)}`);
+  const ok = await runSync(OFF, ['smoke-quad'], NOON), again = await runSync(OFF, ['smoke-quad'], NOON);
+  lastJob = Date.now();
+  check('api: the next job runs -> 200 with values', ok.status === 200 && /"values_b64"/.test(ok.text), `${ok.status} ${brief(ok.text)}`);
+  check('api: the same request again -> cache hit', again.status === 200 && /"response": "hit"/.test(again.text), `${again.status} ${brief(again.text.slice(again.text.indexOf('"cache"')))}`);
+  const h = parse(await http(OFF, 'GET', '/health'));
+  check('api: /health ok after a failed job', h.status === 'ok' && h.jobs_retained >= 1, JSON.stringify(h));
 });
 
 // 2. With --mcp: this machine only, then MCP over HTTP
@@ -280,6 +316,13 @@ if (on) await part('stdio', async () => {
   check('stdio: initialize answers as POST /mcp', JSON.stringify(answer(1)) === await viaHttp(init), brief(JSON.stringify(answer(1)) ?? 'no answer'));
   check('stdio: tools/list answers as POST /mcp', JSON.stringify(answer(2)) === await viaHttp(list), `${answer(2)?.result?.tools?.length ?? 0} tools`);
   check('stdio: no answer to a notification', lines.length === 2, `${lines.length} lines out for 3 in`);
+});
+
+// 5. The plain server's finished jobs go once their TTL (1 min) has passed
+if (off && lastJob) await part('retention', async () => {
+  await sleep(Math.max(0, lastJob + 62e3 - Date.now()));
+  const h = parse(await http(OFF, 'GET', '/health'));
+  check('retention: finished jobs dropped after their TTL', h.jobs_retained === 0, JSON.stringify(h));
 });
 
 for (const p of servers) await stop(p);

@@ -26,11 +26,13 @@
 #include <cstdlib>
 #include <ctime>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <process.h>
 #include <random>
 #include <sstream>
@@ -69,6 +71,7 @@ struct Job {
   std::shared_ptr<const std::string> body;        // done: the result JSON (the same text POST /run answers)
   std::string error;                              // error / cancelled: the message
   int status = 0;                                 // error: the HTTP status POST /run answers
+  size_t rows = 0, cols = 0;                      // the result's size, known at submission
 };
 
 // Agent routes (--mcp), guarded by Server::mcpMu: a tools/call relayed to an app tab (POST /mcp -> GET /bridge/next ->
@@ -98,6 +101,7 @@ struct Server {
   std::deque<std::shared_ptr<Job>> queue;
   std::shared_ptr<Job> running;
   int clientJobs = 2, maxQueue = 32, ttlMin = 15, gpuScenes = 4;
+  size_t resultCap = size_t(1024) << 20;          // finished jobs' results kept at most (oldest go first)
 
   std::mutex dl;                                  // one download at a time (the .part -> file rename)
   fs::path dir;                                   // disk cache of /proxy
@@ -213,6 +217,20 @@ bool write_file(const fs::path& p, const std::string& body) {
   return !f.fail();
 }
 
+// Memory still to be had for a message: free physical RAM and free commit (RAM + page file), in GB.
+std::string memory_now() {
+  MEMORYSTATUSEX m{sizeof m};
+  if (!GlobalMemoryStatusEx(&m)) return "unknown memory free";
+  char b[96];
+  std::snprintf(b, sizeof b, "%.1f GB RAM free, %.1f GB commit free", m.ullAvailPhys / 1073741824.0, m.ullAvailPageFile / 1073741824.0);
+  return b;
+}
+// An error the core or the driver reports as running out of memory (CUDA "out of memory", OptiX *_OUT_OF_MEMORY).
+bool out_of_memory(std::string e) {
+  for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return e.find("out of memory") != std::string::npos || e.find("out_of_memory") != std::string::npos;
+}
+
 void text(httplib::Response& res, int status, const std::string& body) { res.status = status; res.set_content(body, "text/plain; charset=utf-8"); }
 void json(httplib::Response& res, int status, const std::string& body) { res.status = status; res.set_content(body, "application/json"); }
 
@@ -240,11 +258,24 @@ std::string view(const Server& S, const Job& j) {
   return v + "}";
 }
 
-void purge(Server& S) {   // caller holds jobsMu: drop finished jobs past their time to live
+// Caller holds jobsMu: drop finished jobs past their time to live, then the oldest finished ones while their results
+// together exceed resultCap (a dropped job answers 404, as an expired one does). A job finished less than a minute ago
+// stays, so its client can still fetch the result.
+void purge(Server& S) {
   const std::time_t now = std::time(nullptr);
+  size_t kept = 0;
   for (auto it = S.jobs.begin(); it != S.jobs.end();)
     if (finished(it->second->state) && now - it->second->ended > S.ttlMin * 60) it = S.jobs.erase(it);
-    else ++it;
+    else { kept += it->second->body ? it->second->body->capacity() : 0; ++it; }
+  while (kept > S.resultCap) {   // ponytail: a scan per drop; jobs are a few hundred at most
+    auto oldest = S.jobs.end();
+    for (auto it = S.jobs.begin(); it != S.jobs.end(); ++it)
+      if (finished(it->second->state) && it->second->body && now - it->second->ended >= 60 &&
+          (oldest == S.jobs.end() || it->second->ended < oldest->second->ended)) oldest = it;
+    if (oldest == S.jobs.end()) break;
+    kept -= oldest->second->body->capacity();
+    S.jobs.erase(oldest);
+  }
 }
 
 struct Refusal { int status = 0; std::string body; std::string type = "text/plain; charset=utf-8"; };
@@ -350,6 +381,13 @@ std::shared_ptr<Job> make_job(Server& S, const httplib::Request& req, Refusal& n
     j->haveWeather = true;
   }
   if (const int rc = cli::prepare(a, j->weather, j->haveWeather, err)) return fail(rc == 1 ? 400 : 500, err);
+  // The result's size is known now: one row per sensor face (or point), one column per quantity and side. Refused above
+  // what a browser can hold, before anything is queued.
+  for (const auto& [mesh, sensor] : j->meshes) if (sensor) j->rows += a.opt.onVertices ? mesh->numPoints() : mesh->numFaces();
+  j->cols = a.opt.quantities.size() * (a.opt.sides == Sides::Both ? 2 : 1);
+  if (constexpr size_t kMaxValues = size_t(1) << 27; j->rows * j->cols > kMaxValues)
+    return fail(413, std::to_string(j->rows) + " rows x " + std::to_string(j->cols) + " columns = " + std::to_string(j->rows * j->cols) +
+                         " values, over the " + std::to_string(kMaxValues) + " one run can return; pick fewer quantities, one side or fewer receivers");
   j->sceneKey += a.opt.selfOcclude ? "self" : "noself";
   return j;
 }
@@ -389,45 +427,70 @@ void worker(Server& S) {
       S.running = j;
       S.jobsCv.notify_all();
     }
-    // meshes copied from the shared cache entries, names made unique per run as the TS binding does
-    // ponytail: run() takes meshes by value, so each run copies the cached arrays (~10 ms per 44 MB); a pointer overload if it shows
-    std::vector<Mesh> meshes;
-    std::unordered_map<std::string, int> seen;
-    for (const auto& [mesh, sensor] : j->meshes) {
-      Mesh m = *mesh;
-      m.sensor = sensor;
-      std::string lower = m.name;
-      for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (const int n = seen[lower]++) m.name += "_" + std::to_string(n + 1);
-      meshes.push_back(std::move(m));
-    }
-    Options opt = j->args.opt;
-    opt.sceneKey = j->sceneKey;
-    opt.residentScenes = S.gpuScenes;
-    opt.cancel = &j->cancel;
-    Result r;
-    std::string err;
-    const auto t1 = Clock::now();
-    const bool ok = run(meshes, j->haveWeather ? &j->weather : nullptr, opt, r, err);
-    const double runS = std::chrono::duration<double>(Clock::now() - t1).count();
+    const auto t0 = Clock::now();
+    std::fprintf(stderr, "job %.8s running: %zu meshes, %zu rows x %zu columns\n", j->id.c_str(), j->meshes.size(), j->rows, j->cols);
     std::shared_ptr<const std::string> body;
-    if (ok) {
-      const std::string b64 = httplib::detail::base64_encode(std::string(reinterpret_cast<const char*>(r.values.data()), r.values.size() * sizeof(double)));
-      char tail[256];
-      std::snprintf(tail, sizeof tail, "\",\n  \"run_s\": %.3f,\n  \"total_s\": %.3f,\n  \"cache\": {\"response\": \"miss\", \"scene\": \"%s\", \"weather\": \"%s\"}",
-                    runS, double(std::time(nullptr) - j->created), r.sceneReused ? "reused" : "built", j->weatherCache.c_str());
-      body = std::make_shared<const std::string>(cli::manifest_json(r, "\"values_b64\": \"" + b64 + tail));
-      std::lock_guard<std::mutex> lock(S.cacheMu);
-      S.responses.emplace_front(j->key, body);
-      S.responseBytes += body->size();
-      while (S.responseBytes > S.responseCap && S.responses.size() > 1) { S.responseBytes -= S.responses.back().second->size(); S.responses.pop_back(); }
+    std::string err;
+    int status = 500;
+    // Everything a run allocates lives in this block: an exception (std::bad_alloc on a model too big for this machine)
+    // unwinds it, frees its buffers and ends only this job. The process, its mesh cache and the next jobs go on.
+    try {
+      // meshes copied from the shared cache entries, names made unique per run as the TS binding does
+      // ponytail: run() takes meshes by value, so each run copies the cached arrays (~10 ms per 44 MB); a pointer overload if it shows
+      std::vector<Mesh> meshes;
+      std::unordered_map<std::string, int> seen;
+      for (const auto& [mesh, sensor] : j->meshes) {
+        Mesh m = *mesh;
+        m.sensor = sensor;
+        std::string lower = m.name;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (const int n = seen[lower]++) m.name += "_" + std::to_string(n + 1);
+        meshes.push_back(std::move(m));
+      }
+      Options opt = j->args.opt;
+      opt.sceneKey = j->sceneKey;
+      opt.residentScenes = S.gpuScenes;
+      opt.cancel = &j->cancel;
+      Result r;
+      const auto t1 = Clock::now();
+      if (run(meshes, j->haveWeather ? &j->weather : nullptr, opt, r, err)) {
+        const double runS = std::chrono::duration<double>(Clock::now() - t1).count();
+        meshes = {};   // the copies go before the result is encoded
+        const std::string b64 = httplib::detail::base64_encode(std::string(reinterpret_cast<const char*>(r.values.data()), r.values.size() * sizeof(double)));
+        char tail[256];
+        std::snprintf(tail, sizeof tail, "\",\n  \"run_s\": %.3f,\n  \"total_s\": %.3f,\n  \"cache\": {\"response\": \"miss\", \"scene\": \"%s\", \"weather\": \"%s\"}",
+                      runS, double(std::time(nullptr) - j->created), r.sceneReused ? "reused" : "built", j->weatherCache.c_str());
+        body = std::make_shared<const std::string>(cli::manifest_json(r, "\"values_b64\": \"" + b64 + tail));
+        std::lock_guard<std::mutex> lock(S.cacheMu);
+        const size_t bytes = body->capacity();
+        if (bytes <= S.responseCap) {   // only what fits: a result bigger than the cache is never kept twice
+          S.responses.emplace_front(j->key, body);
+          S.responseBytes += bytes;
+          while (S.responseBytes > S.responseCap) { S.responseBytes -= S.responses.back().second->capacity(); S.responses.pop_back(); }
+        }
+      } else if (out_of_memory(err)) status = 507;
+    } catch (const std::bad_alloc&) {
+      body = nullptr;
+      status = 507;
+      err = "out of memory: the server ran out of host memory for this run (" + std::to_string(j->rows) + " rows x " +
+            std::to_string(j->cols) + " columns; " + memory_now() + " now)";
+    } catch (const std::exception& e) {
+      body = nullptr;
+      err = std::string("internal: ") + e.what();
     }
+    j->meshes.clear();   // the run is over: evicted cache entries can be freed now
+    j->meshes.shrink_to_fit();
+    const double s = std::chrono::duration<double>(Clock::now() - t0).count();
     std::lock_guard<std::mutex> lock(S.jobsMu);
-    if (ok) { j->body = body; j->state = State::Done; }
-    else if (j->cancel) { j->state = State::Cancelled; j->status = 409; j->error = "error: cancelled"; }
-    else { j->state = State::Error; j->status = 500; j->error = "error: " + err; }
+    if (body) { j->body = body; j->state = State::Done; std::fprintf(stderr, "job %.8s done in %.1f s\n", j->id.c_str(), s); }
+    else if (j->cancel) { j->state = State::Cancelled; j->status = 409; j->error = "error: cancelled"; std::fprintf(stderr, "job %.8s cancelled after %.1f s\n", j->id.c_str(), s); }
+    else {
+      j->state = State::Error; j->status = status; j->error = "error: " + err;
+      std::fprintf(stderr, "job %.8s error %d after %.1f s: %s\n", j->id.c_str(), status, s, err.c_str());
+    }
     j->ended = std::time(nullptr);
     S.running = nullptr;
+    purge(S);
     S.jobsCv.notify_all();
   }
 }
@@ -613,13 +676,21 @@ int main(int argc, char** argv) {
     else if (f == "--max-queue") S.maxQueue = std::max(1, std::atoi(val()));
     else if (f == "--job-ttl-min") S.ttlMin = std::max(1, std::atoi(val()));
     else if (f == "--gpu-scenes") S.gpuScenes = std::max(1, std::atoi(val()));
+    else if (f == "--results-mb") S.resultCap = static_cast<size_t>(std::atoll(val())) << 20;
     else {
       std::fprintf(stderr, "usage: daylight_server [--port 8080] [--web DIR] [--cache DIR] [--max-mb 2048] [--mesh-cache-mb 2048]\n"
-                           "                       [--client-jobs 2] [--max-queue 32] [--job-ttl-min 15] [--gpu-scenes 4]\n"
+                           "                       [--client-jobs 2] [--max-queue 32] [--job-ttl-min 15] [--results-mb 1024] [--gpu-scenes 4]\n"
                            "                       [--mcp] [--browser PATH] [--app-url URL]\n");
       return 1;
     }
   }
+  // A last word before the process ends on an exception nothing caught (the job worker and the handlers catch theirs).
+  std::set_terminate([] {
+    try { if (auto ep = std::current_exception()) std::rethrow_exception(ep); }
+    catch (const std::exception& e) { std::fprintf(stderr, "daylight_server: fatal: uncaught exception: %s\n", e.what()); }
+    catch (...) { std::fprintf(stderr, "daylight_server: fatal: uncaught exception\n"); }
+    std::abort();
+  });
   if (mcp && S.browser.empty()) S.browser = find_browser();
   if (S.appUrl.empty() && !web.empty()) S.appUrl = "http://127.0.0.1:" + std::to_string(port) + "/";
   // POST /mcp answers from the embedded mcp.json (tools, instructions) and openapi.json (version), as raw JSON tokens.
@@ -643,7 +714,16 @@ int main(int argc, char** argv) {
   if (!web.empty() && !svr.set_mount_point("/", web, isolation)) { std::fprintf(stderr, "error: --web %s is not a directory\n", web.c_str()); return 1; }
   svr.set_logger([](const httplib::Request& req, const httplib::Response& res) {
     if (res.status == 204 && req.path == "/bridge/next") return;   // an idle poll: one per open app tab every 25 s
+    // a model's uploads (one per mesh, 14k for a big one) and job polls: only failures are worth a line
+    if (res.status / 100 == 2 && (req.path.rfind("/mesh", 0) == 0 || (req.method == "GET" && req.path.rfind("/jobs/", 0) == 0))) return;
     std::fprintf(stderr, "%s %s -> %d\n", req.method.c_str(), req.path.c_str(), res.status);
+  });
+  // A handler that throws (std::bad_alloc on a huge upload or answer) gets an answer instead of an empty 500.
+  svr.set_exception_handler([](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
+    try { std::rethrow_exception(ep); }
+    catch (const std::bad_alloc&) { text(res, 507, "error: out of memory: the server has no memory left for this request (" + memory_now() + ")\n"); }
+    catch (const std::exception& e) { text(res, 500, std::string("error: internal: ") + e.what() + "\n"); }
+    catch (...) { text(res, 500, "error: internal\n"); }
   });
   // Agent routes (/mcp, /bridge/*, /files, /reports*, /session): 404 without --mcp, and only this machine may use them
   // (agent.h local_request). This runs before a body is read and before the --web files.
@@ -663,6 +743,7 @@ int main(int argc, char** argv) {
   svr.Get("/health", [&](const httplib::Request& req, httplib::Response& res) {
     const bool agents = mcp && local_request(req.remote_addr, req.headers, false);
     std::lock_guard<std::mutex> lock(S.jobsMu);
+    purge(S);
     json(res, 200, "{\"status\": \"ok\", \"gpu\": " + json_str(S.gpu) + ", \"queued\": " + std::to_string(S.queue.size()) +
                        ", \"running\": " + (S.running ? "true" : "false") + ", \"jobs_retained\": " + std::to_string(S.jobs.size()) +
                        ", \"agents\": " + (agents ? "true" : "false") + "}");
@@ -742,6 +823,7 @@ int main(int argc, char** argv) {
   svr.Get(R"(/jobs/([0-9a-f-]{36}))", [&](const httplib::Request& req, httplib::Response& res) {
     const int wait = std::min(30, std::max(0, req.has_param("wait") ? std::atoi(req.get_param_value("wait").c_str()) : 0));
     std::unique_lock<std::mutex> lock(S.jobsMu);
+    purge(S);
     auto it = S.jobs.find(req.matches[1]);
     if (it == S.jobs.end()) return text(res, 404, "error: no such job (finished jobs are kept " + std::to_string(S.ttlMin) + " minutes)\n");
     auto j = it->second;
@@ -760,6 +842,8 @@ int main(int argc, char** argv) {
     if (j->state == State::Queued) {
       for (auto q = S.queue.begin(); q != S.queue.end(); ++q) if (*q == j) { S.queue.erase(q); break; }
       j->state = State::Cancelled; j->status = 409; j->error = "error: cancelled"; j->ended = std::time(nullptr);
+      j->meshes.clear();   // never runs: its meshes need not outlive the cache
+      j->meshes.shrink_to_fit();
       S.jobsCv.notify_all();
     } else if (j->state == State::Running) j->cancel = true;   // the worker stops at the next chunk and marks it cancelled
     json(res, 200, view(S, *j));
@@ -1008,6 +1092,11 @@ int main(int argc, char** argv) {
   std::thread(worker, std::ref(S)).detach();   // lives as long as the process
   std::fprintf(stderr, "daylight_server: http://localhost:%d  docs /docs  gpu %s  cache %s%s%s\n", port, S.gpu.c_str(), S.dir.u8string().c_str(),
                web.empty() ? "" : ("  web " + web).c_str(), mcp ? "  mcp /mcp" : "");
-  if (!svr.listen("0.0.0.0", port)) { std::fprintf(stderr, "error: cannot listen on port %d\n", port); return 2; }
+  try {
+    if (!svr.listen("0.0.0.0", port)) { std::fprintf(stderr, "error: cannot listen on port %d\n", port); return 2; }
+  } catch (const std::exception& e) {   // the accept loop's own allocations are not inside any handler
+    std::fprintf(stderr, "error: the server stopped: %s\n", e.what());
+    return 2;
+  }
   return 0;
 }
