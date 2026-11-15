@@ -120,19 +120,21 @@ await part('off', async () => {
   }
 });
 
-// A 10 m roof quad facing up as a .dmesh: "DLM1", flags, n_points, n_faces, n_indices, xyz float64, counts, indices int32.
-function quad() {
+// A 10 m roof quad facing up as a .dmesh, from x = x0: "DLM1", flags, n_points, n_faces, n_indices, xyz float64, counts,
+// indices int32.
+function quad(x0 = 0) {
   const b = Buffer.alloc(32 + 4 * 24 + 4 + 16);
   b.write('DLM1', 0, 'ascii'); b.writeBigUInt64LE(4n, 8); b.writeBigUInt64LE(1n, 16); b.writeBigUInt64LE(4n, 24);
-  [[0, 0, 3], [10, 0, 3], [10, 10, 3], [0, 10, 3]].flat().forEach((v, i) => b.writeDoubleLE(v, 32 + 8 * i));
+  [[x0, 0, 3], [x0 + 10, 0, 3], [x0 + 10, 10, 3], [x0, 10, 3]].flat().forEach((v, i) => b.writeDoubleLE(v, 32 + 8 * i));
   b.writeInt32LE(4, 128);
   [0, 1, 2, 3].forEach((v, i) => b.writeInt32LE(v, 132 + 4 * i));
   return b;
 }
-/** POST /run (multipart) with sensor mesh ids and CLI args: {status, text}. */
-async function runSync(port, sensors, args) {
+/** POST /run (multipart) with sensor (and context) mesh ids and CLI args: {status, text}. */
+async function runSync(port, sensors, args, context = []) {
   const fd = new FormData();
   for (const s of sensors) fd.append('sensors', s);
+  for (const c of context) fd.append('context', c);
   for (const a of args) fd.append('args', a);
   const r = await fetch(`http://127.0.0.1:${port}/run`, { method: 'POST', body: fd });
   return { status: r.status, text: await r.text() };
@@ -156,6 +158,11 @@ if (off) await part('api', async () => {
   check('api: the same request again -> cache hit', again.status === 200 && /"response": "hit"/.test(again.text), `${again.status} ${brief(again.text.slice(again.text.indexOf('"cache"')))}`);
   const h = parse(await http(OFF, 'GET', '/health'));
   check('api: /health ok after a failed job', h.status === 'ok' && h.jobs_retained >= 1, JSON.stringify(h));
+  // without bounces or transmission the scene is the set of meshes, whichever of them receive: swapped roles reuse it
+  const put2 = await http(OFF, 'PUT', '/mesh/smoke-quad-2', { headers: { 'Content-Type': 'application/octet-stream' }, body: quad(20) });
+  const ab = await runSync(OFF, ['smoke-quad'], NOON, ['smoke-quad-2']), ba = await runSync(OFF, ['smoke-quad-2'], NOON, ['smoke-quad']);
+  check('api: sensor and context swapped -> the scene is reused', put2.status === 204 && ab.status === 200 && /"scene": "built"/.test(ab.text) && ba.status === 200 && /"scene": "reused"/.test(ba.text),
+    `${put2.status}; ${ab.status} ${brief(ab.text.slice(ab.text.indexOf('"cache"')))}; ${ba.status} ${brief(ba.text.slice(ba.text.indexOf('"cache"')))}`);
 
   // binary values: a job's JSON links them (no values_b64 unless ?inline=1); GET .../values is float32 column-major,
   // equal to the inline values (float64 row-major) rounded to float32; ?col=k is one column
