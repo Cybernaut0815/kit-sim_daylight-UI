@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { Agent, createServer, request } from 'node:http';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -93,7 +93,7 @@ function compare(res, { rows, cols, data }) {
  *  /mesh/*, POST /meshes/missing), queue (POST /jobs to the first 'running'), job (to the answer of the last poll of the
  *  job) and values (from there to `end`, the result in hand: today the base64 decode, after C3 GET .../values too). */
 function phases(log, end) {
-  const req = log.filter((e) => e.method), up = req.filter((e) => e.path.startsWith('/mesh')), puts = up.filter((e) => e.method === 'PUT');
+  const req = log.filter((e) => e.method), up = req.filter((e) => e.path.startsWith('/mesh')), puts = up.filter((e) => e.method === 'PUT' && e.status !== 0); // status 0: queued, never answered
   const post = req.findLast((e) => e.method === 'POST' && e.path === '/jobs'), last = req.findLast((e) => /^\/jobs(\/[^/]+)?$/.test(e.path));
   const run = log.find((e) => e.state === 'running'), after = last ? req.filter((e) => e.t0 >= last.t0 && e.path.startsWith('/jobs')) : [];
   return { upload_s: up.length ? sec(min(up.map((e) => e.t0)), max(up.map((e) => e.t1))) : 0, puts: puts.length, put_gb: gb(puts.reduce((a, e) => a + e.bytes, 0)),
@@ -103,20 +103,30 @@ function phases(log, end) {
 /** The phase a run was in when the server went away: no POST /jobs yet, never seen running, or after. */
 const during = (log) => (!log.some((e) => e.path === '/jobs') ? 'upload' : log.some((e) => e.state === 'running') ? 'job' : 'queue');
 
-/** fetch for runRemote: at most 6 requests in flight (a browser's limit per host over HTTP/1.1; Node's fetch would open a
- *  socket per PUT), each logged once its whole answer is in. ponytail: holds an answer twice (here and in runRemote). */
+/** fetch for runRemote over 6 keep-alive sockets (a browser's per host over HTTP/1.1), each request logged once its whole
+ *  answer is in. Not Node's fetch: under a bhs upload its pool closes a socket per PUT or so, and 14k PUTs a run leave
+ *  the client without ports (connect EADDRINUSE) within two runs. ponytail: holds an answer twice (here and in runRemote). */
 function timed(log) {
-  let free = 6;
-  const waiting = [], next = () => (waiting.length ? waiting.shift()() : free++);
+  const agent = new Agent({ keepAlive: true, maxSockets: 6 });
   return async (url, init = {}) => {
-    if (free > 0) free--; else await new Promise((r) => waiting.push(r));
-    const e = { method: init.method ?? 'GET', path: new URL(url).pathname, t0: now(), t1: 0, status: 0, bytes: init.body?.byteLength ?? 0 };
+    let body = init.body ?? null, headers = { ...init.headers };
+    if (body && !(body instanceof Uint8Array)) { // FormData: its bytes and multipart content type as fetch sends them
+      const r = new Request(url, { method: init.method, body, headers });
+      body = Buffer.from(await r.arrayBuffer());
+      headers = Object.fromEntries(r.headers);
+    }
+    const e = { method: init.method ?? 'GET', path: new URL(url).pathname, t0: now(), t1: 0, status: 0, bytes: body?.byteLength ?? 0 };
     log.push(e);
     try {
-      const res = await fetch(url, init), body = await res.arrayBuffer();
-      Object.assign(e, { t1: now(), status: res.status, bytes: e.bytes + body.byteLength });
-      return new Response(res.status === 204 ? null : body, res); // PUT /mesh answers 204, which may carry no body
-    } catch (x) { e.t1 = now(); throw x; } finally { next(); }
+      const res = await new Promise((done, fail) => request(url, { method: e.method, headers, agent, signal: init.signal }, done).on('error', fail).end(body ?? undefined));
+      const chunks = [];
+      for await (const c of res) chunks.push(c);
+      const data = Buffer.concat(chunks);
+      Object.assign(e, { t1: now(), status: res.statusCode, bytes: e.bytes + data.byteLength });
+      const h = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) for (const x of [v].flat()) h.append(k, x);
+      return new Response(res.statusCode === 204 ? null : data, { status: res.statusCode, headers: h }); // PUT /mesh answers 204
+    } catch (x) { e.t1 = now(); throw x; }
   };
 }
 
@@ -147,6 +157,11 @@ $ids = @($all | ? { $_.CommandLine -and $_.CommandLine.ToLower().Contains('${key
 $all | ? { $ids -contains $_.ProcessId -or $ids -contains $_.ParentProcessId } | % { "$($_.PrivatePageCount) $($_.PeakPageFileUsage)" }`), (e, so) => done(e ? '' : so)));
   const rows = out.split('\n').filter((l) => l.trim()).map((l) => l.trim().split(' ').map(Number)); // [private bytes, peak KB]
   return rows.length ? { n: rows.length, total_gb: gb(rows.reduce((a, r) => a + r[0], 0)), peak_gb: gb(max(rows.map((r) => r[1])) * 1024), peaks_gb: gb(rows.reduce((a, r) => a + r[1], 0) * 1024) } : null;
+}
+/** The browser's content processes (Chrome --type=renderer, Firefox -contentproc) whose command line holds key. */
+async function contentPids(key) {
+  const out = await new Promise((done) => execFile('powershell.exe', ps(`Get-CimInstance Win32_Process -Property ProcessId, CommandLine | ? { $_.CommandLine -and $_.CommandLine.ToLower().Contains('${key.toLowerCase().replace(/'/g, "''")}') -and $_.CommandLine -match '--type=renderer|-contentproc' } | % { $_.ProcessId }`), (e, so) => done(e ? '' : so)));
+  return out.split(/\s+/).filter(Boolean).map(Number);
 }
 /** nvidia-smi every 250 ms until the bench exits: [busy %, used MiB, total MiB, °C, SM MHz]. ponytail: one NVIDIA GPU and
  *  whole-card memory (per-process GPU memory is N/A on this driver). */
@@ -201,7 +216,7 @@ const COLS = {
     'GPU busy %': (r) => r.gpu?.busy_pct, 'GPU +GB': (r) => r.gpu?.dmem_gb, retained: (r) => r.retained, 'vs CLI': (r) => r.values?.vs, outcome: (r) => r.error ?? 'ok' },
   browser: { case: (r) => `${r.layer} ${r.mesh} ${r.case}`, 'load / run s': (r) => r.wall_s, 'upload s (PUTs, GB)': up, 'job s': (r) => r.phases?.job_s,
     'values s': (r) => r.phases?.values_s, 'paint s': (r) => r.paint_s, 'results s': (r) => r.results_s, 'long tasks n / s / max s': (r) => r.lt && `${r.lt.n} / ${r.lt.s} / ${r.lt.max_s}`,
-    'page GB': (r) => r.page_gb, 'browser total / peak GB': (r) => r.mem.browser && `${r.mem.browser.total_gb} / ${r.mem.browser.peak_gb}`, 'server peak GB': (r) => r.mem.server?.peak_gb,
+    'page GB': (r) => r.page_gb, 'browser total / peak GB': (r) => r.mem.browser && `${r.mem.browser.total_gb} / ${r.mem.browser.peak_gb}`, 'renderer max GB': (r) => r.mem.renderers?.max_gb, 'server peak GB': (r) => r.mem.server?.peak_gb,
     'GPU +GB / free GB': (r) => r.gpu && `${r.gpu.dmem_gb} / ${r.gpu.free_min_gb}`, backend: (r) => r.backend, outcome: (r) => r.error ?? 'ok' },
 };
 const md = (cells) => console.log(`| ${cells.map((c) => (c == null ? '-' : brief(c).replace(/\|/g, '/'))).join(' | ')} |`);
@@ -226,10 +241,11 @@ async function serverMode() {
       sensors = sensors.map((m) => ({ name: m.name, positions: m.positions, indices: m.indices }));
     }
     let res, err;
+    const ac = new AbortController(); // a failed run's queued PUTs go with it, not into the next case's server
     try {
-      res = await lib.runRemote(url, { sensors, epw, args: CASES[id].args, clientId: 'bench', fetch: timed(log), signal: AbortSignal.timeout(RUN_MS),
+      res = await lib.runRemote(url, { sensors, epw, args: CASES[id].args, clientId: 'bench', fetch: timed(log), signal: AbortSignal.any([ac.signal, AbortSignal.timeout(RUN_MS)]),
         onStatus: (j) => log.push({ state: j.state, t: now() }) });
-    } catch (e) { err = e; }
+    } catch (e) { err = e; } finally { ac.abort(); }
     const t1 = now(), ref = join(R, 'runs', 'base', `${MESH}-${id}.npy`);
     if (err && srv.exitCode === null) await Promise.race([srv.exited, sleep(2e3)]); // a reset socket comes before the exit event
     const died = srv.exitCode !== null;
@@ -260,6 +276,8 @@ async function tool(name, args = {}) {
 }
 // no answer in time: the tab's own 45 s, the server's 55 s, or no tab polling (its main thread busy for over 5 s)
 const stalled = (r) => r.err && /answer within \d+ s|No daylight app tab is open/.test(r.text);
+/** Set when the app's page crashed or closed: a call waiting for its tab stops at once (no tab will come). */
+let gone = null;
 const sure = (what, r) => { if (r.err && !stalled(r)) throw new Error(`${what}: ${brief(r.text)}`); return r; };
 /** name(args), again a second after a busy(reply), or once app_state answers after a stall (as the reply asks); throws after ms. */
 async function until(name, args, busy, ms) {
@@ -267,7 +285,8 @@ async function until(name, args, busy, ms) {
     let r = await tool(name, args);
     if (!busy(r) && !stalled(r)) return r;
     if (busy(r)) await sleep(1e3); // run waits up to 40 s itself; an app_state poll would spin
-    while (stalled(r) && Date.now() < end) r = await tool('app_state');
+    while (stalled(r) && Date.now() < end && !gone) r = await tool('app_state');
+    if (gone) throw new Error(`${name}: ${gone}`);
     if (Date.now() >= end) throw new Error(`${name}: still ${stalled(r) ? 'no answer from the tab' : 'busy'} after ${ms / 60e3} min`);
   }
 }
@@ -299,7 +318,7 @@ async function browserMode() {
   const dir = join(R, 'browser', TAG), profile = join(dir, `${BROWSER}-profile`), none = join(R, 'none.exe');
   if (existsSync(none)) throw new Error(`${none} exists: the server would start it as its hidden browser`);
   const args = ['--web', resolve(opt.web), '--mcp', '--browser', none]; // a --browser that does not exist: the server never starts the user's Chrome
-  const s = { procs: [], gpu: sampleGpu() }, key = BROWSER === 'chrome' ? profile : resolve(process.env.PLAYWRIGHT_BROWSERS_PATH); // finds the browser's processes
+  const s = { procs: [], renderers: [], gpu: sampleGpu() }, key = BROWSER === 'chrome' ? profile : resolve(process.env.PLAYWRIGHT_BROWSERS_PATH); // finds the browser's processes
   let srv = await start(PORT, dir, args, s.procs);
   rmSync(profile, { recursive: true, force: true }); // a fresh profile every run, never the user's
   const b = { ...build(), web: resolve(opt.web) }, ctx = await (BROWSER === 'chrome'
@@ -308,7 +327,7 @@ async function browserMode() {
   await ctx.addInitScript(INIT);
   const page = ctx.pages()[0] ?? (await ctx.newPage()), log = [], open = new WeakMap();
   let crashed = null, put = { n: 0, bytes: 0 }, info = {};
-  page.on('crash', () => { crashed = 'page crash'; }).on('pageerror', (e) => console.log(`page error: ${brief(e.message)}`));
+  page.on('crash', () => { gone = crashed = 'page crash'; }).on('close', () => { gone ??= 'page closed'; }).on('pageerror', (e) => console.log(`page error: ${brief(e.message)}`));
   page.on('request', (r) => { const e = { method: r.method(), path: new URL(r.url()).pathname, t0: now(), t1: 0, bytes: 0 }; open.set(r, e); log.push(e); });
   page.on('requestfailed', (r) => { if (open.has(r)) open.get(r).t1 = now(); });
   page.on('requestfinished', async (r) => { // answers carry Content-Length (httplib); PUT bodies come from the page's counter
@@ -325,7 +344,7 @@ async function browserMode() {
     put = p.put ?? put;
     const rec = { tag: TAG, layer: BROWSER, mesh: MESH, case: name, ok: !fields.error && !crashed && !died, when: new Date().toISOString(), build: b, ...fields,
       ...(crashed || died ? { error: crashed ?? `server exited ${hex(srv.exitCode)}${fields.error ? `: ${fields.error}` : ''}` } : {}), page_gb: p.page_gb, lt: p.lt, ...info,
-      mem: { server: procStats(s.procs, t0, t), browser: await browserProcs(key) }, gpu: gpuStats(s.gpu, t0, t) };
+      mem: { server: procStats(s.procs, t0, t), browser: await browserProcs(key), renderers: procStats(s.renderers, t0, t) }, gpu: gpuStats(s.gpu, t0, t) };
     record(rec); row('browser', rec);
     if (died) srv = await start(PORT, dir, args, s.procs);
     return rec;
@@ -349,6 +368,8 @@ async function browserMode() {
       return { backend: document.querySelector('usd-viewer')?.backend ?? null, adapter: i ? [i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(' ') : null, ua: navigator.userAgent };
     });
     await step('set_roles', { paths: ['/'], role: 'receiver' });
+    // the content processes (Chrome renderers, Firefox tabs) sampled every second from here: what a tab held when it died
+    for (const pid of await contentPids(key)) sampleProc(pid, s.renderers);
   } catch (e) { error = e.message; }
   const load = await checkpoint('load', t0, { error, wall_s: sec(t0, tl ?? now()), faces: m?.faces, meshes: m?.meshes, problems: m?.problems });
   for (const id of load.ok ? IDS : []) {
