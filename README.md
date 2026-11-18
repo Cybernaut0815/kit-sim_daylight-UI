@@ -1,6 +1,6 @@
 # kit-sim_daylight web
 
-Browser front end and HTTP server for [kit-sim_daylight](https://github.com/Cybernaut0815/kit-sim_daylight) (GPU
+Browser front end and HTTP server for [kit-sim_core](https://github.com/Cybernaut0815/kit-sim_core) (GPU
 annual daylight / solar simulation): open a USD stage (`.usd` / `.usda` / `.usdc` / `.usdz`, as files or a folder with
 its assets) or a `.glb` / `.gltf` (Draco and meshopt compression too) / `.obj` (with its `.mtl`), turned into USD in the
 browser with its materials, UVs and textures, in the [USD web viewer](https://github.com/Cybernaut0815/USD_WebViewer),
@@ -80,8 +80,8 @@ cameras stay editable in the app (the chart settings button, the Views menu), an
 again. The agent routes answer only on this machine; setup in [server/README.md](server/README.md#agents-mcp).
 
 - [server/README.md](server/README.md): documentation endpoints, multi-user behaviour (queue, limits, cancel), caching, flags.
-- `kit-sim_daylight/`: the core as a git submodule (`git submodule update --init`); its `bindings/ts` is imported by
-  the web app through a Vite alias.
+- `kit-sim_daylight/`: the core (GitHub repo `kit-sim_core`) as a git submodule (`git submodule update --init`); its
+  `bindings/ts` is imported by the web app through a Vite alias.
 - `USD_WebViewer/`: the 3D view (`<usd-viewer>`: OpenUSD in WebAssembly, drawn by three.js) as a git submodule; its
   source is imported through a Vite alias and its `web/public` (the core, the skies) is the app's public folder.
 - External services the browser uses directly: OpenFreeMap tiles (`styles/dark`, © OpenMapTiles, data from
