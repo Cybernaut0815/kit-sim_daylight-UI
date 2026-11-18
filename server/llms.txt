@@ -1,6 +1,6 @@
 # daylight_server
 
-> GPU annual daylight and solar simulation on meshes over HTTP (kit-sim_daylight core: OptiX ray tracing,
+> GPU annual daylight and solar simulation on meshes over HTTP (kit-sim_core: OptiX ray tracing,
 > Radiance-derived Perez sky, validated against Ladybug Tools, Radiance and pvlib). Several users share one GPU
 > through a job queue.
 
