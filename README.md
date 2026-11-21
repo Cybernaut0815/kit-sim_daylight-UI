@@ -52,28 +52,79 @@ precise: Transmission on, 2 reflections, 4096 samples.
 
 ![Daylight web UI: mesh tree, site map and coordinates on the left; annual radiation painted on the meshes in the centre; colour scale, problem range, distribution and cumulative area charts on the right](docs/UI_preview.png)
 
+## Start
+
+The app is two parts: `daylight_server.exe` (C++, runs the simulations on the GPU) and the web app (`web/`), which the
+server also serves. Build both once, then start the server and open the page.
+
+**You need** Windows 10/11 x64, an NVIDIA GPU of compute capability 7.5 or newer (Turing and later) with driver R570+,
+Visual Studio 2022 (C++ workload), CMake 3.27+, CUDA 12.6, the OptiX 9 SDK headers, Node.js 20+, and GitHub access to
+`Cybernaut0815/kit-UI_template` (the `kit-ui` design system, fetched by `npm install`). Details and why containers on
+WSL2 cannot run it (OptiX is not in NVIDIA's WSL driver; a Linux GPU host is the container path, and the OptiX SDK
+licence restricts hosted / internet use by third parties) are in the core's [README](kit-sim_daylight/README.md#build).
+
+**1. Get the code** (with both submodules: the core and the USD viewer)
+
+```powershell
+git clone --recurse-submodules https://github.com/Cybernaut0815/kit-sim_daylight-UI.git
+cd kit-sim_daylight-UI
 ```
-git clone --recurse-submodules <this repo>
-cd server && cmake --preset vs2022 && cmake --build --preset release     # needs VS 2022, CUDA 12.6, OptiX 9 headers
-cd ../web && npm install && npm run core && npm run build                # needs GitHub access to Cybernaut0815/kit-UI_template
-server\build\RelWithDebInfo\daylight_server.exe --web web\dist            # http://localhost:8080
+
+**2. Build the server** (from the repository root; a few minutes the first time, CUDA included)
+
+```powershell
+cd server
+cmake --preset vs2022
+cmake --build --preset release          # -> server\build\RelWithDebInfo\daylight_server.exe
+cd ..
 ```
+
+**3. Build the web app**
+
+```powershell
+cd web
+npm install
+npm run core                            # the USD viewer's wasm core (once, and after every USD_WebViewer bump)
+npm run build                           # -> web\dist
+cd ..
+```
+
+**4. Start the server with the web app and open it**
+
+```powershell
+server\build\RelWithDebInfo\daylight_server.exe --web web\dist
+```
+
+Open **http://localhost:8080** (use `localhost`, not `127.0.0.1` or the machine's name: the 3D view needs a
+cross-origin isolated page, which browsers allow on `localhost` or over HTTPS). The window running the server shows
+its log; Ctrl+C stops it. Useful flags: `--port 8090`, `--mcp` (let Claude Code / Desktop drive the app, see
+[server/README.md](server/README.md#agents-mcp)); every flag is in [server/README.md](server/README.md#flags).
+
+The app has two tabs in its top bar: **Daylight** and **View analysis**, on the same models. Open a model in the Model
+panel (or try `server\test\building.usda`), select meshes in the prim tree, give them roles, and press *Run*.
+*Info* in the top bar explains the rest.
+
+**After pulling changes**: rebuild what changed (step 2 for `server/` or the `kit-sim_daylight` submodule, step 3 for
+`web/`; `npm run core` again when `USD_WebViewer` moved; run `git submodule update` first), then restart the server.
 
 `npm run core` fetches the USD viewer's wasm core (`usdcore.js`, `usdcore.wasm`, gitignored) from the viewer's GitHub
 Pages into `USD_WebViewer/web/public/core/`, after checking that it was built from the same sources as the pinned viewer
 commit, and records that commit in `web/usdcore.pin`; the build refuses a core fetched for another commit, so run it
-again after every bump of that submodule (a core built yourself can be copied there instead, see `web/scripts/core.mjs`). The core needs a cross-origin isolated
-page: the server and the dev server send the headers, and browsers honour them on `localhost` or over HTTPS.
+again after every bump of that submodule (a core built yourself can be copied there instead, see `web/scripts/core.mjs`).
 
-To run the server: Windows 10/11 x64, an NVIDIA GPU of compute capability 7.5 or newer (Turing and later, no rebuild
-per card), an NVIDIA driver R570+ and the VC++ 2015-2022 x64 runtime; details and why containers on WSL2 cannot run
-it yet (OptiX is not in NVIDIA's WSL driver; a Linux GPU host is the container path, and the OptiX SDK licence
-restricts hosted / internet use by third parties) are in the core's [README](kit-sim_daylight/README.md#build).
+### Working on the web app
 
-Development: `cd web && npm run dev` (Vite proxies the API paths to `localhost:8080`; `npm run dev:mock` fakes the
-server for GPU-free UI work). Judge speed in the built app served by the server: the dev build adds about 40 ms to
-every run (an instant re-run takes about 15 ms from click to the new numbers; an annual one is its compute time, mostly
-the CPU sky model, plus about 20 ms).
+Start the server as in step 4 (it answers the API on port 8080; `--web` is not needed), then in a second window:
+
+```powershell
+cd web
+npm run dev                             # http://localhost:5173, reloads on every edit; the API goes to localhost:8080
+```
+
+Without a GPU, `npm run dev:mock` fakes the server (random numbers, both analyses). Another server address:
+`$env:DAYLIGHT_API = 'http://127.0.0.1:8090'` before `npm run dev`. Tests: `npm test` (vitest). Judge speed in the built
+app served by the server: the dev build adds about 40 ms to every run (an instant re-run takes about 15 ms from click to
+the new numbers; an annual one is its compute time, mostly the CPU sky model, plus about 20 ms).
 
 **API**: several users share the GPU through a job queue; every endpoint is documented by the server itself at
 `/docs` (Swagger UI), `/redoc`, `/openapi.json` (OpenAPI 3.1, for agents and code generators) and `/llms.txt`.
