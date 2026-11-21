@@ -130,12 +130,13 @@ function quad(x0 = 0) {
   [0, 1, 2, 3].forEach((v, i) => b.writeInt32LE(v, 132 + 4 * i));
   return b;
 }
-/** POST /run (multipart) with sensor (and context) mesh ids and CLI args: {status, text}. */
-async function runSync(port, sensors, args, context = []) {
+/** POST /run (multipart) with sensor (and context) mesh ids, CLI args and other form fields: {status, text}. */
+async function runSync(port, sensors, args, context = [], fields = {}) {
   const fd = new FormData();
   for (const s of sensors) fd.append('sensors', s);
   for (const c of context) fd.append('context', c);
   for (const a of args) fd.append('args', a);
+  for (const [k, v] of Object.entries(fields)) fd.append(k, v);
   const r = await fetch(`http://127.0.0.1:${port}/run`, { method: 'POST', body: fd });
   return { status: r.status, text: await r.text() };
 }
@@ -163,6 +164,20 @@ if (off) await part('api', async () => {
   const ab = await runSync(OFF, ['smoke-quad'], NOON, ['smoke-quad-2']), ba = await runSync(OFF, ['smoke-quad-2'], NOON, ['smoke-quad']);
   check('api: sensor and context swapped -> the scene is reused', put2.status === 204 && ab.status === 200 && /"scene": "built"/.test(ab.text) && ba.status === 200 && /"scene": "reused"/.test(ba.text),
     `${put2.status}; ${ab.status} ${brief(ab.text.slice(ab.text.indexOf('"cache"')))}; ${ba.status} ${brief(ba.text.slice(ba.text.indexOf('"cache"')))}`);
+
+  // views (tool=views): the same meshes and ids with its own flags and no weather, on daylight's scene (the same key)
+  const VIEWS = { tool: 'views' }, cols = (r) => (r.status === 200 ? JSON.parse(r.text).columns.join(' ') : `${r.status} ${brief(r.text)}`);
+  const v1 = await runSync(OFF, ['smoke-quad'], [], ['smoke-quad-2'], VIEWS), v1j = v1.status === 200 ? JSON.parse(v1.text) : {};
+  const shares = v1.status === 200 ? Buffer.from(v1j.values_b64, 'base64') : Buffer.alloc(0), sum = [0, 1, 2].reduce((s, c) => s + (shares.length ? shares.readDoubleLE(8 * c) : NaN), 0);
+  check('api: a views job -> its columns, shares summing to 1, a view manifest', cols(v1) === 'sky_front ground_front obstruction_front distance_front distance_min_front' && Math.abs(sum - 1) < 1e-6 && v1j.view?.grid?.join() === '60,60',
+    `${cols(v1)}; sum ${sum}; grid ${v1j.view?.grid}`);
+  check("api: a views job reuses daylight's scene, no weather", /"scene": "reused", "weather": "none"/.test(v1.text), brief(v1.text.slice(v1.text.indexOf('"cache"'))));
+  const v2 = await runSync(OFF, ['smoke-quad'], ['--target', 'smoke-quad-2=water', '--reach', 'en17037'], ['smoke-quad-2'], VIEWS);
+  check('api: views --target and --reach -> a group column and reach columns', cols(v2) === 'sky_front ground_front obstruction_front water_front distance_front distance_min_front reach_6_front reach_20_front reach_50_front', cols(v2));
+  const vw = await runSync(OFF, ['smoke-quad'], [], [], { ...VIEWS, epw_url: 'https://climate.onebuilding.org/x.epw' }), tl = await runSync(OFF, ['smoke-quad'], [], [], { tool: 'radar' });
+  check('api: views with weather -> 400; an unknown tool -> 400', vw.status === 400 && /no weather/.test(vw.text) && tl.status === 400 && /tool must be/.test(tl.text), `${vw.status} ${brief(vw.text)}; ${tl.status} ${brief(tl.text)}`);
+  const dl = await runSync(OFF, ['smoke-quad'], NOON, ['smoke-quad-2']);
+  check('api: daylight after views on the same meshes -> a cache hit (keys apart)', /"response": "hit"/.test(dl.text) && cols(dl) === 'sunhours_front', `${cols(dl)} ${brief(dl.text.slice(dl.text.indexOf('"cache"')))}`);
 
   // binary values: a job's JSON links them (no values_b64 unless ?inline=1); GET .../values is float32 column-major,
   // equal to the inline values (float64 row-major) rounded to float32; ?col=k is one column
