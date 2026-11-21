@@ -54,8 +54,6 @@ const VIEW_FOCUS: Record<string, string> = { model: 'model-files', groups: 'targ
 // side by side or stacked, linked cameras, the analysis shown (its tab).
 const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab }, MIN_W = 240, MAX_W = 640;
 export type UiPrefs = typeof UI;
-// Which page this is: index.html declares data-kit (kit-ui), zha.html data-brand (zha-ui).
-const KIT = !!document.documentElement.dataset.kit;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -501,9 +499,7 @@ export default function App() {
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
       <header className="app-bar">
         <span className="app-bar__brand">
-          {KIT
-            ? <a href="/" aria-label="kit-sim, home"><span className="kit-mark">kit-<span className="kit-mark__name">sim</span></span></a>
-            : <a className="zha-lockup" href="/zha.html" aria-label="ZHA CODE, home"><span className="zha-lockup__zha">ZHA</span><span className="zha-lockup__team">CODE</span></a>}
+          <a href="/" aria-label="kit-sim, home"><span className="kit-mark">kit-<span className="kit-mark__name">sim</span></span></a>
         </span>
         {/* the two analyses of the same models: their own roles, settings and results */}
         <div className="tabs" role="group" aria-label="Analysis">

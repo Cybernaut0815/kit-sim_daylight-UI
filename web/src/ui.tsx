@@ -28,7 +28,7 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS; size?: 16 
 }
 
 /**
- * A button opening a zha-ui menu below or above it, on the side with more room: a native popover, so Esc and a click
+ * A button opening a kit-ui menu below or above it, on the side with more room: a native popover, so Esc and a click
  * elsewhere close it; JS owns its place, as the menu primitive asks. `icon`: a ghost icon button, `label` its name (and
  * its tooltip unless `title` gives one). `children` get `close`.
  */
@@ -172,7 +172,7 @@ export const pct = (x: number): string => `${(100 * x).toFixed(x > 0 && x < 0.1 
 const OPEN_KEY = 'daylight.open';
 const readOpen = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}') ?? {}; } catch { return {}; } };
 
-/** A panel section whose heading folds it away (zha .accordion); open unless the user closed it before. */
+/** A panel section whose heading folds it away (kit-ui .accordion); open unless the user closed it before. */
 export function Section({ id, title, children, busy }: { id: string; title: string; children: ReactNode; busy?: boolean }) {
   return (
     <details className="accordion" open={readOpen()[id] ?? true} onToggle={(e) => { const open = e.currentTarget.open; try { localStorage.setItem(OPEN_KEY, JSON.stringify({ ...readOpen(), [id]: open })); } catch { /* not remembered */ } }}>

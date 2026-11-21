@@ -1,4 +1,4 @@
-// MapLibre site locator: dark OpenFreeMap style repainted from zha tokens, draggable marker, station pins.
+// MapLibre site locator: dark OpenFreeMap style repainted from kit-ui tokens, draggable marker, station pins.
 import type { FeatureCollection } from 'geojson';
 import { Map as MLMap, Marker, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';

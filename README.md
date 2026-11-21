@@ -25,11 +25,19 @@ own faces, or the subdivided faces when the run used subdivision, never the tria
 files with it; a `.usda` / `.usdc` / `.usd` is the flattened stage, zipped with the textures it uses. glTF and OBJ hold
 the model as drawn, in metres, the receivers coloured with the shown result; glTF also every result as a value
 attribute (`_DAYLIGHT_<RESULT>`).
-*Info* in the app bar explains the app: a quick start, reading the results, comparing models, glass and reflective
-materials.
-Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM) at `/`; the same
-app in the ZHA design system (`zha-ui`, `data-brand="code"`) is still built at `/zha.html`, no longer linked from the
-app (settings carry over). Each page loads only its own design system (`web/src/kit.css`, `web/src/zha.css`).
+*Info* in the app bar explains the app: a quick start, reading the results, comparing models, the view analysis,
+glass and reflective materials.
+Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM; `web/src/kit.css`).
+
+**View analysis.** The *View analysis* tab in the app bar runs the core's `views` tool on the same models, meshes and
+materials, with roles, settings and results of its own: receivers, obstructions, targets (an obstruction whose rays count
+for a named group: water, a park) and ignored meshes; the field of view (out of a window about each face's normal, all
+around, or the horizontal ring of the 2D isovist), cell, eye offset, far, reach (EN 17037's 6 / 20 / 50 m or own
+distances), the virtual ground and whether rays pass glass. Results per element: the shares of the field that end on
+the sky, the ground, an obstruction and each target group, the share seen through glass, the view distances (log mean,
+nearest) or the isovist (volume, area) and the reach shares, painted on the meshes, with the distribution charts, a
+view composition donut (bars per model when comparing) and reach bars. Switching tabs keeps each analysis' roles and
+results; Daylight's inputs stay as they were.
 
 **Materials.** By default every surface is opaque and black (today's numbers and speed, as Ladybug's RadiationStudy);
 only the virtual ground reflects (*Ground reflectance*). Two switches in Simulation, each slower, add what the model's
@@ -47,7 +55,7 @@ precise: Transmission on, 2 reflections, 4096 samples.
 ```
 git clone --recurse-submodules <this repo>
 cd server && cmake --preset vs2022 && cmake --build --preset release     # needs VS 2022, CUDA 12.6, OptiX 9 headers
-cd ../web && npm install && npm run core && npm run build                # needs GitHub access to GitZHACODE/zha-ui and Cybernaut0815/kit-UI_template
+cd ../web && npm install && npm run core && npm run build                # needs GitHub access to Cybernaut0815/kit-UI_template
 server\build\RelWithDebInfo\daylight_server.exe --web web\dist            # http://localhost:8080
 ```
 

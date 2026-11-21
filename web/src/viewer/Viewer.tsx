@@ -22,7 +22,7 @@ const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaqu
 /** The viewers' selection fill (one material for all of them): the accent, fainter over result colours. */
 export const selectionFill = (byValue: boolean) => ({ color: `#${new THREE.Color(solid('--accent')).getHexString()}`, opacity: byValue ? 0.12 : 0.14 });
 // Neutral tone mapping (the Plain view) lowers every colour by up to 0.04 (linear) before output; add it back so the grid
-// keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
+// keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every kit-ui hairline sits.
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
 const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m < 0.04 ? 0.4 * Math.sqrt(m) - m : 0.04; return c.setRGB(c.r + off, c.g + off, c.b + off); };
 /** A view's hover tint, per view: a mesh has one parent, and each view's [meshes] cleanup resets it. A node material,

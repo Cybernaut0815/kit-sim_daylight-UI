@@ -1,4 +1,4 @@
-// Info: how to use the app, in the app bar where the design-system switch was. A native modal <dialog> (kit-ui / zha-ui
+// Info: how to use the app, in the app bar where the design-system switch was. A native modal <dialog> (kit-ui
 // .dialog): Esc closes it, so does a click on the backdrop (the dialog has no padding: a click on it is one outside its
 // content), and the focus returns to the button. It lives in <body>: inside the bar it would take the bar's dark tokens
 // (kit-ui's bar is black in every theme).

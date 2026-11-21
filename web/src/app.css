@@ -1,15 +1,14 @@
 /* The one project stylesheet: layout for the canvas, map, timeline and splitter regions the design system lacks.
-   Tokens only; no colours invented (zha-ui SKILL.md §3, flagged judgement). */
-:root { --radius-s: 0; --radius-m: 0; --radius-l: 0; --radius-pill: 0; } /* sharp corners everywhere: a product decision over the zha-ui radii */
-/* kit-ui (index.html) has no typology yellows; the sun path's time arc takes its amber, per theme like zha's */
-:root[data-kit] { --typology-yellow-text: var(--chip-amber-text); --color-typology-yellow: var(--color-amber); }
+   Tokens only; no colours invented (kit-ui SKILL.md §3). */
+/* kit-ui has no typology yellows; the sun path's time arc takes its amber, per theme */
+:root { --typology-yellow-text: var(--chip-amber-text); --color-typology-yellow: var(--color-amber); }
 .maplibregl-ctrl, .maplibregl-ctrl-attrib, .maplibregl-ctrl-group { border-radius: 0 !important; }
 .fill { block-size: 100%; min-block-size: 0; grid-auto-rows: minmax(0, 1fr); } /* the split rows are capped at the viewport, so the panels scroll inside */
 .fill > * { min-block-size: 0; min-inline-size: 0; } /* grid items default to min-content: a wide table or the map canvas would widen the column past the viewport */
 .panel-wrap { position: relative; display: grid; grid-template-rows: minmax(0, 1fr); } /* hosts a scrolling panel and its splitter, which hangs into the column gap */
-.panel { overflow: auto; padding: 0; background: none; } /* kit-ui pads and fills its .panel for an edge-to-edge layout; this one sits in the page gutters, as with zha-ui */
+.panel { overflow: auto; padding: 0; background: none; } /* kit-ui pads and fills its .panel for an edge-to-edge layout; this one sits in the page gutters */
 .panel { min-inline-size: 0; } /* at <= 1024 px it is overflow: visible, so its nowrap lines would set its width: it takes the column's and they clip */
-.panel > .accordion, .panel-group > .accordion { flex-shrink: 0; } /* zha's accordion clips (overflow: hidden), so in the panel's flex column it would shrink to share the height; it keeps its content's and the panel scrolls */
+.panel > .accordion, .panel-group > .accordion { flex-shrink: 0; } /* kit-ui's accordion clips (overflow: hidden), so in the panel's flex column it would shrink to share the height; it keeps its content's and the panel scrolls */
 .panel-group:not([hidden]) { display: contents; } /* panels kept mounted but hidden on the other tab (App): shown, its sections lay out as the panel's own */
 .splitter { position: absolute; inset-block: 0; inline-size: var(--space-6); cursor: col-resize; z-index: 1; }
 .splitter--left { inset-inline-end: calc(-1 * var(--space-6)); }
@@ -112,9 +111,6 @@
 :is(.tree, .materials) td:first-child { overflow: hidden; text-overflow: ellipsis; } /* a narrow panel clips, never overlaps the next column */
 .tree__indent { display: inline-block; inline-size: var(--space-3); }
 .tree__toggle { display: inline-flex; inline-size: var(--space-4); padding: 0; border: 0; background: none; color: var(--text-muted); vertical-align: middle; cursor: pointer; }
-/* zha-ui 0.1.4: the segmented radios are position:absolute without a positioned ancestor, so inside a scrolling panel
-   they extend the document's scrollable overflow and focusing one scrolls the whole page. Upstream fix pending. */
-.segmented { position: relative; }
 @media (max-width: 1024px) { /* the splits stack (bundle behaviour): one page column that scrolls as a whole */
   .fill { block-size: auto; grid-auto-rows: auto; }
   .panel { overflow: visible; }
