@@ -4,16 +4,19 @@
 // the stored report). With several models every output compares them: a run line, a column and a group of rows per
 // model, a series per model in its colour, and each value's difference to the first model. Every region keeps its size
 // whatever the data or the hover state, and a model keeps its place before its result lands, so the panel does not jump.
+// The view analysis shows the same for its columns (shares of the field, distances, isovists), its two built-in charts,
+// and its own: the view composition (what the field ends on) and the reach (how much of it sees how far).
 import { Fragment, memo, useMemo, type Dispatch } from 'react';
 import { Chart, chartTitle } from '../charts/Chart';
 import { ChartSettings, RANGE_HELP, ScaleFields, type ChartEdit } from '../charts/ChartSettings';
 import { Donut } from '../charts/Donut';
 import { Legend } from '../charts/Legend';
+import { Parts } from '../charts/Parts';
 import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row } from '../lib/charts';
 import { hexAt, type Scale } from '../lib/gradients';
-import { QUANTITY_HELP, SIDE_HELP, columnLabel, fmtDiff, fmtNum, rangeShares, shareBelow, unitFor } from '../lib/result';
+import { SIDE_HELP, areaMean, columnLabel, fmtDiff, fmtNum, helpFor, rangeShares, shareBelow, splitColumn, unitFor } from '../lib/result';
 import { chartSpec, type Stored } from '../report/spec';
-import { gpuSeconds, inFlight, type Action, type Model, type Probe, type Run, type RunResult, type Settings } from '../store';
+import { gpuSeconds, inFlight, type Action, type Model, type Probe, type Run, type RunResult, type Settings, type Tab } from '../store';
 import { Alert, Illustration, LETTERS, Segmented, Swatch, Tag, pct, rowKeys } from '../ui';
 
 /** A model as the panel compares it: its result's column for the one shown (by name; -1: none) and whether that result
@@ -26,11 +29,14 @@ interface Props {
   dispatch: Dispatch<Action>;
   reports: Stored[] | null; onReportChart: (id: string, e: ChartEdit) => void; // the stored reports; a report chart's settings changed
   reportError: { id?: string; title: string; message: string } | null; // a report change that failed: shown under that report's charts
+  analysis?: Tab; // whose results these are: the words, and the view analysis' own charts
 }
 
-const cacheLine = (c: Record<string, string> | undefined) =>
+const cacheLine = (c: Record<string, string> | undefined, views = false) =>
   !c ? '' : c.response === 'hit' ? 'Identical run, replayed from the server cache.'
-    : `Scene ${c.scene === 'reused' ? 'reused' : 'built'}, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}.`;
+    : `Scene ${c.scene === 'reused' ? 'reused' : 'built'}${views ? '' : `, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}`}.`;
+/** A view analysis class's name: the core's three, or a target group's own. */
+const className = (q: string) => (q === 'sky' || q === 'ground' || q === 'obstruction' ? `${q[0].toUpperCase()}${q.slice(1)}` : q);
 /** A run's times: its GPU share of the compute (a run replayed from the server cache computed nothing), the round trip. */
 export const timingOf = (r: RunResult) => {
   const run = r.manifest.run_s, gpu = gpuSeconds(r);
@@ -113,7 +119,7 @@ const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of share
 
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
 
-export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, dispatch, reports, onReportChart, reportError }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, dispatch, reports, onReportChart, reportError, analysis }: Props) {
   // what the tables and charts read of each model, kept across a selection or a run's status (each makes new models)
   const inputs = [0, 1, 2, 3].flatMap((k) => { const m = models.find((x) => x.slot === k); return [m?.objects, m?.result, m?.col]; }); // fixed length: memo deps
   const runs = useMemo(() => models.map(({ slot, objects, result, col }) => ({ slot, objects, result, col })), inputs); // eslint-disable-line react-hooks/exhaustive-deps
@@ -144,6 +150,19 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
     ...charts.map((c) => [c, chartData(c, { models: runs, column: shown, viz })] as const),
     ...groups.flatMap((g) => g.specs.map((c) => [c, chartData(c, { models: runs.filter((m) => g.slots.includes(m.slot)), column: shown, viz })] as const)),
   ] : []), [charts, groups, runs, shown, viz]);
+  // the view analysis' bars, per model, on the shown column's side: the area-weighted mean share of the field that ends on
+  // each class (sky, ground, obstruction, each target group; they sum to 1) and that reaches each distance; glazing apart
+  const views = analysis === 'views', side = shown ? splitColumn(shown)[1] : '';
+  const viewBars = useMemo(() => {
+    const res = runs.filter((m) => m.result);
+    if (!views || !side || !res.length) return null;
+    const has = (q: string) => res.some((m) => m.result!.columns.includes(`${q}_${side}`));
+    const groups = [...new Set(res.flatMap((m) => (m.result!.manifest.targets ?? []).map((t) => t.group)))];
+    const reach = [...new Set(res.flatMap((m) => m.result!.columns.filter((c) => c.startsWith('reach_') && c.endsWith(`_${side}`)).map((c) => splitColumn(c)[0])))];
+    const bars = (qs: string[], name: (q: string) => string) => qs.map((q) => ({ name: name(q), path: q, bars: res.map((m) => ({ slot: m.slot, v: areaMean(m.result!, `${q}_${side}`) })) }));
+    const glazing = res.map((m) => ({ slot: m.slot, v: areaMean(m.result!, `glazing_${side}`) }));
+    return { classes: bars(['sky', 'ground', 'obstruction', ...groups].filter(has), className), reach: bars(reach, (q) => `≥ ${q.slice(6)} m`), glazing: glazing.some((g) => Number.isFinite(g.v)) ? glazing : null };
+  }, [views, side, runs]);
   const running = models.some((m) => inFlight(m.run)), failed = models.filter((m) => m.error);
   const one = models[0];
   /** A model's run line: a job on its way (an Auto run refreshes silently, unless other users' jobs are ahead), else what it holds. */
@@ -154,7 +173,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
     if (!many) return { busy: false, text: d ? timingOf(d.r) : '' };
     if (!m.objects.length) return { busy: false, text: 'No model yet' };
     if (!m.objects.some((o) => o.role === 'receiver')) return { busy: false, text: 'No receiver mesh: not run' };
-    if (d) return { busy: false, text: `${timingOf(d.r)}. ${m.stale ? 'Inputs changed since this run.' : cacheLine(d.r.cache)}` };
+    if (d) return { busy: false, text: `${timingOf(d.r)}. ${m.stale ? 'Inputs changed since this run.' : cacheLine(d.r.cache, views)}` };
     if (m.result) return { busy: false, text: 'No result for this column (an earlier run): run again' };
     return { busy: false, text: m.error ? 'Run failed, see above' : 'Not run yet' };
   };
@@ -166,7 +185,9 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="results" /></div>
           <h3>No results yet</h3>
-          <p>Mark a receiver mesh, set the site and time, then run the simulation. The values appear on the meshes and in the distribution charts here.</p>
+          <p>{views
+            ? 'Mark a receiver mesh (and obstructions, targets), set the field of view, then run the view analysis. The shares of sky, obstruction and targets and the view distances appear on the meshes and in the charts here.'
+            : 'Mark a receiver mesh, set the site and time, then run the simulation. The values appear on the meshes and in the distribution charts here.'}</p>
         </div>
       )}
       {!ref && running && (() => {
@@ -183,7 +204,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
         <Alert title="Run failed">{many ? failed.map((m) => <div key={m.slot}><Tag slot={m.slot} /> {m.error}</div>) : failed[0].error}</Alert>
       )}
       {ref && shown && scale && (() => {
-        const { r, col } = ref, [quantity, side] = shown.split('_'), unit = unitFor(shown);
+        const { r, col } = ref, [quantity] = splitColumn(shown), unit = unitFor(shown);
         const A = datas[0]; // the differences: to the first model (A, or the first left after a removal)
         const pr = probe ? rowOf.get(probe.id) : undefined, hr = hovered === null ? undefined : rowOf.get(hovered);
         const kp = pr?.k ?? -1, kh = hr?.k ?? -1, probeRow = pr?.x, hov = hr?.x;
@@ -238,7 +259,13 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
           const t = lineOf(m, d);
           return <div key={m.slot} className="line" title={`Model ${LETTERS[m.slot]}${m.name ? `, ${m.name}` : ''}: ${t.text}`}><Tag slot={m.slot} /> {t.busy && <span className="spinner" aria-hidden="true" />} {t.text}</div>;
         };
-        const status = lineOf(one, ref), what = `${r.manifest.duration_h} h evaluated, ${r.manifest.dirs.sun.toLocaleString('en-GB')} sun directions${many ? '.' : `, ${fmtNum(r.weights.length)} ${r.on} on ${ref.rows.length} ${ref.rows.length === 1 ? 'mesh' : 'meshes'}.`}`;
+        const vw = r.manifest.view, rest = many ? '.' : `, ${fmtNum(r.weights.length)} ${r.on} on ${ref.rows.length} ${ref.rows.length === 1 ? 'mesh' : 'meshes'}.`;
+        const status = lineOf(one, ref), what = vw
+          ? `${(vw.grid[0] * vw.grid[1]).toLocaleString('en-GB')} rays per element (${vw.fov[0]}° wide, ${vw.fov[1]}° to ${vw.fov[2]}°, ${vw.cell}° cells), far ${fmtNum(vw.far)} m${rest}`
+          : `${r.manifest.duration_h} h evaluated, ${(r.manifest.dirs?.sun ?? 0).toLocaleString('en-GB')} sun directions${rest}`;
+        /** The view analysis' bars as a parts chart: a row per class or distance, a bar per model in its colour. */
+        const barsOf = (groups: NonNullable<typeof viewBars>['classes']) => ({ kind: 'parts' as const, scale, unit: '', grid: true, metric: 'mean' as const, domain: [0, 1] as [number, number], more: 0, groups });
+        const single = viewBars && !many ? viewBars.classes.map((g, i) => ({ key: g.path, name: g.name, color: i < 8 ? `var(--chart-cat-${i + 1})` : 'var(--chart-cat-other)', share: g.bars[0]?.v ?? NaN })) : null;
         return (
           <div className="stack view-fade">
             <div className="row-fill">
@@ -251,7 +278,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
               <Segmented name="colour-by" label="Colour the meshes" value={colourBy} options={[['value', 'Values'], ['plain', 'Plain']] as const} onChange={(v) => dispatch({ type: 'COLOUR_BY', colourBy: v })} />
             </div>
             {/* six lines high at any panel width (a narrow panel scrolls them): a column switch never moves what is below */}
-            <p className="text-muted box-6">{QUANTITY_HELP[quantity]} {SIDE_HELP[side]}</p>
+            <p className="text-muted box-6">{helpFor(quantity)} {SIDE_HELP[side]}</p>
             {/* fixed lines whatever the runs, the cache or the panel width (four; with several models one per model and two
                 shared): nothing below them moves; the last names the optics switches the run used, empty for the defaults */}
             {many ? (
@@ -265,7 +292,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
                 <div className="line" title={status.busy ? undefined : status.text}>
                   {status.busy ? <><span className="spinner" aria-hidden="true" /> {status.text}</> : status.text}
                 </div>
-                <div className="line">{one.stale ? 'Inputs changed since this run.' : cacheLine(r.cache)}</div>
+                <div className="line">{one.stale ? 'Inputs changed since this run.' : cacheLine(r.cache, views)}</div>
                 <div className="line" title={what}>{what}</div>
                 <div className="line" title={r.switches || undefined}>{r.switches}</div>
               </div>
@@ -305,6 +332,27 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             <ScaleFields quantity={quantity} scale={scale} viz={viz} many={many} dispatch={dispatch} />
             {/* the settings' charts in order: Distribution and Cumulative area, then one's own */}
             {group(charts, (e) => dispatch({ type: 'CHART', ...e }))}
+            {viewBars && viewBars.classes.length > 0 && (
+              <>
+                <h3>View composition</h3>
+                {single && (
+                  <div className="cluster">
+                    <Donut slices={single.map((x) => ({ ...x, share: Number.isFinite(x.share) ? x.share : 0 }))} label={pct(single[0].share)} sub={single[0].name.toLowerCase()} />
+                    <div className="stack stack--tight">
+                      {single.map((x) => <span key={x.key}><Swatch color={x.color} /> {pct(x.share)} {x.name}</span>)}
+                    </div>
+                  </div>
+                )}
+                {many && <Parts d={barsOf(viewBars.classes)} caption="mean share of the field, by area" percent />}
+                {viewBars.glazing && <p className="text-muted">Seen through glass: {viewBars.glazing.map((g) => `${many ? `${LETTERS[g.slot]} ` : ''}${Number.isFinite(g.v) ? pct(g.v) : '–'}`).join(', ')} of the field (counted with what lies behind)</p>}
+              </>
+            )}
+            {viewBars && viewBars.reach.length > 0 && (
+              <>
+                <h3>Reach</h3>
+                <Parts d={barsOf(viewBars.reach)} caption="mean share of the field that sees this far" percent />
+              </>
+            )}
             <h3>Problem range split</h3>
             {many ? (
               <div className="table-wrap">

@@ -2,6 +2,7 @@
 // per-quantity defaults, and the "problem range" that paints values outside [lo, hi] in two user-chosen colours.
 import type { PaintStyle } from 'usd-viewer';
 import type { Settings } from '../store';
+import { splitColumn } from './result';
 
 export interface Gradient { key: string; label: string; stops: string[] }
 
@@ -55,7 +56,7 @@ export interface Scale { gradient: Gradient; vmin: number; vmax: number; lo: num
 /** A result column's scale: its quantity's gradient, legend domain (`range`, the data's: every shown model's, unless
  *  Min or Max is set), problem range, colours. */
 export function scaleFor(column: string, [dmin, dmax]: [number, number], viz: Settings['viz']): Scale {
-  const q = column.split('_')[0], { gradients, scales, ranges, colors } = viz;
+  const q = splitColumn(column)[0], { gradients, scales, ranges, colors } = viz;
   return { gradient: gradientFor(q, gradients[q]), vmin: scales[q]?.min ?? dmin, vmax: scales[q]?.max ?? dmax, lo: ranges[q]?.lo ?? null, hi: ranges[q]?.hi ?? null, below: colors.below, above: colors.above };
 }
 

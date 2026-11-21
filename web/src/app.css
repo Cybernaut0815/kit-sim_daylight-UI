@@ -9,7 +9,8 @@
 .panel-wrap { position: relative; display: grid; grid-template-rows: minmax(0, 1fr); } /* hosts a scrolling panel and its splitter, which hangs into the column gap */
 .panel { overflow: auto; padding: 0; background: none; } /* kit-ui pads and fills its .panel for an edge-to-edge layout; this one sits in the page gutters, as with zha-ui */
 .panel { min-inline-size: 0; } /* at <= 1024 px it is overflow: visible, so its nowrap lines would set its width: it takes the column's and they clip */
-.panel > .accordion { flex-shrink: 0; } /* zha's accordion clips (overflow: hidden), so in the panel's flex column it would shrink to share the height; it keeps its content's and the panel scrolls */
+.panel > .accordion, .panel-group > .accordion { flex-shrink: 0; } /* zha's accordion clips (overflow: hidden), so in the panel's flex column it would shrink to share the height; it keeps its content's and the panel scrolls */
+.panel-group:not([hidden]) { display: contents; } /* panels kept mounted but hidden on the other tab (App): shown, its sections lay out as the panel's own */
 .splitter { position: absolute; inset-block: 0; inline-size: var(--space-6); cursor: col-resize; z-index: 1; }
 .splitter--left { inset-inline-end: calc(-1 * var(--space-6)); }
 .splitter--right { inset-inline-start: calc(-1 * var(--space-6)); }

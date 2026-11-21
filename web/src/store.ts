@@ -11,11 +11,15 @@ import { idsUnder } from './lib/tree';
 export type Role = 'receiver' | 'shade' | 'none';
 /**
  * A mesh of the stage: its prim path, its drawn triangles and vertices; `shade` false: a receiver that is measured but
- * casts no shade (the core's --no-occlude; absent: it casts shade while receivers block rays); `instances`: one mesh
+ * casts no shade (the core's --no-occlude; absent: it casts shade while receivers block rays); `group`: in the view
+ * analysis, a shade (an obstruction) whose rays count for this target group (views --target); `instances`: one mesh
  * drawn that many times; `paths`: every copy's prim path where each copy is its own prim (native instancing), so a click
  * on any finds the row; `materials[k]`: the viewer's material rid of optics slot k (0 = none).
  */
-export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; shade?: false; instances?: number; paths?: string[]; materials?: number[] }
+export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; shade?: false; group?: string; instances?: number; paths?: string[]; materials?: number[] }
+
+/** The two analyses of the same models: daylight, and the view analysis (the core's views tool). */
+export type Tab = 'daylight' | 'views';
 
 export type Quantity = 'radiation' | 'direct' | 'diffuse' | 'irradiance' | 'illuminance' | 'sunhours';
 export const QUANTITIES: Quantity[] = ['radiation', 'direct', 'diffuse', 'irradiance', 'illuminance', 'sunhours'];
@@ -45,6 +49,18 @@ export interface Settings {
     colors: { below: string; above: string };
   };
   charts: ChartSpec[]; // the Results charts in drawing order: the two built-ins (their look), then extras
+  viewSim: ViewSim; // the view analysis' settings (its own; north is the site's, sim.north)
+}
+
+/**
+ * The view analysis' settings, as the core's views flags (docs/views.md): the field `fov` [H, LO, HI] (H 360: all
+ * around; LO = HI = 0: horizontal rays, the 2D isovist), `cell` degrees per ray, the eye `offset` along the normal (m),
+ * `far` (what open counts as, m), the virtual ground (at `groundZ`, null: the lowest point), `reach` ('' none,
+ * 'en17037', or metres 'D,D,...'), whether rays pass glass (`transmission`), and the receivers' blocking.
+ */
+export interface ViewSim {
+  fov: [number, number, number]; cell: number; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices'; offset: number; far: number;
+  virtualGround: boolean; groundZ: number | null; reach: string; transmission: boolean; cullBackfaces: boolean; selfOcclude: boolean;
 }
 
 /** The element under the cursor: object id, element index within the mesh's rows, its value in the current column. */
@@ -86,8 +102,11 @@ export interface Model {
   run: Run;
   result: RunResult | null; // the last finished run: stays on screen while the next one is queued, running or failed
   error: string | null; // why the last run failed: kept while the next one runs, so the alert does not blink between Auto runs
-  optics: Record<string, OpticsEdit>; // Materials-table edits (lib/optics.ts keys): kept across re-reads, cleared per model
+  optics: Record<string, OpticsEdit>; // Materials-table edits (lib/optics.ts keys): kept across re-reads, cleared per model; both analyses'
+  viewAnalysis: ViewSlice; // the view analysis' own rows (the same rows, its roles), run, result and error
 }
+/** The view analysis' part of a model: `objects` are the model's rows (same ids, paths and meshes) with its own roles. */
+export interface ViewSlice { objects: ObjectRow[]; run: Run; result: RunResult | null; error: string | null }
 
 export interface State {
   models: Model[]; // 1..4, in slot order
@@ -99,13 +118,18 @@ export interface State {
   column: number; // the result column shown: an index into the first result in slot order, found by name in the others
   colourBy: 'plain' | 'value';
   errors: Record<string, string>; // validate() output keyed by field id
+  viewAnalysis: { column: number; colourBy: 'plain' | 'value'; errors: Record<string, string> }; // the view analysis' own
 }
 
+/** Tagged `tab: 'views'`, an action of one analysis (ROLE, SHADE, RUN, COLUMN, COLOUR_BY, ERRORS) acts on the view
+ *  analysis; untagged on daylight, as always (the agent tools never tag). */
+type OfTab = { tab?: 'views' };
+export const TAGGED: ReadonlySet<string> = new Set(['ROLE', 'SHADE', 'RUN', 'COLUMN', 'COLOUR_BY', 'ERRORS']);
 export type Action =
   | { type: 'LOAD'; slot: number; objects: ObjectRow[]; name?: string }
-  | { type: 'RELOAD'; slot: number; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection and each path's no-shade flag stay
-  | { type: 'ROLE'; slot: number; ids: string[]; role: Role } // a row whose role changes casts shade as its new role does
-  | { type: 'SHADE'; slot: number; ids: string[]; shade: boolean } // whether the receivers among them cast shade
+  | { type: 'RELOAD'; slot: number; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection and each path's no-shade flag stay; the view roles by path
+  | ({ type: 'ROLE'; slot: number; ids: string[]; role: Role; group?: string } & OfTab) // a row whose role changes casts shade as its new role does; group: a shade's target group (views)
+  | ({ type: 'SHADE'; slot: number; ids: string[]; shade: boolean } & OfTab) // whether the receivers among them cast shade
   | { type: 'SELECT'; slot: number; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
   | ({ type: 'SELECTION'; slot: number } & Selection) // the viewer's selection changed
   | { type: 'ADD' } // a model to compare, in the lowest free slot, made active
@@ -118,15 +142,16 @@ export type Action =
   | { type: 'TIME'; patch: Partial<Settings['time']> }
   | { type: 'SIM'; patch: Partial<Settings['sim']> }
   | { type: 'STATIONS'; stations: Station[] }
-  | { type: 'RUN'; slot: number; run: Run }
-  | { type: 'COLUMN'; column: number }
-  | { type: 'COLOUR_BY'; colourBy: 'plain' | 'value' }
+  | { type: 'VIEW_SIM'; patch: Partial<ViewSim> }
+  | ({ type: 'RUN'; slot: number; run: Run } & OfTab)
+  | ({ type: 'COLUMN'; column: number } & OfTab)
+  | ({ type: 'COLOUR_BY'; colourBy: 'plain' | 'value' } & OfTab)
   | { type: 'PROBE'; probe: Probe | null }
   | { type: 'BIN'; bin: [number, number] | null }
   | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
   | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
   | ({ type: 'CHART' } & ({ spec: ChartSpec } | { id: string; remove: true } | { id: string; reset: true })) // put in place by id, removed (an extra), its look back to the kind's
-  | { type: 'ERRORS'; errors: Record<string, string> }
+  | ({ type: 'ERRORS'; errors: Record<string, string> } & OfTab)
   | { type: 'OPTICS_EDIT'; slot: number; key: string; edit: OpticsEdit } // a material by prim path, or a default row
   | { type: 'OPTICS_RESET'; slot: number; key: string }; // back to the derived (or default) values
 
@@ -140,14 +165,46 @@ export const defaultSettings = (): Settings => ({
   sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true, bounces: 0, bounceSamples: 1024 },
   viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
   charts: BUILT_IN.map((c) => ({ ...c })),
+  viewSim: { fov: [120, -70, 50], cell: 2, sides: 'front', on: 'faces', offset: 0, far: 1000, virtualGround: true, groundZ: null, reach: '', transmission: false, cullBackfaces: false, selfOcclude: true },
 });
 
 const IDLE: Run = { status: 'idle' };
-const model = (slot: number): Model => ({ slot, name: '', objects: [], selection: NO_SELECTION, selected: new Set(), run: IDLE, result: null, error: null, optics: {} });
+const model = (slot: number): Model => ({ slot, name: '', objects: [], selection: NO_SELECTION, selected: new Set(), run: IDLE, result: null, error: null, optics: {}, viewAnalysis: { objects: [], run: IDLE, result: null, error: null } });
 
 export const initialState = (settings = defaultSettings()): State => ({
   models: [model(0)], active: 0, hovered: null, probe: null, bin: null, settings, stations: null, column: 0, colourBy: 'plain', errors: {},
+  viewAnalysis: { column: 0, colourBy: 'plain', errors: {} },
 });
+
+// The view analysis seen as daylight is: its rows, run, result and error (per model) and its column, colouring and errors
+// in daylight's fields, and daylight's in viewAnalysis. Each its own inverse, cached both ways (swap(swap(x)) === x), so
+// the models an action leaves alone keep their identity and the views tab's memos hold across hovers.
+const swappedModel = new WeakMap<Model, Model>(), swappedState = new WeakMap<State, State>();
+export function swapModel(m: Model): Model {
+  let t = swappedModel.get(m);
+  if (!t) {
+    const { objects, run, result, error, viewAnalysis: v } = m;
+    t = { ...m, objects: v.objects, run: v.run, result: v.result, error: v.error, viewAnalysis: { objects, run, result, error } };
+    swappedModel.set(m, t).set(t, m);
+  }
+  return t;
+}
+export function swapState(s: State): State {
+  let t = swappedState.get(s);
+  if (!t) {
+    const { column, colourBy, errors, viewAnalysis: v } = s;
+    t = { ...s, models: s.models.map(swapModel), column: v.column, colourBy: v.colourBy, errors: v.errors, viewAnalysis: { column, colourBy, errors } };
+    swappedState.set(s, t).set(t, s);
+  }
+  return t;
+}
+/** A target group (views --target GROUP): letters, digits, _ and -. */
+export const GROUP = /^[A-Za-z0-9_-]{1,64}$/;
+/** Row `o` with the view role `role` from the row it had (by path), if any: its no-shade flag (a receiver) or group (a shade). */
+const viewRole = (o: ObjectRow, role: Role, was?: ObjectRow): ObjectRow => {
+  const { shade: _s, group: _g, ...rest } = o;
+  return { ...rest, role, ...(role === 'receiver' && was?.shade === false ? { shade: false as const } : {}), ...(role === 'shade' && was?.group ? { group: was.group } : {}) };
+};
 
 // A job still on its way when the model or the roles change keeps its status (the button stays busy until it ends);
 // its result is then dropped at RUN done, because its receivers are gone.
@@ -179,16 +236,33 @@ export async function runBatch(jobs: readonly { slot: number; ready: () => boole
   }
 }
 
+/** A model still shows a view analysis result. */
+const keptViews = (models: readonly Model[]) => models.some((m) => m.viewAnalysis.result);
+/** The view analysis' column and colouring start over when no model shows one of its results. */
+const viewsKept = (s: State): State => (keptViews(s.models) ? s : { ...s, viewAnalysis: { ...s.viewAnalysis, column: 0, colourBy: 'plain' } });
+
 export function reducer(s: State, a: Action): State {
+  if ('tab' in a && a.tab === 'views') { // the view analysis' action: daylight's rules on its slice; nothing changed = the same state
+    const t = swapState(s), n = analysis(t, a);
+    return n === t ? s : swapState(n);
+  }
+  return analysis(s, a);
+}
+
+function analysis(s: State, a: Action): State {
   switch (a.type) {
-    case 'LOAD': {
-      const n = put(s, a.slot, (m) => ({ ...model(m.slot), name: a.name ?? '', objects: a.objects, run: inFlight(m.run) ? m.run : IDLE }));
-      return n === s ? s : { ...n, hovered: null, ...(kept(n.models) ? {} : { column: 0, colourBy: 'plain' as const }) };
+    case 'LOAD': { // both analyses take the rows (the same ids and default roles); a job on its way keeps its status
+      const n = put(s, a.slot, (m) => ({
+        ...model(m.slot), name: a.name ?? '', objects: a.objects, run: inFlight(m.run) ? m.run : IDLE,
+        viewAnalysis: { objects: a.objects, run: inFlight(m.viewAnalysis.run) ? m.viewAnalysis.run : IDLE, result: null, error: null },
+      }));
+      return n === s ? s : viewsKept({ ...n, hovered: null, ...(kept(n.models) ? {} : { column: 0, colourBy: 'plain' as const }) });
     }
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
-      const ids = new Set(a.ids); // a Set: a model of 14k meshes, all re-assigned, is 14k lookups, not 14k x 14k compares
+      const ids = new Set(a.ids), group = a.role === 'shade' ? a.group : undefined; // a Set: a model of 14k meshes, all re-assigned, is 14k lookups, not 14k x 14k compares
       const n = put(s, a.slot, (m) => {
-        const objects = m.objects.map((o) => (ids.has(o.id) && o.role !== a.role && !(a.role === 'receiver' && o.instances) ? { ...shading(o, true), role: a.role } : o));
+        const objects = m.objects.map((o) => (ids.has(o.id) && (o.role !== a.role || o.group !== group) && !(a.role === 'receiver' && o.instances)
+          ? (({ group: _g, ...r }) => ({ ...r, role: a.role, ...(group ? { group } : {}) }))(shading(o, true)) : o));
         return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }; // nothing changed: keep the result
       });
       return n === s || kept(n.models) ? n : { ...n, column: 0 };
@@ -211,9 +285,15 @@ export function reducer(s: State, a: Action): State {
       const n = put(s, a.slot, (m) => {
         const free = new Set(m.objects.filter((o) => o.shade === false).map((o) => o.path));
         const objects = free.size ? a.objects.map((o) => (o.role === 'receiver' && free.has(o.path) ? shading(o, false) : o)) : a.objects;
-        return { ...m, objects, selected: new Set(idsUnder(m.selection.paths, objects)), run: inFlight(m.run) ? m.run : IDLE, result: null, error: null };
+        // the view analysis' roles by path too: a new path is none, an instanced one no receiver
+        const v = m.viewAnalysis, was = new Map(v.objects.map((o) => [o.path, o]));
+        const vobjects = objects.map((o) => { const w = was.get(o.path), role = !w || (w.role === 'receiver' && o.instances) ? 'none' : w.role; return viewRole(o, role, w); });
+        return {
+          ...m, objects, selected: new Set(idsUnder(m.selection.paths, objects)), run: inFlight(m.run) ? m.run : IDLE, result: null, error: null,
+          viewAnalysis: { objects: vobjects, run: inFlight(v.run) ? v.run : IDLE, result: null, error: null },
+        };
       });
-      return n === s ? s : { ...n, hovered: null, probe: null, ...(kept(n.models) ? {} : { column: 0 }) };
+      return n === s ? s : viewsKept({ ...n, hovered: null, probe: null, ...(kept(n.models) ? {} : { column: 0 }) });
     }
     case 'SELECTION':
       return put(s, a.slot, (m) => ({ ...m, selection: { paths: a.paths, active: a.active, source: a.source }, selected: new Set(idsUnder(a.paths, m.objects)) }));
@@ -225,7 +305,7 @@ export function reducer(s: State, a: Action): State {
       const i = s.models.findIndex((m) => m.slot === a.slot);
       if (i < 0 || s.models.length === 1) return s;
       const models = s.models.filter((m) => m.slot !== a.slot), active = s.active === a.slot ? (models[i] ?? models[i - 1]).slot : s.active; // the next tab, else the one before
-      return { ...s, models, active, hovered: null, probe: null, ...(kept(models) ? {} : { column: 0, colourBy: 'plain' as const }) };
+      return viewsKept({ ...s, models, active, hovered: null, probe: null, ...(kept(models) ? {} : { column: 0, colourBy: 'plain' as const }) });
     }
     case 'ACTIVE':
       return s.active === a.slot || !s.models.some((m) => m.slot === a.slot) ? s : { ...s, active: a.slot };
@@ -261,6 +341,8 @@ export function reducer(s: State, a: Action): State {
       }
       return { ...s, settings: { ...s.settings, sim } };
     }
+    case 'VIEW_SIM':
+      return { ...s, settings: { ...s.settings, viewSim: { ...s.settings.viewSim, ...a.patch } } };
     case 'STATIONS': {
       const { lat, lon } = s.settings.site;
       const station = s.settings.weather.station ?? nearestStations(a.stations, lat, lon, 1)[0] ?? null;
@@ -330,6 +412,18 @@ export function reducer(s: State, a: Action): State {
 export const serializeSettings = (s: Settings): string =>
   JSON.stringify({ ...s, weather: { ...s.weather, file: null }, epwMeta: s.weather.source === 'upload' ? null : s.epwMeta }); // the header of a file that is not kept either
 
+/** A stored view analysis' settings over the defaults, each field of the default's type or the default. */
+function viewSimOf(raw: unknown, d: ViewSim): ViewSim {
+  const p = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>, out = { ...d } as Record<string, unknown>;
+  for (const k of Object.keys(d) as (keyof ViewSim)[]) {
+    const v = p[k], want = d[k];
+    if (k === 'fov') { if (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x))) out.fov = v; }
+    else if (k === 'groundZ') { if (v === null || (typeof v === 'number' && Number.isFinite(v))) out.groundZ = v; }
+    else if (typeof v === typeof want && (typeof v !== 'number' || Number.isFinite(v))) out[k] = v;
+  }
+  return out as unknown as ViewSim;
+}
+
 /** JSON (or null) -> Settings, each group spread over the defaults so a stale or partial record still loads. */
 export function parseSettings(raw: string | null): Settings {
   const d = defaultSettings();
@@ -343,6 +437,7 @@ export function parseSettings(raw: string | null): Settings {
       epwMeta: (p.epwMeta as EpwMeta | null | undefined) ?? null, time: { ...d.time, ...p.time }, sim: { ...d.sim, ...p.sim },
       viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges }, colors: { ...d.viz.colors, ...viz.colors } },
       charts: (Array.isArray(p.charts) ? p.charts : []).reduce<ChartSpec[]>(put1, d.charts), // over the built-ins; junk is dropped
+      viewSim: viewSimOf(p.viewSim, d.viewSim),
     };
   } catch {
     return d;

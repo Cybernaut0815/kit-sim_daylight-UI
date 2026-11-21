@@ -55,3 +55,11 @@ describe('gradients', () => {
     }
   });
 });
+
+describe('view analysis scales', () => {
+  it('a column with _ in its quantity keys its own scale (distance_min apart from distance)', async () => {
+    const { scaleFor } = await import('./gradients');
+    const viz = { gradients: {}, scales: { distance: { min: 1, max: 2 }, distance_min: { min: 5, max: 6 } }, ranges: {}, colors: { below: '#0000ff', above: '#ff0000' } };
+    expect([scaleFor('distance_min_front', [0, 9], viz).vmin, scaleFor('distance_front', [0, 9], viz).vmin, scaleFor('sky_front', [0, 1], viz).vmin]).toEqual([5, 1, 0]);
+  });
+});

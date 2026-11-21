@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, type Settings } from '../store';
-import { buildArgs, derivedTz, noOccludeArgs, simFor, validate } from './args';
+import { buildArgs, derivedTz, noOccludeArgs, simFor, targetArgs, validate, validateViews, viewArgs } from './args';
 import { DEFAULT_GLASS, DEFAULT_OPTICS, opticsArgs, type RunMesh } from './optics';
 
 const pairs = (a: string[]) => Object.fromEntries(a.map((v, i) => [v, a[i + 1]]));
@@ -177,5 +177,46 @@ describe('validate', () => {
     const sim = defaultSettings().sim;
     expect([simFor(sim, 1e6).bounceSamples, simFor(sim, 1e6 + 1).bounceSamples, simFor({ ...sim, bounceSamples: 4096 }, 2e7).bounceSamples]).toEqual([1024, 256, 4096]);
     expect(simFor(sim, 10)).toBe(sim);
+  });
+});
+
+describe('the view analysis', () => {
+  const v = () => defaultSettings().viewSim;
+  it('viewArgs: every option explicit at the defaults; the optional ones only when set', () => {
+    expect(viewArgs(v(), 0)).toEqual(['--fov', '120,-70,50', '--cell', '2', '--sides', 'front', '--on', 'faces', '--offset', '0', '--far', '1000', '--virtual-ground', 'on', '--north', '0']);
+    const p = pairs(viewArgs({ ...v(), fov: [360, 0, 0], groundZ: 1.5, reach: ' 6, 20 ', cullBackfaces: true, selfOcclude: false }, 90));
+    expect([p['--fov'], p['--ground-z'], p['--reach'], p['--north']]).toEqual(['360,0,0', '1.5', '6,20', '90']);
+    expect(viewArgs({ ...v(), cullBackfaces: true, selfOcclude: false }, 0)).toEqual(expect.arrayContaining(['--cull-backfaces', '--no-self-occlude']));
+    expect(viewArgs({ ...v(), virtualGround: false, groundZ: 2 }, 0)).not.toContain('--ground-z');
+  });
+  it('targetArgs: the shades with a group, by path, packed in one token', () => {
+    const rows = [{ id: 'b', path: '/z/lake', role: 'shade' as const, group: 'water' }, { id: 'a', path: '/a/park', role: 'shade' as const, group: 'green' }, { id: 'c', path: '/c', role: 'shade' as const }, { id: 'd', path: '/d', role: 'receiver' as const, group: 'x' }];
+    expect(targetArgs(rows)).toEqual(['--target', 'a=green;b=water']);
+    expect(targetArgs([])).toEqual([]);
+  });
+  it('validateViews: receivers, groups, field, cell, far, reach and the materials', () => {
+    expect(validateViews(v(), [], true)).toEqual({});
+    expect(Object.keys(validateViews(v(), [], false))).toEqual(['model']);
+    for (const g of ['sky', 'distance_x', 'reach2', 'a_distance', 'radiation', 'a b', '']) expect(validateViews(v(), [g], true).groups).toBeDefined();
+    expect(validateViews(v(), ['water', 'park', 'water'], true)).toEqual({});
+    expect(validateViews(v(), Array.from({ length: 17 }, (_, i) => `g${i}`), true).groups).toMatch(/at most 16/);
+    expect(validateViews({ ...v(), fov: [200, -70, 50] }, [], true).fov).toBeDefined();
+    expect(validateViews({ ...v(), fov: [360, 10, -10] }, [], true).fov).toBeDefined();
+    expect(validateViews({ ...v(), fov: [360, 0, 0] }, [], true)).toEqual({}); // the flat field
+    expect(validateViews({ ...v(), fov: [360, -1, 1] }, [], true).cell).toMatch(/isovist/); // one ring: no mesh for the volume
+    expect(validateViews({ ...v(), cell: 0.05 }, [], true).cell).toMatch(/rays per element/);
+    expect(validateViews({ ...v(), far: 0.1 }, [], true).far).toBeDefined();
+    for (const r of ['', 'en17037', '6,20,50', '2.5']) expect(validateViews({ ...v(), reach: r }, [], true).reach).toBeUndefined();
+    for (const r of ['6,6', '-1', 'x', '1,2,3,4,5,6,7,8,9']) expect(validateViews({ ...v(), reach: r }, [], true).reach).toBeDefined();
+    expect(validateViews({ ...v(), transmission: true }, [], true, false).materials).toBeDefined();
+    expect(validateViews(v(), [], true, false).materials).toBeUndefined(); // glass not passed: the materials do not count
+  });
+  it("its optics: only --transmission and --optics, never daylight's Fresnel or reflection flags", () => {
+    const mesh: RunMesh = { id: 'w', role: 'shade', optics: [DEFAULT_OPTICS, DEFAULT_GLASS] };
+    const a = opticsArgs([mesh], DEFAULT_OPTICS, { mode: 'physical', transmission: true, fresnel: true });
+    expect(a[0]).toBe('--transmission');
+    expect(a).toContain('--optics');
+    expect(a.some((x) => x === '--fresnel' || x === '--bounces')).toBe(false);
+    expect(opticsArgs([mesh], DEFAULT_OPTICS, { mode: 'physical', transmission: false, fresnel: true })).toEqual([]);
   });
 });

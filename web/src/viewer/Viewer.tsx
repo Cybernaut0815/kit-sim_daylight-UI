@@ -14,7 +14,7 @@ import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
 import { paintStyleOf, type Scale } from '../lib/gradients';
 import { idsUnder } from '../lib/tree';
-import type { Action, ObjectRow, RunResult } from '../store';
+import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 
@@ -51,6 +51,7 @@ interface Props {
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
   section: string | null; // the section shown, in words (null: none)
+  analysis?: Tab; // whose roles `objects` carry (the scene info's words)
 }
 
 interface Ctx {
@@ -61,12 +62,12 @@ interface Ctx {
 
 /** The scene info at the top right of the view: meshes by role, faces and vertices, units, the section, and the frame
  *  line. */
-function SceneInfo({ objects, unit, section, stats }: { objects: ObjectRow[]; unit: number; section: string | null; stats: RefObject<HTMLSpanElement | null> }) {
+function SceneInfo({ objects, unit, section, stats, analysis }: { objects: ObjectRow[]; unit: number; section: string | null; stats: RefObject<HTMLSpanElement | null>; analysis?: Tab }) {
   const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
-  const ignored = n('none');
+  const ignored = n('none'), targets = objects.reduce((k, o) => k + (o.role === 'shade' && o.group ? 1 : 0), 0);
   return (
     <div className="viewport__info" aria-hidden="true">
-      <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {f(n('shade'))} shading{ignored ? `, ${f(ignored)} ignored` : ''}</span>
+      <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {analysis === 'views' ? `${f(n('shade') - targets)} blocking, ${f(targets)} targets` : `${f(n('shade'))} shading`}{ignored ? `, ${f(ignored)} ignored` : ''}</span>
       <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
       {section && <span>Section: {section}</span>}
       <span ref={stats} />
@@ -74,7 +75,7 @@ function SceneInfo({ objects, unit, section, stats }: { objects: ObjectRow[]; un
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, section }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, section, analysis }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -390,7 +391,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
           {error && hasModel && <span className="badge badge--warning" title={error}><span className="dot" />Problems</span>}
         </div>
       )}
-      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} section={section} stats={stats} />}
+      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} section={section} stats={stats} analysis={analysis} />}
       {ready && !hasModel && !loading && (error
         ? <div className="empty-state"><Alert title="Problems loading the model">{error}</Alert></div>
         : (

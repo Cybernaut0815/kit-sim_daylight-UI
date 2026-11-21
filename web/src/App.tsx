@@ -2,14 +2,15 @@
 // its own USD viewer, its meshes built on demand), the per-mesh builders and content ids, the runs (one batch per click or Auto,
 // the models one after another), the comparison (one colour scale over every model), the theme mode, the view
 // preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras) and the section every view shows.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { flushSync } from 'react-dom';
 import type { Object3D } from 'three';
 import { runRemote } from 'daylight-mesh';
 import type { LocalFile, SectionGizmo, SectionSource, ViewState } from 'usd-viewer';
 import { Splitter } from './Splitter';
 import type { ChartEdit } from './charts/ChartSettings';
-import { buildArgs, derivedTz, epwRef, noOccludeArgs, simFor, validate, weatherLeap } from './lib/args';
+import { buildArgs, derivedTz, epwRef, noOccludeArgs, simFor, targetArgs, validate, validateViews, viewArgs, weatherLeap } from './lib/args';
+import { BUILT_IN } from './lib/charts';
 import { zoneAt } from './lib/zone';
 import { extract, jobMeshes, same, type Extracted, type Hashed } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
@@ -29,10 +30,11 @@ import { ModelPanel } from './panels/ModelPanel';
 import { ResultsPanel, type Compared } from './panels/ResultsPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TimePanel } from './panels/TimePanel';
+import { ViewSettingsPanel } from './panels/ViewSettingsPanel';
 import { WeatherPanel } from './panels/WeatherPanel';
 import { changed, generate, generation } from './report/generate';
 import { editChart, parseReports, type AppModel, type Report, type Stored } from './report/spec';
-import { inFlight, initialState, parseSettings, reducer, runBatch, serializeSettings, type Model, type ObjectRow, type Role, type RunResult } from './store';
+import { TAGGED, inFlight, initialState, parseSettings, reducer, runBatch, serializeSettings, swapModel, type Action, type Model, type ObjectRow, type Role, type RunResult, type Settings, type Tab } from './store';
 import { Icon, LETTERS, Segmented, Tag, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
@@ -45,10 +47,12 @@ const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'dayligh
 const CLIENT_ID = (() => { try { return sessionStorage.getItem('daylight.client') ?? (sessionStorage.setItem('daylight.client', crypto.randomUUID()), sessionStorage.getItem('daylight.client')!); } catch { return crypto.randomUUID(); } })();
 // validate() field -> the control that gets focus
 const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: 'lon', quantities: 'q-radiation', skyDensity: 'sky-density', timeTo: 'time-to-date', timeDate: 'time-date', materials: 'materials-status' };
+// validateViews() field -> the control that gets focus
+const VIEW_FOCUS: Record<string, string> = { model: 'model-files', groups: 'target-group', fov: 'view-fov-lo', cell: 'view-cell', far: 'view-far', reach: 'view-reach', materials: 'materials-status' };
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3; every model alike), two or three views
-// side by side or stacked, linked cameras.
-const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true }, MIN_W = 240, MAX_W = 640;
+// side by side or stacked, linked cameras, the analysis shown (its tab).
+const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab }, MIN_W = 240, MAX_W = 640;
 export type UiPrefs = typeof UI;
 // Which page this is: index.html declares data-kit (kit-ui), zha.html data-brand (zha-ui).
 const KIT = !!document.documentElement.dataset.kit;
@@ -56,7 +60,7 @@ const KIT = !!document.documentElement.dataset.kit;
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
 const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_KEY); return m === 'light' || m === 'dark' ? m : 'auto'; } catch { return 'auto'; } };
-const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths } }; } catch { return UI; } };
+const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' ? 'views' : 'daylight' }; } catch { return UI; } };
 
 // A row's mesh, built on demand (lib/extract.ts), with its model's slot; once a run has hashed it, its content id
 type Conv = Hashed & Pick<Extracted, 'make'> & { slot: number };
@@ -86,12 +90,8 @@ export default function App() {
   }), []);
   const conv = useRef(new Map<string, Conv>()); // row id -> its mesh's builders and, once hashed, its content id
   const dropConv = (slot: number) => { for (const [id, c] of conv.current) if (c.slot === slot) conv.current.delete(id); };
-  const abort = useRef<AbortController | null>(null);
-  const jobs = useRef<Record<number, AbortController>>({}); // per slot, its job on its way: removing the model ends it
-  const busy = useRef(false), held = useRef(false); // one batch of runs per tab; a click waiting for the materials
-  const lastKey = useRef<Record<number, string | null>>({}); // per slot: the key of the last run started
-  const [ended, setEnded] = useState(0); // bumped when a batch ends, so Auto re-checks with the settings of that moment
-  const [slow, setSlow] = useState(false); // the batch in flight has taken over 0.3 s
+  // the two analyses' runs (useAnalysis, below), for the stable callbacks: a model removed or opened ends its jobs in both
+  const analyses = useRef<Pick<Analysis, 'jobs' | 'lastKey' | 'held'>[]>([]);
   const [sunScale, setSunScale] = useState(1); // the sun path's radius over the one fitted to the model; 1 on every model load
   // the section every view shows (lib/section.ts, model metres): view only, this session; never a setting, a run input or
   // a key, and never cleared by a new model, a variant switch or a re-read
@@ -135,7 +135,7 @@ export default function App() {
   models.current = state.models;
   const subdiv = useRef(ui.subdiv);
   subdiv.current = ui.subdiv;
-  const [views, setViews] = useState<SavedView[]>([]); // views saved in the app: this session, every view, never in a file
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]); // views saved in the app: this session, every view, never in a file
   const choices = useRef<Record<number, AppModel['choices']>>({}); // per slot, the variant choices made since its file opened: [the file's own, chosen]
   const [reports, setReports] = useState<Stored[] | null>(null); // the stored reports (null: none here: no agent routes, a LAN tab, mock mode)
   // whether this tab may use the agent routes (GET /health: --mcp, and this machine): only then the bridge and the reports
@@ -268,7 +268,7 @@ export default function App() {
       // open() closes the current stage first: drop its rows and conversions now, so nothing hovers, probes or runs a
       // model that is no longer drawn (its view leaves the linked cameras). A failure before this point keeps the model.
       dropConv(slot);
-      held.current = false; // a click held for the old model's materials
+      for (const a of analyses.current) a.held.current = false; // a click held for the old model's materials
       pane(slot, { meshes: new Map(), names: new Map() });
       dispatch({ type: 'LOAD', slot, objects: [] });
       const logged = usd.session.log.length, info = await usd.open(source);
@@ -390,9 +390,8 @@ export default function App() {
    *  core stay for the next model in its slot (dispose() is final). */
   const onRemove = useCallback((slot: number) => {
     dropConv(slot);
-    jobs.current[slot]?.abort();
+    for (const a of analyses.current) { a.jobs.current[slot]?.abort(); delete a.lastKey.current[slot]; }
     delete model.current[slot];
-    delete lastKey.current[slot];
     delete choices.current[slot];
     setPanes(({ [slot]: _gone, ...rest }) => rest);
     dispatch({ type: 'REMOVE', slot });
@@ -401,56 +400,283 @@ export default function App() {
 
   const meshOf = useCallback((id: string) => conv.current.get(id)?.make(), []); // a row's mesh as run (model metres, Z up), built per call
 
-  const s = state.settings;
+  const s = state.settings, v = s.viewSim, views = ui.tab === 'views';
+  // The view analysis' own actions (ROLE, SHADE, RUN, COLUMN, COLOUR_BY, ERRORS) tagged for its slice of the store; the
+  // others as they are. Stable, so the memoised panels keep their props.
+  const dispatchViews = useCallback((a: Action) => dispatch(TAGGED.has(a.type) ? ({ ...a, tab: 'views' } as Action) : a), []);
+  const vModels = useMemo(() => state.models.map(swapModel), [state.models]); // the view analysis' models, seen as daylight's
+  const physical = s.sim.mode === 'physical', reflect = physical && s.sim.bounces > 0;
+  // Daylight per model: the settings it runs with (a big model's reflection samples: lib/args.ts simFor), its run
+  // arguments (the receivers that cast no shade among them) and the weather the server's response cache keys on.
+  const epw = epwRef(s), base = buildArgs(s), weather = epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null;
+  const shared = { conv, texStats, setTexStats, reading, auto: ui.auto, viz: s.viz };
+  const D = useAnalysis({
+    ...shared, models: state.models, column: state.column, visible: !views, dispatch, reflect, live: physical && (s.sim.transmission || reflect), on: s.sim.on, epw, weather,
+    argsOf: (receivers, _shades, o, elements) => { const sim = simFor(s.sim, elements); return { args: [...base, ...opticsArgs(o.meshes, o.fallback, sim), ...noOccludeArgs(receivers, s.sim)], switches: runSwitches(sim) }; },
+    check: (per, ready) => validate(s, per.some((p) => p.receivers.length > 0), ready, Math.max(0, ...per.map((p) => p.elements))),
+    focus: (f) => (f === 'weather' ? `weather-${s.weather.source}` : FOCUS[f] ?? f),
+  });
+  // The view analysis: the same models, meshes and materials, its own roles, settings and runs (the core's views, no
+  // weather); glass counts only while rays pass it.
+  const vBase = viewArgs(v, s.sim.north);
+  const V = useAnalysis({
+    ...shared, models: vModels, column: state.viewAnalysis.column, visible: views, dispatch: dispatchViews, reflect: false, live: v.transmission, on: v.on, weather: null, tool: 'views',
+    argsOf: (receivers, shades, o) => ({
+      args: [...vBase, ...opticsArgs(o.meshes, o.fallback, { mode: 'physical', transmission: v.transmission, fresnel: true }), ...noOccludeArgs(receivers, v), ...targetArgs(shades)],
+      switches: v.transmission ? 'Rays pass glass' : '',
+    }),
+    check: (per, ready) => validateViews(v, per.flatMap((p) => p.shades.flatMap((o) => (o.group ? [o.group] : []))), per.some((p) => p.receivers.length > 0), ready),
+    focus: (f) => VIEW_FOCUS[f] ?? f,
+  });
+  analyses.current = [D, V];
+  const A = views ? V : D, colourBy = views ? state.viewAnalysis.colourBy : state.colourBy; // the tab's analysis: what the screen shows
+
+  // Linked cameras over the views that show a model (one opening a model leaves the set, so its own framing spreads
+  // nowhere); the active view leads whenever the set changes (linked on, a model in or out).
+  const loaded = state.models.filter((m) => (panes[m.slot]?.meshes.size ?? 0) > 0).map((m) => m.slot);
+  useEffect(() => {
+    if (!ui.link || loaded.length < 2) return;
+    const els = loaded.map((k) => viewer(k).el);
+    return link(els, els[loaded.indexOf(state.active)]); // an empty active tab: the first leads
+  }, [ui.link, loaded.join()]); // eslint-disable-line react-hooks/exhaustive-deps -- the lead counts only when the set changes
+
+  const zone = useMemo(() => zoneAt(s.site.lat, s.site.lon), [s.site.lat, s.site.lon]); // the site's civil zone (offline lookup)
+  const tz = derivedTz(s), leap = weatherLeap(s);
+  const sunSite = useMemo(() => ({ lat: s.site.lat, lon: s.site.lon, tz, leap }), [s.site.lat, s.site.lon, tz, leap]);
+  const sunView = useMemo<SunView | null>(() => (ui.sunPath ? { site: sunSite, north: s.sim.north, time: s.time, scale: sunScale } : null), [ui.sunPath, sunSite, s.sim.north, s.time, sunScale]);
+  const selectedHref = s.weather.source === 'station' ? s.weather.station?.href ?? null : null;
+  const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = A.models[ai], ap = panes[am.slot] ?? NO_PANE;
+  const charts = useMemo(() => (views ? s.charts.filter((c) => BUILT_IN.some((b) => b.id === c.id)) : s.charts), [views, s.charts]); // the views tab: the built-ins, their look shared
+  const groups = useMemo(() => [...new Set(vModels.flatMap((m) => m.objects.flatMap((o) => (o.role === 'shade' && o.group ? [o.group] : []))))], [vModels]); // the target groups in use
+  // one download at a time; its error is its result's, by run key (holding the result itself would keep a replaced one's
+  // values alive)
+  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ key: string; message: string } | null>(null);
+  /** The active model's result of analysis X as a file (the Download menu: the tab's; the agent tools: daylight's). */
+  const downloadOf = (X: Analysis) => async (format: Format, mode: ExportMode) => {
+    const xm = X.models[ai], picked = model.current[xm.slot]?.picked, col = X.cols[ai], result = xm.result;
+    if (!result || col < 0 || !picked) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await download(format, mode, {
+        usd: viewer(xm.slot).el, result, objects: xm.objects, meshes: ap.meshes, column: col, model: picked,
+        scales: result.columns.map((c) => scaleFor(c, unionRange(X.results, c), s.viz)), // the colours on screen: one scale over every model
+      });
+    } catch (e) {
+      setExportError({ key: result.key, message: (e as Error).message });
+    } finally {
+      setExporting(false);
+    }
+  };
+  const onDownload = useCallback(downloadOf(A), [A.models[ai], ai, ap.meshes, A.cols[ai], A.results, s.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- the tab's analysis by its active model, cols by its active entry
+  const probed: Model | undefined = state.probe ? A.models.find((m) => m.objects.some((o) => o.id === state.probe!.id)) : undefined; // its tip only in its own view
+  const probeLabel = state.probe && probed && A.shown
+    ? `${probed.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(A.shown).value}`
+    : null;
+  // the app as the Reports menu checks a report against it, while there are reports: per change of the models, roles,
+  // results, column or problem ranges, never per hover (daylight's: reports are daylight's)
+  const reportApp = useMemo(() => (reports?.length ? appView({ shown: D.shown, state, panes, per: D.per, variants }) : null), [reports, D.shown, state.models, s.viz.ranges, panes, D.keys]); // eslint-disable-line react-hooks/exhaustive-deps -- state and per by the parts appView reads
+  const sectionWords = active(section) ? describe(section) : null; // the views' scene info
+
+  // The app as the tools in mcp/tools.ts drive it, rewritten on every commit, which also wakes the tools waiting for one;
+  // where the agent routes answer this tab, the bridge polls the server for their calls while the page lives, after
+  // picking up a hidden session. The tools act on daylight, whichever tab shows.
+  const ctl = useRef<Ctl>(null!);
+  useLayoutEffect(() => {
+    ctl.current = {
+      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection: (s) => onSection(s, null), views: savedViews, setViews: setSavedViews,
+      optics: D.optics, materialsReady: D.materialsReady, per: D.per, shown: D.shown, scale: D.scale, domain: D.domain,
+      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun: D.onRun, onDownload: downloadOf(D), meshOf,
+      busy: () => D.busy.current, held: () => D.held.current, cancel: () => D.abort.current?.abort(), viewer,
+      variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
+    };
+    settled();
+  });
+  useEffect(() => (agents ? connect(() => ctl.current) : undefined), [agents]);
+
+  // A tab switch shows the other analysis' roles, results and colours: the cursor's and the bin's marks go
+  const onTab = (t: Tab) => { dispatch({ type: 'PROBE', probe: null }); dispatch({ type: 'BIN', bin: null }); setUi((u) => ({ ...u, tab: t })); };
+  const tabs: [Tab, string][] = [['daylight', 'Daylight'], ['views', 'View analysis']];
+  return (
+    <div className="app-shell" style={knob('--sidebar-w', '0px')}>
+      <header className="app-bar">
+        <span className="app-bar__brand">
+          {KIT
+            ? <a href="/" aria-label="kit-sim, home"><span className="kit-mark">kit-<span className="kit-mark__name">sim</span></span></a>
+            : <a className="zha-lockup" href="/zha.html" aria-label="ZHA CODE, home"><span className="zha-lockup__zha">ZHA</span><span className="zha-lockup__team">CODE</span></a>}
+        </span>
+        {/* the two analyses of the same models: their own roles, settings and results */}
+        <div className="tabs" role="group" aria-label="Analysis">
+          {tabs.map(([t, label]) => (
+            <button key={t} className="tabs__tab" type="button" aria-current={ui.tab === t ? 'page' : undefined} onClick={() => onTab(t)}>{label}</button>
+          ))}
+        </div>
+        <span className="app-bar__spacer" />
+        <InfoButton />
+        <a className="btn btn--ghost" href="/docs" target="_blank" rel="noreferrer" title="API documentation (Swagger UI); machine-readable at /openapi.json">API</a>
+        <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={() => setTheme(nextMode)}>
+          <Icon name="contrast" />
+        </button>
+      </header>
+      <main className="app-main" id="main">
+        <h1 className="sr-only">{views ? 'View analysis' : 'Daylight simulation'}</h1>
+        <div className="split fill" style={knob('--split-aside', `${ui.widths.right}px`)}>
+          <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
+            <div className="panel-wrap">
+              <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
+                <ModelPanel models={A.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={views ? state.viewAnalysis.errors : state.errors} stage={ap.stage} subdiv={ui.subdiv} selfOcclude={views ? v.selfOcclude : s.sim.selfOcclude} analysis={ui.tab} groups={groups} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={views ? dispatchViews : dispatch} />
+                <MaterialsPanel slot={am.slot} title={n > 1 ? `Materials, model ${LETTERS[am.slot]}` : 'Materials'} rows={A.optics[ai].materials} fallback={A.optics[ai].fallback} glass={A.optics[ai].glass} reading={!A.materialsReady} mode={views ? 'physical' : s.sim.mode} transmission={views ? v.transmission : s.sim.transmission} reflections={!views && reflect} dispatch={dispatch} />
+                {/* daylight's own inputs stay mounted on the view analysis tab (the weather header, the map), hidden */}
+                <div className="panel-group" hidden={views}>
+                  <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
+                  <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
+                  <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
+                  <WeatherPanel weather={s.weather} site={s.site} epwMeta={s.epwMeta} viz={s.viz} stations={state.stations} errors={state.errors} dispatch={dispatch} />
+                </div>
+                {views && <ViewSettingsPanel v={v} north={s.sim.north} errors={state.viewAnalysis.errors} dispatch={dispatch} />}
+              </aside>
+              <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
+            </div>
+            {/* the views, then the run bar: with one model it lies over the bottom of the view, with several it is a row under
+                them and never covers a model */}
+            <div className={`viewports${n > 1 ? ' viewports--many' : ''}`}>
+              {/* one view per model, in fixed cells from the moment its tab is added: loads never move them */}
+              <div className={`viewports__grid${n === 4 ? ' viewports__grid--four' : n > 1 && ui.split === 'stacked' ? ' viewports__grid--stacked' : ''}`}>
+                {A.models.map((m, i) => {
+                  const p = panes[m.slot] ?? NO_PANE, f = ui.link ? loaded.find((k) => k !== m.slot) : undefined;
+                  return (
+                    <Viewer
+                      key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
+                      objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
+                      scale={A.scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} section={sectionWords} analysis={ui.tab}
+                    >
+                      {n > 1 && (
+                        <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
+                          <Tag slot={m.slot} name={m.name} />
+                        </button>
+                      )}
+                    </Viewer>
+                  );
+                })}
+              </div>
+              {/* left: the Views, Section and Download menus (the active view's); middle: how the views share the space and the
+                  camera; right-aligned, the button's label never changes and Cancel appears on its left: the tickbox stays
+                  put; progress shows in the Results run lines */}
+              <div className="viewport__bar">
+                <div className="cluster cluster--between">
+                  <div className="cluster">
+                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={savedViews} reports={reports} onSave={(sv) => setSavedViews((l) => [...l, sv])} onRemove={(id) => setSavedViews((l) => l.filter((sv) => sv.id !== id))} onReportView={onReportView} onSection={(sc) => onSection(sc, null)} />
+                    <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
+                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && A.cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
+                    {/* only while there are reports (daylight's); a generation's failure shows as its lastError */}
+                    {!views && reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}
+                  </div>
+                  {n > 1 && (
+                    <div className="cluster">
+                      {n < 4 && (
+                        <span className="viewports__split">
+                          <Segmented name="panes" label="Arrange the views" title="Two or three models: side by side, or one above the other. Four always show 2 x 2; a narrow window always stacks them" value={ui.split} options={[['side', 'Side by side'], ['stacked', 'Stacked']] as const} onChange={(split) => setUi((u) => ({ ...u, split }))} />
+                        </span>
+                      )}
+                      <Segmented name="cameras" label="Cameras" title="Linked: orbit, zoom or pick a view in one 3D view and every view takes the same camera, in world coordinates (models in other units or at another origin do not line up). Independent: each view keeps its own" value={ui.link ? 'linked' : 'free'} options={[['linked', 'Linked cameras'], ['free', 'Independent']] as const} onChange={(x) => setUi((u) => ({ ...u, link: x === 'linked' }))} />
+                    </div>
+                  )}
+                  <div className="cluster cluster--end">
+                    {/* with several models kept, hidden while idle: the bar under the views never changes its height */}
+                    {(A.busyBar || n > 1) && <button className={`btn btn--ghost${A.busyBar ? '' : ' viewport__idle'}`} type="button" disabled={!A.busyBar} onClick={() => A.abort.current?.abort()}>Cancel</button>}
+                    <label title={views ? 'Runs the view analysis whenever a view setting or a role changes' : 'Runs the simulation whenever the location, the date, the time or a setting changes'}>
+                      <input type="checkbox" id="auto-run" checked={ui.auto} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
+                    </label>
+                    <button className="btn btn--primary" type="button" disabled={!A.per.some((p) => p.receivers.length) || A.busyBar} aria-busy={A.busyBar} title={n > 1 ? 'Runs every model with a receiver, one after another; each result shows as it lands' : undefined} onClick={() => void A.onRun()}>{views ? 'Run view analysis' : 'Run simulation'}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="panel-wrap">
+            <aside className="panel stack" data-density="compact" aria-label="Results">
+              <ResultsPanel models={A.compared} column={A.column} colourBy={colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={A.scale} domain={A.domain} viz={s.viz} charts={charts} auto={A.autoOn && !A.slow} analysis={ui.tab} dispatch={views ? dispatchViews : dispatch} reports={views ? null : reports} reportError={reportError} onReportChart={onReportChart} />
+            </aside>
+            <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+type Optics = ReturnType<typeof resolveOptics>;
+/** A model's run inputs now: its receivers and shades, their faces or vertices (the rows its run returns), its run
+ *  arguments and their words, its mesh ids, and everything the server's response cache keys on (an equal key gives an
+ *  equal result). */
+interface Per { m: Model; receivers: ObjectRow[]; shades: ObjectRow[]; elements: number; args: string[]; switches: string; mesh: string; key: string }
+type TexStats = Readonly<Record<number, ReadonlyMap<string, TextureStats | null>>>;
+/** One analysis' inputs: its models (daylight's, or the view analysis' seen as daylight's), its column, whether its tab
+ *  shows (Auto runs that one only), and how its runs are made: the run arguments, the checks, the job's tool and weather. */
+interface AnalysisCfg {
+  models: Model[]; column: number; visible: boolean; auto: boolean; dispatch: Dispatch<Action>; viz: Settings['viz'];
+  conv: RefObject<Map<string, Conv>>; reading: RefObject<boolean>; texStats: TexStats; setTexStats: Dispatch<SetStateAction<TexStats>>;
+  reflect: boolean; live: boolean; // the diffuse textures count (Reflections); textures count at all (glass, screens)
+  on: 'faces' | 'vertices'; epw?: File | { url: string }; weather: unknown; tool?: 'views';
+  argsOf: (receivers: ObjectRow[], shades: ObjectRow[], optics: Optics, elements: number) => { args: string[]; switches: string };
+  check: (per: Per[], materialsReady: boolean) => Record<string, string>; // validate(): field id -> message
+  focus: (field: string) => string; // the control that gets focus for a field's error
+}
+export type Analysis = ReturnType<typeof useAnalysis>;
+
+/** One analysis' runs (one batch at a time, the models one after another; Auto for the tab that shows) and its
+ *  comparison (the column by name, one colour scale over every model). */
+function useAnalysis(c: AnalysisCfg) {
+  const { models, dispatch, conv } = c;
+  const abort = useRef<AbortController | null>(null);
+  const jobs = useRef<Record<number, AbortController>>({}); // per slot, its job on its way: removing the model ends it
+  const busy = useRef(false), held = useRef(false); // one batch of runs per analysis; a click waiting for the materials
+  const lastKey = useRef<Record<number, string | null>>({}); // per slot: the key of the last run started
+  const [ended, setEnded] = useState(0); // bumped when a batch ends, so Auto re-checks with the settings of that moment
+  const [slow, setSlow] = useState(false); // the batch in flight has taken over 0.3 s
   // Each run mesh's optics per face slot, and the textures its materials still wait for (the diffuse ones only while the
   // reflectance counts), per model. A model's viewer `materials` change only in a flush, and every flush that can change
   // a binding is followed by a re-read of the stage, so its rows key it: kept per slot while its inputs are the same.
-  const physical = s.sim.mode === 'physical', reflect = physical && s.sim.bounces > 0;
-  const opticsOf = useRef(new Map<number, { inputs: unknown[]; value: ReturnType<typeof resolveOptics> }>());
-  const optics = state.models.map((m) => {
-    const inputs = [m.objects, m.optics, texStats[m.slot] ?? NO_STATS, reflect], had = opticsOf.current.get(m.slot);
+  const opticsOf = useRef(new Map<number, { inputs: unknown[]; value: Optics }>());
+  const optics = models.map((m) => {
+    const inputs = [m.objects, m.optics, c.texStats[m.slot] ?? NO_STATS, c.reflect], had = opticsOf.current.get(m.slot);
     if (had && had.inputs.every((x, i) => x === inputs[i])) return had.value;
-    const value = resolveOptics(m.objects, viewer(m.slot).materials, texStats[m.slot] ?? NO_STATS, m.optics, reflect);
+    const value = resolveOptics(m.objects, viewer(m.slot).materials, c.texStats[m.slot] ?? NO_STATS, m.optics, c.reflect);
     opticsOf.current.set(m.slot, { inputs, value });
     return value;
   });
-  // The textures are read (decoded in a worker) only while their numbers count: physical mode with Transmission or
-  // Reflections on; a default or Ladybug run never waits for them.
-  const live = physical && (s.sim.transmission || reflect), materialsReady = !live || optics.every((o) => !o.unread.length);
+  // The textures are read (decoded in a worker) only while their numbers count; a run that does not use them never waits.
+  const materialsReady = !c.live || optics.every((o) => !o.unread.length);
   useEffect(() => {
     const k = optics.findIndex((o) => o.unread.length), r = optics[k]?.unread[0];
-    if (!live || !r || reading.current) return; // the read in flight lands first, then the next starts
-    reading.current = true;
-    const slot = state.models[k].slot;
-    void readTexture(viewer(slot).el, r).then((t) => { reading.current = false; setTexStats((all) => ({ ...all, [slot]: new Map(all[slot] ?? NO_STATS).set(readKey(r), t) })); });
+    if (!c.live || !r || c.reading.current) return; // the read in flight (either analysis') lands first, then the next starts
+    c.reading.current = true;
+    const slot = models[k].slot;
+    void readTexture(viewer(slot).el, r).then((t) => { c.reading.current = false; c.setTexStats((all) => ({ ...all, [slot]: new Map(all[slot] ?? NO_STATS).set(readKey(r), t) })); });
   }); // every render: cheap when nothing is unread or a read is in flight
-  // Per model: its receivers and shades, their faces or vertices (the rows its run returns), the settings it runs with
-  // (a big model's reflection samples: lib/args.ts simFor), its run arguments (the receivers that cast no shade among
-  // them), and everything the server's response cache keys on (an equal key gives an equal result).
-  const epw = epwRef(s), base = buildArgs(s), weather = epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null;
-  const per = state.models.map((m, i) => {
+  const per: Per[] = models.map((m, i) => {
     const receivers = m.objects.filter((o) => o.role === 'receiver'), shades = m.objects.filter((o) => o.role === 'shade');
-    const elements = receivers.reduce((n, o) => n + (s.sim.on === 'faces' ? o.tris : o.verts), 0), sim = simFor(s.sim, elements);
-    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)], args = [...base, ...opticsArgs(optics[i].meshes, optics[i].fallback, sim), ...noOccludeArgs(receivers, s.sim)];
-    return { m, receivers, shades, elements, sim, args, mesh: JSON.stringify(ids), key: JSON.stringify([args, weather, ...ids]) };
+    const elements = receivers.reduce((n, o) => n + (c.on === 'faces' ? o.tris : o.verts), 0), { args, switches } = c.argsOf(receivers, shades, optics[i], elements);
+    const ids = [receivers.map((o) => o.id), shades.map((o) => o.id)];
+    return { m, receivers, shades, elements, args, switches, mesh: JSON.stringify(ids), key: JSON.stringify([args, c.weather, ...ids]) };
   });
   const meshKeys = useRef<Record<number, string>>({}); // per slot, its receivers and shades now: a job started for others reports nothing
   meshKeys.current = Object.fromEntries(per.map((p) => [p.m.slot, p.mesh]));
-  const autoOn = ui.auto && per.some((p) => p.receivers.length > 0); // every mode: an annual run is a fraction of a second too
+  const autoOn = c.auto && c.visible && per.some((p) => p.receivers.length > 0); // every mode: an annual run is a fraction of a second too
 
   // One batch per click (every model with a receiver) or per Auto check (those whose inputs changed): the models' jobs
   // one after another under one cancel; each result lands as its job ends.
   const onRun = async (auto = false) => {
-    if (busy.current) return; // one batch per tab: Auto re-checks when it ends, the button is disabled meanwhile
+    if (busy.current) return; // one batch per analysis: Auto re-checks when it ends, the button is disabled meanwhile
     const todo = per.filter((p) => p.receivers.length && (!auto || p.key !== lastKey.current[p.m.slot])); // no receiver: not run
     for (const p of todo) lastKey.current[p.m.slot] = p.key;
-    const errors = validate(s, per.some((p) => p.receivers.length > 0), materialsReady, Math.max(0, ...per.map((p) => p.elements)));
+    const errors = c.check(per, materialsReady);
     dispatch({ type: 'ERRORS', errors });
     const first = Object.keys(errors)[0];
     if (first) {
       if (first === 'materials') { for (const p of todo) lastKey.current[p.m.slot] = null; if (!auto) held.current = true; } // nothing else wrong: held, not refused, it runs once the materials are read
       if (!auto) { // Auto shows the errors, never steals focus
-        const el = document.getElementById(first === 'weather' ? `weather-${s.weather.source}` : FOCUS[first] ?? first);
+        const el = document.getElementById(c.focus(first));
         for (let d = el?.closest('details'); d; d = d.parentElement?.closest('details')) d.open = true; // a collapsed section opens on its error
         el?.focus();
       }
@@ -491,27 +717,27 @@ export default function App() {
                 if (mine() && !own.signal.aborted) dispatch({ type: 'RUN', slot, run: { status: 'queued', position: 0, upload: [d, total] } });
               };
               const res = await runRemote('', {
-                sensors: meshes.slice(0, n), context: meshes.slice(n), onUpload,
-                epw, args: p.args.map((a) => a.replace(UUID, (id) => core.get(id) ?? id)), signal: own.signal, clientId: CLIENT_ID,
+                sensors: meshes.slice(0, n), context: meshes.slice(n), onUpload, ...(c.tool ? { tool: c.tool } : {}),
+                epw: c.epw, args: p.args.map((a) => a.replace(UUID, (id) => core.get(id) ?? id)), signal: own.signal, clientId: CLIENT_ID,
                 onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running', progress: job.progress, eta_s: job.eta_s } }); },
               });
               res.manifest.meshes.forEach((g, i) => {
-                const o = p.receivers[i], want = o && (s.sim.on === 'faces' ? o.tris : o.verts);
+                const o = p.receivers[i], want = o && (c.on === 'faces' ? o.tris : o.verts);
                 if (!o || g.count !== want) throw new Error(`${o?.name ?? g.name}: the server returned ${g.count} rows, expected ${want}. Reload the model and run again.`);
               });
               if (!mine()) throw new Error('changed'); // its model changed during the job: runBatch ends it idle, never a new model's result
               // Every element's area, aligned with the rows: the weight of every statistic, chart, tool and export, written
               // once here instead of per mesh on each use; the last result's when its receivers are these rows, unchanged
               // (row ids change with any re-read).
-              const was = p.m.result, keep = was?.on === s.sim.on && was.receivers.length === n && p.receivers.every((o, i) => o.id === was.receivers[i]) && !hashed.some((k) => k < n);
+              const was = p.m.result, keep = was?.on === c.on && was.receivers.length === n && p.receivers.every((o, i) => o.id === was.receivers[i]) && !hashed.some((k) => k < n);
               const weights = keep ? was.weights : new Float32Array(res.manifest.meshes.reduce((a, g) => a + g.count, 0));
               if (!keep) res.manifest.meshes.forEach((g, i) => {
-                const c = conv.current.get(p.receivers[i].id);
-                if (!c || !same(stamps[i], c.stamp())) throw new Error('changed'); // re-read, or changed since sent: ended idle as above
-                const { positions, indices } = c.make(); // one receiver at a time
-                weights.set((s.sim.on === 'faces' ? faceAreas : vertexAreas)(positions, indices), g.first);
+                const cv = conv.current.get(p.receivers[i].id);
+                if (!cv || !same(stamps[i], cv.stamp())) throw new Error('changed'); // re-read, or changed since sent: ended idle as above
+                const { positions, indices } = cv.make(); // one receiver at a time
+                weights.set((c.on === 'faces' ? faceAreas : vertexAreas)(positions, indices), g.first);
               });
-              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, receivers: p.receivers.map((o) => o.id), on: s.sim.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: runSwitches(p.sim) } } });
+              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, receivers: p.receivers.map((o) => o.id), on: c.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: p.switches } } });
             } finally {
               own.abort(); // the run is over: a PUT still on its way after another failed stops (and reports no progress)
               signal.removeEventListener('abort', off);
@@ -537,10 +763,10 @@ export default function App() {
   // milliseconds anyway. A cleared result (roles changed back, a model reloaded) re-arms it for the same inputs.
   const keys = per.map((p) => p.key).join('\n');
   useEffect(() => {
-    for (const m of state.models) if (!m.result && m.run.status === 'idle') lastKey.current[m.slot] = null;
+    for (const m of models) if (!m.result && m.run.status === 'idle') lastKey.current[m.slot] = null;
     if (autoOn && !busy.current && per.some((p) => p.receivers.length && p.key !== lastKey.current[p.m.slot])) void onRun(true);
-  }, [autoOn, keys, ended, state.models]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings the keys came from
-  // Nothing waits for the materials any more (read, or Transmission and Reflections off): Auto re-checks (ended), a click
+  }, [autoOn, keys, ended, models]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun is this render's closure: it reads the settings the keys came from
+  // Nothing waits for the materials any more (read, or the switches that use them off): Auto re-checks (ended), a click
   // held for them runs.
   useEffect(() => {
     if (!materialsReady) return;
@@ -548,173 +774,19 @@ export default function App() {
     if (held.current) { held.current = false; void onRun(); }
   }, [materialsReady]); // eslint-disable-line react-hooks/exhaustive-deps -- onRun as above
 
-  // Linked cameras over the views that show a model (one opening a model leaves the set, so its own framing spreads
-  // nowhere); the active view leads whenever the set changes (linked on, a model in or out).
-  const loaded = state.models.filter((m) => (panes[m.slot]?.meshes.size ?? 0) > 0).map((m) => m.slot);
-  useEffect(() => {
-    if (!ui.link || loaded.length < 2) return;
-    const els = loaded.map((k) => viewer(k).el);
-    return link(els, els[loaded.indexOf(state.active)]); // an empty active tab: the first leads
-  }, [ui.link, loaded.join()]); // eslint-disable-line react-hooks/exhaustive-deps -- the lead counts only when the set changes
-
-  const zone = useMemo(() => zoneAt(s.site.lat, s.site.lon), [s.site.lat, s.site.lon]); // the site's civil zone (offline lookup)
-  const tz = derivedTz(s), leap = weatherLeap(s);
-  const sunSite = useMemo(() => ({ lat: s.site.lat, lon: s.site.lon, tz, leap }), [s.site.lat, s.site.lon, tz, leap]);
-  const sunView = useMemo<SunView | null>(() => (ui.sunPath ? { site: sunSite, north: s.sim.north, time: s.time, scale: sunScale } : null), [ui.sunPath, sunSite, s.sim.north, s.time, sunScale]);
-  const selectedHref = s.weather.source === 'station' ? s.weather.station?.href ?? null : null;
   // The comparison: the result column by name (the reference: the first model in slot order with a result), and one
   // colour scale for the views and the charts over every model's values: the quantity's gradient, its legend domain
   // (the data's unless overridden), its problem range and the two range colours, from the persisted viz settings.
-  const ref = state.models.find((m) => m.result)?.result ?? null;
-  const column = ref ? Math.min(state.column, ref.columns.length - 1) : 0, shown = ref?.columns[column] ?? null;
-  const cols = state.models.map((m) => (m.result && shown ? m.result.columns.indexOf(shown) : -1)); // a result without it counts as none
-  const bySlot = [0, 1, 2, 3].map((k) => state.models.find((m) => m.slot === k)?.result ?? null); // fixed length: memo deps
+  const ref = models.find((m) => m.result)?.result ?? null;
+  const column = ref ? Math.min(c.column, ref.columns.length - 1) : 0, shown = ref?.columns[column] ?? null;
+  const cols = models.map((m) => (m.result && shown ? m.result.columns.indexOf(shown) : -1)); // a result without it counts as none
+  const bySlot = [0, 1, 2, 3].map((k) => models.find((m) => m.slot === k)?.result ?? null); // fixed length: memo deps
   const results = useMemo(() => bySlot.filter((r): r is RunResult => !!r), bySlot); // eslint-disable-line react-hooks/exhaustive-deps
   const domain = useMemo<[number, number]>(() => (shown ? unionRange(results, shown) : [NaN, NaN]), [results, shown]); // ponytail: O(rows) per new result; cache per result if it shows
-  const scale = useMemo<Scale | null>(() => (shown ? scaleFor(shown, domain, s.viz) : null), [shown, domain[0], domain[1], s.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- by value: an equal range repaints nothing
+  const scale = useMemo<Scale | null>(() => (shown ? scaleFor(shown, domain, c.viz) : null), [shown, domain[0], domain[1], c.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- by value: an equal range repaints nothing
   const stale = per.map((p) => !!p.m.result && !inFlight(p.m.run) && p.m.result.key !== p.key && !(autoOn && p.key !== lastKey.current[p.m.slot])); // unless Auto is about to run it
   const staleKey = stale.map(Number).join('');
-  const compared = useMemo<Compared[]>(() => state.models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [state.models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves
-  const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = state.models[ai], ap = panes[am.slot] ?? NO_PANE;
-  // one download at a time; its error is its result's, by run key (holding the result itself would keep a replaced one's
-  // values alive)
-  const [exporting, setExporting] = useState(false), [exportError, setExportError] = useState<{ key: string; message: string } | null>(null);
-  const onDownload = useCallback(async (format: Format, mode: ExportMode) => {
-    const picked = model.current[am.slot]?.picked, col = cols[ai], result = am.result;
-    if (!result || col < 0 || !picked) return;
-    setExporting(true);
-    setExportError(null);
-    try {
-      await download(format, mode, {
-        usd: viewer(am.slot).el, result, objects: am.objects, meshes: ap.meshes, column: col, model: picked,
-        scales: result.columns.map((c) => scaleFor(c, unionRange(results, c), s.viz)), // the colours on screen: one scale over every model
-      });
-    } catch (e) {
-      setExportError({ key: result.key, message: (e as Error).message });
-    } finally {
-      setExporting(false);
-    }
-  }, [am, ai, ap.meshes, cols[ai], results, s.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- cols by its active entry
-  const probed: Model | undefined = state.probe ? state.models.find((m) => m.objects.some((o) => o.id === state.probe!.id)) : undefined; // its tip only in its own view
-  const probeLabel = state.probe && probed && shown
-    ? `${probed.objects.find((o) => o.id === state.probe!.id)?.name ?? ''}: ${fmtNum(state.probe.value)} ${unitFor(shown).value}`
-    : null;
-  const busyBar = state.models.some((m) => inFlight(m.run)) && !autoOn; // a click batch: the button waits and Cancel shows; Auto runs do not flash them
-  // the app as the Reports menu checks a report against it, while there are reports: per change of the models, roles,
-  // results, column or problem ranges, never per hover
-  const reportApp = useMemo(() => (reports?.length ? appView({ shown, state, panes, per, variants }) : null), [reports, shown, state.models, s.viz.ranges, panes, keys]); // eslint-disable-line react-hooks/exhaustive-deps -- state and per by the parts appView reads
-  const sectionWords = active(section) ? describe(section) : null; // the views' scene info
-
-  // The app as the tools in mcp/tools.ts drive it, rewritten on every commit, which also wakes the tools waiting for one;
-  // where the agent routes answer this tab, the bridge polls the server for their calls while the page lives, after
-  // picking up a hidden session.
-  const ctl = useRef<Ctl>(null!);
-  useLayoutEffect(() => {
-    ctl.current = {
-      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection: (s) => onSection(s, null), views, setViews, optics, materialsReady, per, shown, scale, domain,
-      exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun, onDownload, meshOf,
-      busy: () => busy.current, held: () => held.current, cancel: () => abort.current?.abort(), viewer,
-      variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
-    };
-    settled();
-  });
-  useEffect(() => (agents ? connect(() => ctl.current) : undefined), [agents]);
-
-  return (
-    <div className="app-shell" style={knob('--sidebar-w', '0px')}>
-      <header className="app-bar">
-        <span className="app-bar__brand">
-          {KIT
-            ? <a href="/" aria-label="kit-sim, home"><span className="kit-mark">kit-<span className="kit-mark__name">sim</span></span></a>
-            : <a className="zha-lockup" href="/zha.html" aria-label="ZHA CODE, home"><span className="zha-lockup__zha">ZHA</span><span className="zha-lockup__team">CODE</span></a>}
-          <span className="app-bar__app">Daylight</span>
-        </span>
-        <span className="app-bar__spacer" />
-        <InfoButton />
-        <a className="btn btn--ghost" href="/docs" target="_blank" rel="noreferrer" title="API documentation (Swagger UI); machine-readable at /openapi.json">API</a>
-        <button className="icon-btn icon-btn--ghost" type="button" aria-label={`Theme: ${mode === 'auto' ? `follows the system, now ${system}` : mode}. Switch to ${nextMode === 'auto' ? 'system' : nextMode}`} title={`Theme: ${mode === 'auto' ? `system (${system})` : mode}`} onClick={() => setTheme(nextMode)}>
-          <Icon name="contrast" />
-        </button>
-      </header>
-      <main className="app-main" id="main">
-        <h1 className="sr-only">Daylight simulation</h1>
-        <div className="split fill" style={knob('--split-aside', `${ui.widths.right}px`)}>
-          <div className="split split--aside-start fill" style={knob('--split-aside', `${ui.widths.left}px`)}>
-            <div className="panel-wrap">
-              <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
-                <ModelPanel models={state.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={state.errors} stage={ap.stage} subdiv={ui.subdiv} selfOcclude={s.sim.selfOcclude} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={dispatch} />
-                <MaterialsPanel slot={am.slot} title={n > 1 ? `Materials, model ${LETTERS[am.slot]}` : 'Materials'} rows={optics[ai].materials} fallback={optics[ai].fallback} glass={optics[ai].glass} reading={!materialsReady} mode={s.sim.mode} transmission={s.sim.transmission} reflections={reflect} dispatch={dispatch} />
-                <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
-                <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
-                <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
-                <WeatherPanel weather={s.weather} site={s.site} epwMeta={s.epwMeta} viz={s.viz} stations={state.stations} errors={state.errors} dispatch={dispatch} />
-              </aside>
-              <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
-            </div>
-            {/* the views, then the run bar: with one model it lies over the bottom of the view, with several it is a row under
-                them and never covers a model */}
-            <div className={`viewports${n > 1 ? ' viewports--many' : ''}`}>
-              {/* one view per model, in fixed cells from the moment its tab is added: loads never move them */}
-              <div className={`viewports__grid${n === 4 ? ' viewports__grid--four' : n > 1 && ui.split === 'stacked' ? ' viewports__grid--stacked' : ''}`}>
-                {state.models.map((m, i) => {
-                  const p = panes[m.slot] ?? NO_PANE, f = ui.link ? loaded.find((k) => k !== m.slot) : undefined;
-                  return (
-                    <Viewer
-                      key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
-                      objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={state.colourBy} result={cols[i] >= 0 ? m.result : null} column={Math.max(cols[i], 0)}
-                      scale={scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={sunView} section={sectionWords}
-                    >
-                      {n > 1 && (
-                        <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
-                          <Tag slot={m.slot} name={m.name} />
-                        </button>
-                      )}
-                    </Viewer>
-                  );
-                })}
-              </div>
-              {/* left: the Views, Section and Download menus (the active view's); middle: how the views share the space and the
-                  camera; right-aligned, the button's label never changes and Cancel appears on its left: the tickbox stays
-                  put; progress shows in the Results run lines */}
-              <div className="viewport__bar">
-                <div className="cluster cluster--between">
-                  <div className="cluster">
-                    <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={views} reports={reports} onSave={(v) => setViews((l) => [...l, v])} onRemove={(id) => setViews((l) => l.filter((v) => v.id !== id))} onReportView={onReportView} onSection={(s) => onSection(s, null)} />
-                    <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
-                    <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
-                    {/* only while there are reports; a generation's failure shows as its lastError */}
-                    {reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}
-                  </div>
-                  {n > 1 && (
-                    <div className="cluster">
-                      {n < 4 && (
-                        <span className="viewports__split">
-                          <Segmented name="panes" label="Arrange the views" title="Two or three models: side by side, or one above the other. Four always show 2 x 2; a narrow window always stacks them" value={ui.split} options={[['side', 'Side by side'], ['stacked', 'Stacked']] as const} onChange={(split) => setUi((u) => ({ ...u, split }))} />
-                        </span>
-                      )}
-                      <Segmented name="cameras" label="Cameras" title="Linked: orbit, zoom or pick a view in one 3D view and every view takes the same camera, in world coordinates (models in other units or at another origin do not line up). Independent: each view keeps its own" value={ui.link ? 'linked' : 'free'} options={[['linked', 'Linked cameras'], ['free', 'Independent']] as const} onChange={(v) => setUi((u) => ({ ...u, link: v === 'linked' }))} />
-                    </div>
-                  )}
-                  <div className="cluster cluster--end">
-                    {/* with several models kept, hidden while idle: the bar under the views never changes its height */}
-                    {(busyBar || n > 1) && <button className={`btn btn--ghost${busyBar ? '' : ' viewport__idle'}`} type="button" disabled={!busyBar} onClick={() => abort.current?.abort()}>Cancel</button>}
-                    <label title="Runs the simulation whenever the location, the date, the time or a setting changes">
-                      <input type="checkbox" id="auto-run" checked={ui.auto} onChange={(e) => setUi((u) => ({ ...u, auto: e.target.checked }))} /> Run on every change
-                    </label>
-                    <button className="btn btn--primary" type="button" disabled={!per.some((p) => p.receivers.length) || busyBar} aria-busy={busyBar} title={n > 1 ? 'Runs every model with a receiver, one after another; each result shows as it lands' : undefined} onClick={() => void onRun()}>Run simulation</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="panel-wrap">
-            <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel models={compared} column={column} colourBy={state.colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={scale} domain={domain} viz={s.viz} charts={s.charts} auto={autoOn && !slow} dispatch={dispatch} reports={reports} reportError={reportError} onReportChart={onReportChart} />
-            </aside>
-            <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
-          </div>
-        </div>
-      </main>
-    </div>
-  );
+  const compared = useMemo<Compared[]>(() => models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves
+  const busyBar = models.some((m) => inFlight(m.run)) && !autoOn; // a click batch: the button waits and Cancel shows; Auto runs do not flash them
+  return { models, optics, materialsReady, per, keys, autoOn, onRun, busy, held, abort, jobs, lastKey, slow, column, shown, cols, results, domain, scale, compared, busyBar };
 }

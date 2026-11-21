@@ -237,7 +237,7 @@ export function provenance(r: RunResult, rows: readonly ObjectRow[]) {
   const [args, weather] = JSON.parse(stableKey(r.key, rows)) as [string[], unknown], arg = (k: string) => args[args.indexOf(k) + 1];
   return {
     period: args.includes('--time') ? `instant ${arg('--time')}` : args.includes('--from') ? `${arg('--from')} to ${arg('--to')} every ${arg('--step')} min${args.includes('--hours') ? `, ${arg('--hours')} each day` : ''}` : 'annual',
-    hours: r.manifest.duration_h, sunDirections: r.manifest.dirs.sun, elements: r.on, weather: typeof weather === 'string' ? weather : Array.isArray(weather) ? weather[0] : 'none',
+    hours: r.manifest.duration_h, sunDirections: r.manifest.dirs?.sun, elements: r.on, weather: typeof weather === 'string' ? weather : Array.isArray(weather) ? weather[0] : 'none',
     args, seconds: roundNum(r.elapsed), ...(r.manifest.run_s !== undefined ? { compute: roundNum(r.manifest.run_s) } : {}), ...(r.cache ? { cache: r.cache } : {}), ...(r.switches ? { switches: r.switches } : {}),
   };
 }
@@ -363,7 +363,7 @@ export const inShot = (el: UsdViewerElement) => shooting.has(el);
 export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Look, fn: () => Promise<T>): Promise<T> {
   const x = c(), ref = x.state.models.find((m) => m.result)?.result, col = look.column === undefined ? -1 : ref?.columns.indexOf(look.column) ?? -1;
   if (look.column !== undefined && col < 0) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the views show; run again`);
-  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity] };
+  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
   // the shot's section goes straight to its views, without the gizmo (a drag would edit the shot's); after it they get the
@@ -374,6 +374,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     flushSync(() => {
       x.dispatch({ type: 'HOVER', id: null });
       x.dispatch({ type: 'PROBE', probe: null }); // the pointer's, not the shot's
+      if (was.tab !== 'daylight') x.setUi((u) => ({ ...u, tab: 'daylight' })); // the views show daylight's results and colours: the tools' analysis
       if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: col });
       if (look.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
       if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
@@ -405,6 +406,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (look.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
       if (look.pin) z.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: was.scale?.min ?? null, max: was.scale?.max ?? null } });
       if (look.clean) z.dispatch({ type: 'BIN', bin: was.bin });
+      if (was.tab !== 'daylight') z.setUi((u) => ({ ...u, tab: was.tab }));
     });
     if (fill) fill.highlight = selectionFill(c().state.colourBy === 'value' && !!c().scale);
   }

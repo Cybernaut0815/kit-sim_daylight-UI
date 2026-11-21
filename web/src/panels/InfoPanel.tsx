@@ -79,6 +79,20 @@ export function InfoButton() {
             mode keeps every surface opaque and black. More precise: Transmission on, 2 reflections, 4096 samples.
           </p>
 
+          <h3>View analysis</h3>
+          <p>
+            The <em>View analysis</em> tab in the bar at the top asks what each receiver sees: from every face (or vertex) it
+            casts rays over a field of view and reports which share ends on the sky, the ground, an obstruction or a target,
+            and how far it sees. It uses the same models and materials as Daylight; its roles, settings and results are its own.
+          </p>
+          <ul>
+            <li><em>Model</em>: <em>Receiver</em> (analysed and painted), <em>Obstruction</em> (blocks the view), <em>Ignore</em>, and <em>Target</em> with a group name (water, park...): an obstruction whose rays count for that group. Untick <em>Blocks rays</em> for a grid of eye points.</li>
+            <li><em>Field of view</em>: <em>Window</em> (about each face's normal, 120° wide by default), <em>All around</em> (360°, an eye turning on the spot: lift it with the <em>Eye offset</em>), or <em>Horizontal</em> (the 2D isovist, the area in view).</li>
+            <li><em>Distances</em>: <em>Far</em> is what an open ray counts as; <em>Reach</em> adds the share that sees at least 6, 20 and 50 m (EN 17037) or your distances.</li>
+            <li><em>See through glass</em>: rays pass the glass of the Materials table and count what lies behind; off, windows block.</li>
+            <li>Results: the shares (0 to 1 of the field), the distances (m) and the isovist (m³ or m²) per element, the <em>View composition</em> of the field and the <em>Reach</em>, beside the same distribution charts as Daylight.</li>
+          </ul>
+
           <h3>Views and download</h3>
           <ul>
             <li><em>Views</em> jumps to one of the model's cameras or the <em>Whole model</em>, and saves the current view. Saved views serve every 3D view for this session and never go into a file.</li>

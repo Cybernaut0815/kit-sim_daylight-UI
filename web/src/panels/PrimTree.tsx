@@ -9,12 +9,14 @@
 import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type MouseEvent } from 'react';
 import { modifySelect, selectUpWithSubtree, type PrimInfo, type PrimSummary, type UsdSessionEventMap, type UsdViewerElement } from 'usd-viewer';
 import { meshAt, primQuery, underIndex } from '../lib/tree';
-import type { Action, ObjectRow, Role, Selection } from '../store';
+import type { Action, ObjectRow, Role, Selection, Tab } from '../store';
 import { Icon } from '../ui';
 
 type Shown = Role | 'noShade' | 'mixed'; // noShade: receivers that all cast no shade, in a label that fits the role column as 'Receiver' does
 const LABEL: Record<Shown, string> = { receiver: 'Receiver', noShade: 'No shade', shade: 'Shade', none: 'Ignored', mixed: 'Mixed' };
 const BADGE: Record<Shown, string> = { receiver: 'badge--info', noShade: 'badge--info', shade: 'badge--neutral', none: 'badge--neutral', mixed: 'badge--neutral' };
+// the view analysis' words; a shade whose meshes all count for one target group shows the group
+const VIEW_LABEL: Record<Shown, string> = { ...LABEL, noShade: 'No block', shade: 'Obstruction' };
 const AUTO_OPEN = 40; // models up to this many meshes open down to every mesh; larger ones show their top level
 const LIMIT = 400; // rows drawn at most (ponytail: no row windowing; the search reaches the rest)
 
@@ -26,9 +28,10 @@ interface Props {
   usd: UsdViewerElement; // the model's viewer
   objects: ObjectRow[]; selection: Selection; selected: Set<string>; names: ReadonlyMap<string, string>;
   stage: number; loading: boolean; onVariant: (path: string, set: string, variant: string) => void; dispatch: Dispatch<Action>;
+  analysis?: Tab; // whose roles the rows carry
 }
 
-export const PrimTree = memo(function PrimTree({ usd, objects, selection, selected, names, stage, loading, onVariant, dispatch }: Props) {
+export const PrimTree = memo(function PrimTree({ usd, objects, selection, selected, names, stage, loading, onVariant, dispatch, analysis }: Props) {
   const [kids, setKids] = useState<ReadonlyMap<string, PrimSummary[]>>(new Map()); // loaded children per prim ('/' = the roots)
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
@@ -239,7 +242,10 @@ export const PrimTree = memo(function PrimTree({ usd, objects, selection, select
                         ))}
                       </td>
                     )}
-                    <td>{role && <span className={`badge ${BADGE[role]}`} title={role === 'noShade' ? 'Receiver, casts no shade' : undefined}><span className="dot" />{LABEL[role]}</span>}</td>
+                    <td>{role && (() => {
+                      const views = analysis === 'views', g = views && role === 'shade' ? byId.get(ids[0])?.group : undefined, target = g !== undefined && ids.every((id) => byId.get(id)?.group === g);
+                      return <span className={`badge ${target ? 'badge--success' : BADGE[role]}`} title={role === 'noShade' ? (views ? 'Receiver, blocks no rays' : 'Receiver, casts no shade') : target ? `Target: rays ending here count for ${g}` : undefined}><span className="dot" />{target ? g : (views ? VIEW_LABEL : LABEL)[role]}</span>;
+                    })()}</td>
                   </tr>
                 );
               })}

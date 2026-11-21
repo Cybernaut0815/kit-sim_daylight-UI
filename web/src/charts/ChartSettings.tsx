@@ -4,7 +4,7 @@
 import type { Dispatch } from 'react';
 import { BUILT_IN, FIELDS, MARKERS, METRICS, isShare, type ChartSpec, type Drawn, type Metric } from '../lib/charts';
 import { GRADIENTS, scaleFor, type Scale } from '../lib/gradients';
-import { columnLabel, fmtNum, unitFor } from '../lib/result';
+import { columnLabel, fmtNum, splitColumn, unitFor } from '../lib/result';
 import type { Action, Settings } from '../store';
 import { ColorQuad, MenuButton, NumberField, ResetButton, Segmented } from '../ui';
 import { niceStep } from './axes';
@@ -67,7 +67,7 @@ export function ChartSettings({ id, title, spec, d, column, viz, many, dispatch,
   id: string; title: string; spec: ChartSpec; d: Drawn; column: string; viz: Settings['viz']; many: boolean; dispatch: Dispatch<Action>; onChart: (e: ChartEdit) => void;
 }) {
   const put = (patch: Partial<ChartSpec>) => onChart({ spec: { ...spec, ...patch } });
-  const quantity = column.split('_')[0], scale = d.kind === 'empty' ? scaleFor(column, [NaN, NaN], viz) : d.scale;
+  const quantity = splitColumn(column)[0], scale = d.kind === 'empty' ? scaleFor(column, [NaN, NaN], viz) : d.scale;
   const span: [number, number] | null = d.kind === 'histogram' ? [d.edges[0], d.edges[d.edges.length - 1]] : d.kind === 'curve' || d.kind === 'parts' ? d.domain : null;
   const [lo, hi] = Array.isArray(spec.range) ? spec.range : [NaN, NaN];
   const setSpan = (a: number, b: number) => { if (Number.isFinite(a) && Number.isFinite(b)) put({ range: a <= b ? [a, b] : [b, a] }); }; // blank: the bound stays (its placeholder)
