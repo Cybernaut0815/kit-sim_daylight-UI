@@ -1,14 +1,16 @@
 // three.js model -> USDA layer for the USD viewer (Y-up, metres). Every node an Xform with its local matrix (doubles:
 // survey offsets keep their precision; mirrored nodes stay mirrored, so fromThree flips them as before), every triangle
-// mesh a Mesh with its own points, triangles and vertex normals, a GPU-instanced one (EXT_mesh_gpu_instancing) a
-// PointInstancer; names made USD identifiers, unique per parent. The look comes along: every material the file defines
+// mesh a Mesh with its own points, triangles and vertex normals (an OBJ mesh: the file's own faces, quads and n-gons as
+// they are over the points they share, its `vn` and `vt` per corner: lib/obj.ts), a GPU-instanced one
+// (EXT_mesh_gpu_instancing) a PointInstancer; names made USD identifiers, unique per parent. The look comes along: every material the file defines
 // a UsdPreviewSurface under /Model/Materials (base colour, opacity, metal / roughness, normal and emissive maps), UVs as
 // primvars:st, a multi-material mesh as GeomSubsets, vertex colours as displayColor; the textures are listed for the
 // caller to write as PNG files beside the layer.
-// ponytail: text USDA, ~66 MB and ~5 s (generate + core parse) per 1M indexed triangles, non-indexed OBJ ~4x; usdc if that hurts
+// ponytail: text USDA, ~66 MB and ~5 s (generate + core parse) per 1M indexed triangles; usdc if that hurts
 import { Matrix3, Matrix4, MirroredRepeatWrapping, Quaternion, RepeatWrapping, Vector3, DoubleSide, type BufferAttribute, type Color, type InstancedMesh, type InterleavedBufferAttribute, type Material, type Mesh, type Object3D, type Texture, type Vector2 } from 'three';
 import { dmeshStems } from 'daylight-mesh';
 import { alphaVaries, listMeshes, materialsOf } from './loaders';
+import type { ObjFaces } from './obj';
 
 export const num = (x: number) => (Number.isFinite(x) ? +x.toPrecision(9) : 0); // float32 round trip; USDA has no NaN
 const vec = (a: BufferAttribute | InterleavedBufferAttribute) => (i: number) => `(${num(a.getX(i))}, ${num(a.getY(i))}, ${num(a.getZ(i))})`;
@@ -65,6 +67,8 @@ export function toUsda(root: Object3D): Usda {
   /** One material per geometry group (three draws an array material by groups): [faces, material path] per bound group. */
   const subsets = (o: Mesh): [number[], string][] => {
     if (!Array.isArray(o.material) || !o.geometry.groups.length) return [];
+    const poly = o.geometry.userData.obj as ObjFaces | undefined;
+    if (poly) return poly.groups.flatMap((g) => { const path = matPath.get((o.material as Material[])[g.materialIndex]); return path ? [[Array.from({ length: g.count }, (_, i) => g.start + i), path] as [number[], string]] : []; });
     const { index, attributes: { position } } = o.geometry, n = (index ? index.count : position.count) / 3;
     return o.geometry.groups.flatMap((g) => {
       const path = matPath.get((o.material as Material[])[g.materialIndex ?? 0]), first = Math.floor(g.start / 3), end = Math.min(Math.floor((g.start + g.count) / 3), n);
@@ -73,20 +77,30 @@ export function toUsda(root: Object3D): Usda {
   };
   const mesh = (o: Mesh, subIds: string[]) => {
     const { index, attributes: { position, normal, uv, color } } = o.geometry, n = index ? index.count : position.count;
-    arr('int[] faceVertexCounts', n / 3, () => '3');
-    arr('int[] faceVertexIndices', n, index ? (i) => String(index.getX(i)) : String);
+    const poly = o.geometry.userData.obj as ObjFaces | undefined; // an OBJ mesh: its faces as the file has them
+    if (poly) {
+      arr('int[] faceVertexCounts', poly.counts.length, (i) => String(poly.counts[i]));
+      arr('int[] faceVertexIndices', poly.indices.length, (i) => String(poly.indices[i]));
+    } else {
+      arr('int[] faceVertexCounts', n / 3, () => '3');
+      arr('int[] faceVertexIndices', n, index ? (i) => String(index.getX(i)) : String);
+    }
     arr('point3f[] points', position.count, vec(position)); // getX/Y/Z: interleaved and quantized glTF attributes too
-    if (normal) arr('normal3f[] normals', normal.count, vec(normal), ' (interpolation = "vertex")');
+    const vn = poly?.normals;
+    if (vn) arr('normal3f[] normals', vn.length / 3, (i) => tuple(vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]), ' (interpolation = "faceVarying")');
+    else if (normal && !poly) arr('normal3f[] normals', normal.count, vec(normal), ' (interpolation = "vertex")');
     if (color) arr('color3f[] primvars:displayColor', color.count, vec(color), ' (interpolation = "vertex")'); // linear in three
     // UVs as USD's st (origin bottom left): the first texture's transform (KHR_texture_transform, MTL -o / -s) baked in,
     // glTF's top-left origin (flipY false) turned over.
     // ponytail: one transform per mesh; UsdTransform2d per texture if materials on one mesh use different ones
     const looks = materialsOf(o).filter((m) => matPath.has(m)) as Look[];
     const t = looks.flatMap((m) => SLOTS.map((k) => m[k])).find(loaded);
-    if (uv && t) {
+    const vt = poly?.st;
+    if ((vt || (uv && !poly)) && t) {
       t.updateMatrix();
-      const m = new Matrix3().copy(t.matrix), p = new Vector3();
-      arr('texCoord2f[] primvars:st', uv.count, (i) => { p.set(uv.getX(i), uv.getY(i), 1).applyMatrix3(m); return tuple(p.x, t.flipY ? p.y : 1 - p.y); }, ' (interpolation = "vertex")');
+      const m = new Matrix3().copy(t.matrix), p = new Vector3(), st = (u: number, v: number) => { p.set(u, v, 1).applyMatrix3(m); return tuple(p.x, t.flipY ? p.y : 1 - p.y); };
+      if (vt) arr('texCoord2f[] primvars:st', vt.length / 2, (i) => st(vt[2 * i], vt[2 * i + 1]), ' (interpolation = "faceVarying")');
+      else arr('texCoord2f[] primvars:st', uv.count, (i) => st(uv.getX(i), uv.getY(i)), ' (interpolation = "vertex")');
     }
     if (looks.some((m) => m.side === DoubleSide)) out.push('    uniform bool doubleSided = 1\n');
     out.push('    uniform token subdivisionScheme = "none"\n'); // else catmullClark: the viewer drops these normals and smooths

@@ -8,14 +8,14 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { flushSync } from 'react-dom';
 import { Matrix4, Vector3, type InstancedMesh, type Mesh, type Object3D } from 'three';
-import type { ObjMesh } from 'daylight-mesh';
+import type { RowMesh } from '../lib/extract';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
 import type { Pane, UiPrefs } from '../App';
 import { validate, weatherLeap } from '../lib/args';
 import { BUILT_IN, FIELDS, dataOf, putChart, type ChartSpec } from '../lib/charts';
 import { boxToWorld, cornersOf, describeView, facingOf, findCritical, frameView, meanNormal, viewDir, type Box, type Facing, type Points, type Vec3 } from '../lib/frame';
 import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, photonReverse, photonSearch, proxyUrl } from '../lib/geo';
-import { gradientFor, type Scale } from '../lib/gradients';
+import { defaultScaling, gradientFor, type Scale } from '../lib/gradients';
 import { DEFAULT_KEY, GLASS_KEY, PRESETS, editOptics, type Optics, type resolveOptics } from '../lib/optics';
 import { QUANTITY_HELP, SIDE_HELP, fmtNum, roundNum, roundPct, summarize, unitFor, type Summary } from '../lib/result';
 import { NONE, describe, given, toStage, type Bounds, type Section } from '../lib/section';
@@ -58,7 +58,9 @@ export interface Ctl {
   onVariant: (slot: number, path: string, set: string, variant: string) => void; onSubdiv: (level: number) => void;
   onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRun: () => Promise<void>; onDownload: (format: Format, mode: ExportMode) => Promise<void>;
-  meshOf: (id: string) => ObjMesh | undefined; // a row's ObjMesh (model metres, Z up), built per call: take it once per mesh where it is read, never keep it
+  // a row's mesh (model metres, Z up), built per call: take it once per mesh where it is read, never keep it. As drawn,
+  // or with a result the mesh its rows name (a receiver sent as the file's own faces and points: lib/extract RowMesh)
+  meshOf: (id: string, r?: RunResult | null) => RowMesh | undefined;
   busy: () => boolean; held: () => boolean; cancel: () => void; // a batch on its way; a click waiting for the materials; Cancel
   viewer: (slot: number) => Slot;
   variants: (slot: number) => AppModel['choices']; // the variant choices made in the app since the slot's file opened
@@ -237,7 +239,7 @@ export function provenance(r: RunResult, rows: readonly ObjectRow[]) {
   const [args, weather] = JSON.parse(stableKey(r.key, rows)) as [string[], unknown], arg = (k: string) => args[args.indexOf(k) + 1];
   return {
     period: args.includes('--time') ? `instant ${arg('--time')}` : args.includes('--from') ? `${arg('--from')} to ${arg('--to')} every ${arg('--step')} min${args.includes('--hours') ? `, ${arg('--hours')} each day` : ''}` : 'annual',
-    hours: r.manifest.duration_h, sunDirections: r.manifest.dirs.sun, elements: r.on, weather: typeof weather === 'string' ? weather : Array.isArray(weather) ? weather[0] : 'none',
+    hours: r.manifest.duration_h, sunDirections: r.manifest.dirs?.sun, elements: r.on, weather: typeof weather === 'string' ? weather : Array.isArray(weather) ? weather[0] : 'none',
     args, seconds: roundNum(r.elapsed), ...(r.manifest.run_s !== undefined ? { compute: roundNum(r.manifest.run_s) } : {}), ...(r.cache ? { cache: r.cache } : {}), ...(r.switches ? { switches: r.switches } : {}),
   };
 }
@@ -246,19 +248,21 @@ const SIDES: readonly Facing[] = ['N', 'E', 'S', 'W', 'up', 'down'];
 /**
  * results by 'facing': a result's elements by the side they face (frame.ts facingOf), N, E, S, W, up, down, each side with
  * its elements' values in one column (`col`: the column's value per result row) and their areas. `meshes`: the
- * receivers' rows [first, first + count), ObjMeshes (model metres) and element areas `w`. An element faces along its
- * face's (b - a) × (c - a), or a vertex along the sum of its faces' (the core's sensor normal); a back column's turned
- * round. Elements with no normal (degenerate) are left out.
+ * receivers' rows [first, first + count), meshes in those rows (model metres; `faceStart`: the triangles of each face
+ * row, absent: a row per triangle) and element areas `w`. An element faces along the sum of its triangles'
+ * (b - a) × (c - a): a face's own, or a vertex's faces' (the core's sensor normal); a back column's turned round.
+ * Elements with no normal (degenerate) are left out.
  */
-export function bySide(col: ArrayLike<number>, meshes: Iterable<{ first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }>, on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
+export function bySide(col: ArrayLike<number>, meshes: Iterable<{ first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; faceStart?: ArrayLike<number>; w: ArrayLike<number> }>, on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
   const out = new Map<Facing, { values: number[]; w: number[] }>(), s = back ? -1 : 1;
-  for (const { first, count, positions: P, indices: I, w } of meshes) {
+  for (const { first, count, positions: P, indices: I, faceStart, w } of meshes) {
     const n = new Float64Array(3 * count);
-    for (let f = 0; f < I.length / 3; f++) {
+    for (let f = 0, row = 0; f < I.length / 3; f++) {
       const a = 3 * I[3 * f], b = 3 * I[3 * f + 1], c = 3 * I[3 * f + 2];
       const u = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]], v = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
       const x = u[1] * v[2] - u[2] * v[1], y = u[2] * v[0] - u[0] * v[2], z = u[0] * v[1] - u[1] * v[0];
-      for (const e of on === 'faces' ? [f] : [I[3 * f], I[3 * f + 1], I[3 * f + 2]]) if (e < count) { n[3 * e] += x; n[3 * e + 1] += y; n[3 * e + 2] += z; }
+      while (faceStart && faceStart[row + 1] <= f) row++; // the face row triangle f belongs to
+      for (const e of on === 'faces' ? [faceStart ? row : f] : [I[3 * f], I[3 * f + 1], I[3 * f + 2]]) if (e < count) { n[3 * e] += x; n[3 * e + 1] += y; n[3 * e + 2] += z; }
     }
     for (let e = 0; e < count; e++) {
       const v: Vec3 = [s * n[3 * e], s * n[3 * e + 1], s * n[3 * e + 2]];
@@ -283,7 +287,7 @@ export function summaries(x: Pick<Ctl, 'meshOf'>, m: Pick<Model, 'objects' | 're
   const ks = paths ? under(paths) : r.receivers.map((_, k) => k), pathOf = new Map(m.objects.map((o) => [o.id, o.path])); // mesh and facing rows: the receivers under paths
   const rows: { key: string; head: object; u: Summary }[] = by === 'parts' ? paths!.map((p) => ({ key: p, head: { path: p }, u: sum(under([p])) }))
     : by === 'mesh' ? ks.map((k) => { const p = pathOf.get(r.receivers[k]) ?? g[k].name; return { key: p, head: { mesh: p }, u: sum([k]) }; }).sort((p, o) => o.u.area - p.u.area)
-      : bySide(col, (function* () { for (const k of ks) { const o = x.meshOf(r.receivers[k]); if (o) yield { first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }; } })(), r.on, northOf(r), column.endsWith('_back'))
+      : bySide(col, (function* () { for (const k of ks) { const o = x.meshOf(r.receivers[k], r); if (o) yield { first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, faceStart: o.faceStart, w: w[k] }; } })(), r.on, northOf(r), column.endsWith('_back'))
         .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.values, [{ first: 0, count: f.values.length }], [f.w], lo, hi, th) }));
   return { whole: sum(r.receivers.map((_, k) => k)), rows };
 }
@@ -363,7 +367,7 @@ export const inShot = (el: UsdViewerElement) => shooting.has(el);
 export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Look, fn: () => Promise<T>): Promise<T> {
   const x = c(), ref = x.state.models.find((m) => m.result)?.result, col = look.column === undefined ? -1 : ref?.columns.indexOf(look.column) ?? -1;
   if (look.column !== undefined && col < 0) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the views show; run again`);
-  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity] };
+  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, bins: x.state.bins, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
   // the shot's section goes straight to its views, without the gizmo (a drag would edit the shot's); after it they get the
@@ -374,11 +378,12 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     flushSync(() => {
       x.dispatch({ type: 'HOVER', id: null });
       x.dispatch({ type: 'PROBE', probe: null }); // the pointer's, not the shot's
-      if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: col });
+      if (was.tab !== 'daylight') x.setUi((u) => ({ ...u, tab: 'daylight' })); // the views show daylight's results and colours: the tools' analysis
+      if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: look.column });
       if (look.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
       if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
       if (look.pin) x.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: look.pin.min, max: look.pin.max } });
-      if (look.clean) x.dispatch({ type: 'BIN', bin: null });
+      if (look.clean) { x.dispatch({ type: 'BIN', bin: null }); x.dispatch({ type: 'BINS', bins: [] }); }
     });
     if (fill) fill.highlight = { color: '#000000', opacity: 0 }; // after the commit: a colouring change sets it again
     for (const [o] of grids) o.visible = look.grid!;
@@ -404,7 +409,8 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (look.colourBy) z.dispatch({ type: 'COLOUR_BY', colourBy: was.colourBy });
       if (look.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
       if (look.pin) z.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: was.scale?.min ?? null, max: was.scale?.max ?? null } });
-      if (look.clean) z.dispatch({ type: 'BIN', bin: was.bin });
+      if (look.clean) { z.dispatch({ type: 'BIN', bin: was.bin }); z.dispatch({ type: 'BINS', bins: was.bins }); }
+      if (was.tab !== 'daylight') z.setUi((u) => ({ ...u, tab: was.tab }));
     });
     if (fill) fill.highlight = selectionFill(c().state.colourBy === 'value' && !!c().scale);
   }
@@ -478,7 +484,7 @@ export function publicSettings(s: Settings) {
     viz: {
       belowColour: viz.colors.below, aboveColour: viz.colors.above,
       quantities: Object.fromEntries(QUANTITIES.map((q) => [q, {
-        gradient: gradientFor(q, viz.gradients[q]).key, min: viz.scales[q]?.min ?? null, max: viz.scales[q]?.max ?? null, below: viz.ranges[q]?.lo ?? null, above: viz.ranges[q]?.hi ?? null,
+        gradient: gradientFor(q, viz.gradients[q], viz.library).key, scaling: viz.scalings[q] ?? defaultScaling(q), min: viz.scales[q]?.min ?? null, max: viz.scales[q]?.max ?? null, below: viz.ranges[q]?.lo ?? null, above: viz.ranges[q]?.hi ?? null,
       }])),
     },
     charts: s.charts.map((c) => (c.models ? { ...c, models: c.models.map(letter) } : c)),
@@ -538,10 +544,10 @@ export function settingsActions(a: Args, s: State, shown: string | null, file?: 
   }
   if (a.sim) out.push(...(a.sim.mode ? [simMode(a.sim.mode)] : []), { type: 'SIM', patch: a.sim });
   if (a.viz) {
-    const { quantity = shown?.split('_')[0], reset, gradient, min, max, below, above, belowColour, aboveColour } = a.viz;
+    const { quantity = shown?.split('_')[0], reset, gradient, scaling, min, max, below, above, belowColour, aboveColour } = a.viz;
     if (!quantity) throw new Error('viz.quantity: no result is shown yet; name the quantity');
     if (reset) out.push({ type: 'VIZ_RESET', quantity, what: reset }); // first: the other fields go over it
-    const patch = Object.fromEntries(Object.entries({ gradient, min, max, lo: below, hi: above, below: belowColour, above: aboveColour }).filter(([, v]) => v !== undefined));
+    const patch = Object.fromEntries(Object.entries({ gradient, scaling, min, max, lo: below, hi: above, below: belowColour, above: aboveColour }).filter(([, v]) => v !== undefined));
     if (Object.keys(patch).length) out.push({ type: 'VIZ', quantity, patch });
   }
   let st = s; // the charts so far
@@ -901,8 +907,8 @@ export const HANDLERS: Record<string, Handler> = {
       const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(r), rows = new Map(m.objects.map((o) => [o.id, o]));
       const meshes = (function* () { // one built at a time (meshOf builds per call)
         for (const [k, id] of r.receivers.entries()) {
-          const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
-          if (o && row) yield { id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] };
+          const o = x.meshOf(id, r), row = rows.get(id), g = r.manifest.meshes[k];
+          if (o && row) yield { id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, faceStart: o.faceStart, w: w[k] };
         }
       })();
       const out = findCritical({ values: r.data[col], column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);
@@ -927,7 +933,7 @@ export const HANDLERS: Record<string, Handler> = {
       const section = a.section && sectionArg(x, a.section, a.active); // a view's look: no run key holds it, results stay fresh
       flushSync(() => {
         if (a.active) x.dispatch({ type: 'ACTIVE', slot: LETTERS.indexOf(a.active) });
-        if (a.column) x.dispatch({ type: 'COLUMN', column: ref!.columns.indexOf(a.column) });
+        if (a.column) x.dispatch({ type: 'COLUMN', column: a.column });
         if (a.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: a.colourBy });
         if (a.highlight !== undefined) x.dispatch({ type: 'BIN', bin: a.highlight });
         if (a.theme) x.setTheme(a.theme);
@@ -1143,10 +1149,10 @@ function pickup(c: () => Ctl): void {
         d(simMode(p.sim.mode));
         d({ type: 'SIM', patch: p.sim });
         for (const quantity of QUANTITIES) {
-          const g = p.viz.gradients[quantity], sc = p.viz.scales[quantity], rg = p.viz.ranges[quantity];
+          const g = p.viz.gradients[quantity], sc = p.viz.scales[quantity], rg = p.viz.ranges[quantity], sg = p.viz.scalings[quantity];
           d({ type: 'VIZ_RESET', quantity, what: 'scale' });
           d({ type: 'VIZ_RESET', quantity, what: 'range' });
-          d({ type: 'VIZ', quantity, patch: { ...(g ? { gradient: g } : {}), min: sc?.min ?? null, max: sc?.max ?? null, lo: rg?.lo ?? null, hi: rg?.hi ?? null, below: p.viz.colors.below, above: p.viz.colors.above } });
+          d({ type: 'VIZ', quantity, patch: { ...(g ? { gradient: g } : {}), ...(sg ? { scaling: sg } : {}), min: sc?.min ?? null, max: sc?.max ?? null, lo: rg?.lo ?? null, hi: rg?.hi ?? null, below: p.viz.colors.below, above: p.viz.colors.above } });
         }
         for (const ch of c().state.settings.charts) if (!p.charts.some((k) => k.id === ch.id)) d({ type: 'CHART', id: ch.id, remove: true });
         for (const spec of p.charts) d({ type: 'CHART', spec });

@@ -39,7 +39,7 @@ for (let i = 0; i <= 120; i++) { const a = (i / 120) * 2 * Math.PI; RING.min.pus
 const mmdd = (date: string, leap: boolean) => fmtTime(date, 0, leap).slice(0, 5);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** A zha token as an opaque three.js colour, composited over the viewport background: fat lines cannot blend. */
+/** A kit-ui token as an opaque three.js colour, composited over the viewport background: fat lines cannot blend. */
 const token = (name: string) => new THREE.Color(cssVar(name, '#808080', '--bg-surface-2'));
 type Tok = THREE.Color;
 

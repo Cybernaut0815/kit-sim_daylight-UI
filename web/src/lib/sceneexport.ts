@@ -10,8 +10,9 @@ export interface Drawn {
   geometry: BufferGeometry;
   matrices: Matrix4[];
   material: Material | Material[] | null; // the shaded view's; null: a plain grey
-  /** Receivers: per element (triangle or vertex) of the geometry, the shown result's linear colour and every value. */
-  result?: { perFace: boolean; rgb: Float32Array; values: { name: string; data: ArrayLike<number> }[] };
+  /** Receivers: per drawn triangle ('face'), drawn vertex ('vertex') or corner of each drawn triangle ('corner': points
+   *  that draw as one vertex keep their own values), the shown result's linear colour and every value. */
+  result?: { per: 'face' | 'vertex' | 'corner'; rgb: Float32Array; values: { name: string; data: ArrayLike<number> }[] };
 }
 
 /** World matrices of an object's copies, scaled to metres (`scale` = the stage's metersPerUnit). */
@@ -23,15 +24,15 @@ export function exportMatrices(o: Object3D, scale: number): Matrix4[] {
 
 /**
  * A receiver's geometry for export: position and normal, the result colour as `color` and every value as
- * `_daylight_<name>` (GLTFExporter writes `_DAYLIGHT_<NAME>`). Per face the triangles are split so each corner carries
- * its triangle's value.
+ * `_daylight_<name>` (GLTFExporter writes `_DAYLIGHT_<NAME>`). Per face and per corner the triangles are split so each
+ * corner carries its triangle's value, or its own.
  */
 export function resultGeometry(g: BufferGeometry, r: NonNullable<Drawn['result']>): BufferGeometry {
   let out = new BufferGeometry().setAttribute('position', g.attributes.position);
   if (g.attributes.normal) out.setAttribute('normal', g.attributes.normal);
   if (g.index) out.setIndex(g.index);
-  if (r.perFace && out.index) out = out.toNonIndexed();
-  const n = out.attributes.position.count, per = r.perFace ? 3 : 1; // corners per element
+  if (r.per !== 'vertex' && out.index) out = out.toNonIndexed();
+  const n = out.attributes.position.count, per = r.per === 'face' ? 3 : 1; // corners per element
   const rgb = new Float32Array(3 * n);
   for (let i = 0; i < n; i++) rgb.set(r.rgb.subarray(3 * Math.floor(i / per), 3 * Math.floor(i / per) + 3), 3 * i);
   out.setAttribute('color', new BufferAttribute(rgb, 3));

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 AND LicenseRef-Commons-Clause-1.0
-// daylight_server: the daylight CLI over HTTP for several users at once, core linked in-process (OptiX needs the GPU
-// box, so no WASM). One worker thread owns the GPU and runs queued jobs one after another; everything else (uploads,
+// daylight_server: the daylight and views CLIs over HTTP for several users at once, core linked in-process (OptiX needs
+// the GPU box, so no WASM). One worker thread owns the GPU and runs queued jobs one after another; everything else (uploads,
 // validation, cached answers, status polls, weather downloads) runs on the HTTP thread pool and never waits for it.
 // The API is self-describing: GET /openapi.json (OpenAPI 3.1, embedded from server/openapi.json), /docs (Swagger UI),
 // /redoc (ReDoc) and /llms.txt (a plain-text guide for agents). With --mcp, agents on this machine drive the web app
@@ -36,6 +36,7 @@
 #include <process.h>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -50,7 +51,7 @@ using Clock = std::chrono::steady_clock;
 namespace {
 
 // ---------------------------------------------------------------------------------------------------- state
-struct MeshEntry { std::shared_ptr<const Mesh> mesh; size_t bytes = 0; uint64_t used = 0; };
+struct MeshEntry { std::shared_ptr<const SimulationMesh> mesh; size_t bytes = 0; uint64_t used = 0; };
 
 // A finished run's answer, kept once and shared by its job, later identical requests (the response cache) and every
 // GET: the manifest's fields as JSON text (columns, duration_h, dirs, meshes, run_s, total_s, rows, cols; the opening
@@ -71,11 +72,13 @@ bool finished(State s) { return s == State::Done || s == State::Error || s == St
 struct Job {
   std::string id, client, key;                    // key: the request identity for the response cache
   // inputs, immutable once queued
+  bool views = false;                             // the tool: views (its args in vargs, no weather), else daylight (args)
   cli::Args args;
+  views::cli::Args vargs;
   Weather weather;
   bool haveWeather = false;
   std::string weatherCache;                       // hit | miss | none (the cache report)
-  std::vector<std::pair<std::shared_ptr<const Mesh>, bool>> meshes;   // mesh, sensor
+  std::vector<std::pair<std::shared_ptr<const SimulationMesh>, bool>> meshes;   // mesh, sensor
   std::string sceneKey;
   std::atomic<bool> cancel{false};
   std::atomic<double> progress{0};                // running: the share of sensors traced, set by the core per chunk
@@ -323,13 +326,68 @@ void purge(Server& S) {
 
 struct Refusal { int status = 0; std::string body; std::string type = "text/plain; charset=utf-8"; };
 
+// The result's size, known before the run: one row per sensor face (or point), `perSide` columns per side; refused (413)
+// above what a browser can hold, before anything is queued. Then the scene's identity for the core's resident GAS.
+// Without per-slot records (no --transmission, no --bounces) and without --no-occlude (the core keys its meshes by
+// index), the GAS is the same whatever the meshes' order or roles: the sorted ids of the meshes that block rays (all of
+// them with self-occlusion, else the context ones). Otherwise the ordered list, as the core numbers slots in mesh order.
+// Hashed: a big model's ids are half a megabyte. views builds daylight's opaque scene (glass and targets are labels of
+// its run), so the two tools share a scene under the same key.
+bool sized(Job& j, const RunOptions& o, size_t perSide, int bounces, const std::vector<std::string>& sensors, const std::vector<std::string>& context,
+           const char* fewer, Refusal& no) {
+  for (const auto& [mesh, sensor] : j.meshes) if (sensor) j.rows += o.onVertices ? mesh->numPoints() : mesh->numFaces();
+  j.cols = perSide * (o.sides == Sides::Both ? 2 : 1);
+  if (constexpr size_t kMaxValues = size_t(1) << 27; j.rows * j.cols > kMaxValues) {
+    no = {413, "error: " + std::to_string(j.rows) + " rows x " + std::to_string(j.cols) + " columns = " + std::to_string(j.rows * j.cols) +
+                   " values, over the " + std::to_string(kMaxValues) + " one run can return; " + fewer + "\n"};
+    return false;
+  }
+  const bool anyOrder = !o.transmission && bounces == 0 && o.noOcclude.empty();
+  std::vector<std::string> ids;
+  for (const auto& s : sensors) if (!anyOrder || o.selfOcclude) ids.push_back((anyOrder ? "" : "s:") + s);
+  for (const auto& c : context) ids.push_back((anyOrder ? "" : "c:") + c);
+  if (anyOrder) std::sort(ids.begin(), ids.end());
+  std::string all;
+  for (const auto& id : ids) all += id + "\n";
+  j.sceneKey = hex(fnv1a(all)) + (anyOrder ? " sorted" : " ordered") + (o.selfOcclude ? " self" : " noself");
+  return true;
+}
+
+// A views job's args (av: argv, "views" first): the views CLI's parser (which also checks the field), the HTTP-only
+// rules, its size and scene. Target and --no-occlude names are checked by the run (a bad one fails the job, 500).
+bool views_job(const std::shared_ptr<Job>& j, std::vector<char*>& av, const std::vector<std::string>& sensors,
+               const std::vector<std::string>& context, Refusal& no) {
+  auto fail = [&](int status, const std::string& msg) { no = {status, "error: " + msg + "\n"}; return false; };
+  std::string err;
+  if (views::cli::parse(static_cast<int>(av.size()), av.data(), j->vargs, err)) return fail(400, err + "\n" + views::cli::kUsage);
+  views::cli::Args& a = j->vargs;
+  if (a.help) { no = {200, views::cli::kUsage}; return false; }
+  if (!a.sensors.empty() || !a.context.empty())
+    return fail(400, "mesh files are not available over HTTP; PUT /mesh/{id} and name the ids in the sensors / context fields");
+  if (!a.out.empty() || a.bench || !a.opt.dumpPath.empty()) return fail(400, "--out, --dump-rays and --bench are not available over HTTP");
+  a.opt.verbose = false;
+  j->weatherCache = "none";
+  views::Field f;
+  if (!views::field({}, a.opt, f, err)) return fail(400, err);
+  // columns per side, in the core's order: sky ground obstruction obstruction_total, a share per group, glazing, the
+  // isovist, the distances, each group's distances, reach_<D>
+  std::unordered_set<std::string> groups;
+  for (const auto& t : a.opt.targets) groups.insert(t.group);
+  const size_t G = groups.size(), mean = (f.dist & views::DistMean) ? 1 : 0, minimum = (f.dist & views::DistMin) ? 1 : 0;
+  const size_t perSide = 4 + G + (a.opt.transmission ? 1 : 0) + ((f.dist & views::DistIsovist) ? 1 : 0) + mean + minimum +
+                         ((f.dist & views::DistGroup) ? G * (mean + minimum) : 0) + a.opt.reach.size();
+  return sized(*j, a.opt, perSide, 0, sensors, context, "pick one side, fewer --reach distances or fewer receivers", no);
+}
+
 // Parses and validates one run request into a job (in the request thread), or explains why not. A request identical to
 // an earlier one comes back as a finished job carrying the stored result (response cache).
 std::shared_ptr<Job> make_job(Server& S, const httplib::Request& req, Refusal& no) {
   auto fail = [&](int status, const std::string& msg) { no = {status, "error: " + msg + "\n"}; return nullptr; };
   const std::vector<std::string> sensors = req.form.get_fields("sensors"), context = req.form.get_fields("context"), args = req.form.get_fields("args");
-  const std::string epwUrl = req.form.get_field("epw_url");
-  const bool epwPart = req.form.has_file("epw");
+  const std::string epwUrl = req.form.get_field("epw_url"), tool = req.form.get_field("tool");
+  const bool epwPart = req.form.has_file("epw"), viewsTool = tool == "views";
+  if (!tool.empty() && tool != "daylight" && !viewsTool) return fail(400, "tool must be daylight (the default) or views");
+  if (viewsTool && (epwPart || !epwUrl.empty())) return fail(400, "views takes no weather: drop the epw part and epw_url");
   if (sensors.empty()) return fail(400, "no sensor meshes: give one or more sensors fields with mesh ids (PUT /mesh/{id} first)");
   for (const auto& id : sensors) if (!valid_id(id)) return fail(400, "bad mesh id " + id.substr(0, 80));
   for (const auto& id : context) if (!valid_id(id)) return fail(400, "bad mesh id " + id.substr(0, 80));
@@ -346,7 +404,8 @@ std::shared_ptr<Job> make_job(Server& S, const httplib::Request& req, Refusal& n
   j->id = uuid();
   j->client = client_of(req);
   j->created = std::time(nullptr);
-  j->key = weatherKey + "\n";
+  j->views = viewsTool;
+  j->key = (viewsTool ? "t:views\n" : "") + weatherKey + "\n";   // a daylight request keys as before
   for (const auto& s : sensors) j->key += "s:" + s + "\n";
   for (const auto& s : context) j->key += "c:" + s + "\n";
   for (const auto& a : args) j->key += "a:" + a + "\n";
@@ -385,11 +444,12 @@ std::shared_ptr<Job> make_job(Server& S, const httplib::Request& req, Refusal& n
   }
 
   // the CLI's parser on the args, then the HTTP-only rules
-  std::vector<std::string> argvS = {"daylight"};
+  std::vector<std::string> argvS = {viewsTool ? "views" : "daylight"};
   argvS.insert(argvS.end(), args.begin(), args.end());
   std::vector<char*> av;
   for (auto& s : argvS) av.push_back(s.data());
   std::string err;
+  if (viewsTool) return views_job(j, av, sensors, context, no) ? j : nullptr;
   if (cli::parse(static_cast<int>(av.size()), av.data(), j->args, err)) return fail(400, err + "\n" + cli::kUsage);
   cli::Args& a = j->args;
   if (a.help) { no = {200, cli::kUsage}; return nullptr; }
@@ -427,26 +487,7 @@ std::shared_ptr<Job> make_job(Server& S, const httplib::Request& req, Refusal& n
     j->haveWeather = true;
   }
   if (const int rc = cli::prepare(a, j->weather, j->haveWeather, err)) return fail(rc == 1 ? 400 : 500, err);
-  // The result's size is known now: one row per sensor face (or point), one column per quantity and side. Refused above
-  // what a browser can hold, before anything is queued.
-  for (const auto& [mesh, sensor] : j->meshes) if (sensor) j->rows += a.opt.onVertices ? mesh->numPoints() : mesh->numFaces();
-  j->cols = a.opt.quantities.size() * (a.opt.sides == Sides::Both ? 2 : 1);
-  if (constexpr size_t kMaxValues = size_t(1) << 27; j->rows * j->cols > kMaxValues)
-    return fail(413, std::to_string(j->rows) + " rows x " + std::to_string(j->cols) + " columns = " + std::to_string(j->rows * j->cols) +
-                         " values, over the " + std::to_string(kMaxValues) + " one run can return; pick fewer quantities, one side or fewer receivers");
-  // The scene's identity for the core's resident GAS. Without per-slot records (no --transmission, no --bounces) and
-  // without --no-occlude (the core keys its meshes by index), the GAS is the same whatever the meshes' order or roles:
-  // the sorted ids of the meshes that block rays (all of them with self-occlusion, else the context ones). Otherwise
-  // the ordered list, as the core numbers slots in mesh order. Hashed: a big model's ids are half a megabyte.
-  const bool anyOrder = !a.opt.transmission && a.opt.bounces == 0 && a.opt.noOcclude.empty();
-  std::vector<std::string> ids;
-  for (const auto& s : sensors) if (!anyOrder || a.opt.selfOcclude) ids.push_back((anyOrder ? "" : "s:") + s);
-  for (const auto& c : context) ids.push_back((anyOrder ? "" : "c:") + c);
-  if (anyOrder) std::sort(ids.begin(), ids.end());
-  std::string all;
-  for (const auto& id : ids) all += id + "\n";
-  j->sceneKey = hex(fnv1a(all)) + (anyOrder ? " sorted" : " ordered") + (a.opt.selfOcclude ? " self" : " noself");
-  return j;
+  return sized(*j, a.opt, a.opt.quantities.size(), a.opt.bounces, sensors, context, "pick fewer quantities, one side or fewer receivers", no) ? j : nullptr;
 }
 
 // Queues a fresh job (limits checked) or registers a cached one; false with a refusal when the limits say no.
@@ -494,25 +535,27 @@ void worker(Server& S) {
     try {
       // views of the shared cache entries (no copy), names made unique per run exactly as the TS binding's dmeshStems
       // (name, name_2, ...: a suffix taken by another name moves on), so a client knows each mesh's core name
-      std::vector<MeshView> views;
-      views.reserve(j->meshes.size());
+      std::vector<SimulationMeshView> mv;
+      mv.reserve(j->meshes.size());
       std::unordered_set<std::string> used;
       const auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
       for (const auto& [mesh, sensor] : j->meshes) {
-        MeshView v{mesh.get(), mesh->name, sensor};
+        SimulationMeshView v{mesh.get(), mesh->name, sensor};
         for (int i = 2; used.count(lower(v.name)); ++i) v.name = mesh->name + "_" + std::to_string(i);
         used.insert(lower(v.name));
-        views.push_back(std::move(v));
+        mv.push_back(std::move(v));
       }
       Options opt = j->args.opt;
-      opt.sceneKey = j->sceneKey;
-      opt.residentScenes = S.gpuScenes;
-      opt.cancel = &j->cancel;
-      opt.f32Columns = true;   // what GET /jobs/{id}/values sends: 4 bytes per value, column-major
-      opt.progress = &j->progress;
+      views::Options vopt = j->vargs.opt;
+      RunOptions& o = j->views ? static_cast<RunOptions&>(vopt) : static_cast<RunOptions&>(opt);
+      o.sceneKey = j->sceneKey;
+      o.residentScenes = S.gpuScenes;
+      o.cancel = &j->cancel;
+      o.f32Columns = true;   // what GET /jobs/{id}/values sends: 4 bytes per value, column-major
+      o.progress = &j->progress;
       Result r;
       const auto t1 = Clock::now();
-      if (run(views, j->haveWeather ? &j->weather : nullptr, opt, r, err)) {
+      if (j->views ? views::run(mv, vopt, r, err) : run(mv, j->haveWeather ? &j->weather : nullptr, opt, r, err)) {
         const double runS = std::chrono::duration<double>(Clock::now() - t1).count();
         auto res = std::make_shared<Res>();
         res->cols = r.columns.size();
@@ -528,9 +571,13 @@ void worker(Server& S) {
                       "  \"gpu\": {\"rays\": %zu, \"launches\": %zu, \"gasBytes\": %zu}",
                       runS, double(std::time(nullptr) - j->created), res->rows, res->cols, t.prepMs, t.skyMs, t.buildMs, t.traceMs, t.reduceMs,
                       t.bounceMs, runS * 1000, t.rays, t.launches, t.gasBytes);
-        res->manifest = cli::manifest_json(r, extra);
+        views::Field f;
+        if (!j->views) res->manifest = cli::manifest_json(r, extra);
+        else if (views::field(mv, vopt, f, err)) res->manifest = views::cli::manifest_json(r, vopt, f);   // its extras: below
+        else throw std::runtime_error(err);
         res->manifest.erase(res->manifest.find_last_of('}'));   // fields only: view() and POST /run append theirs
         while (!res->manifest.empty() && std::isspace(static_cast<unsigned char>(res->manifest.back()))) res->manifest.pop_back();
+        if (j->views) res->manifest += std::string(",\n  ") + extra;   // views' manifest_json takes no extra fields
         res->values = std::move(r.f32);
         body = res;
         std::lock_guard<std::mutex> lock(S.cacheMu);
@@ -842,11 +889,11 @@ int main(int argc, char** argv) {
   svr.Put(R"(/mesh/([A-Za-z0-9-]{1,64}))", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string id = req.matches[1];
     const std::string nm = sanitise(req.has_param("name") ? req.get_param_value("name") : id);
-    std::vector<Mesh> ms;
+    std::vector<SimulationMesh> ms;
     std::string err;
     if (!read_dmesh(req.body.data(), req.body.size(), nm, ms, err)) return text(res, 400, "error: " + err + "\n");
     if (ms.empty()) return text(res, 400, "error: " + nm + ": mesh has no faces\n");
-    auto mesh = std::make_shared<const Mesh>(std::move(ms[0]));   // parsed outside the lock
+    auto mesh = std::make_shared<const SimulationMesh>(std::move(ms[0]));   // parsed outside the lock
     std::lock_guard<std::mutex> lock(S.meshMu);
     if (auto it = S.meshes.find(id); it != S.meshes.end()) { S.meshBytes -= it->second.bytes; S.meshes.erase(it); }
     // ponytail: RAM LRU, meshes come back after a restart with one PUT round trip; a disk cache if that ever hurts

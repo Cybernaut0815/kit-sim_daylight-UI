@@ -14,9 +14,10 @@ export const METRIC_LABEL: Record<Metric, string> = {
   below: 'Share below the range', within: 'Share within the range', above: 'Share above the range',
 };
 
-/** `width`: the viewBox's (the drawing scales to its box); the height follows the rows. */
-export function Parts({ d, width = 320 }: { d: Extract<Drawn, { kind: 'parts' }>; width?: number }) {
-  const share = isShare(d.metric), slots = d.groups[0]?.bars.map((b) => b.slot) ?? [], many = slots.length > 1;
+/** `width`: the viewBox's (the drawing scales to its box); the height follows the rows. `caption`: the value axis' words
+ *  instead of the metric's, `percent`: the values are shares (0 to 1) shown in percent (the view analysis' bars). */
+export function Parts({ d, width = 320, caption, percent }: { d: Extract<Drawn, { kind: 'parts' }>; width?: number; caption?: string; percent?: boolean }) {
+  const share = percent ?? isShare(d.metric), slots = d.groups[0]?.bars.map((b) => b.slot) ?? [], many = slots.length > 1;
   const top = TOP + (many ? KEY : 0), rowH = slots.length * PITCH + GAP, base = top + d.groups.length * rowH, plotW = width - L - R;
   const [dmin, dmax] = d.domain, x = (v: number) => L + Math.min(Math.max((v - dmin) / (dmax - dmin || 1), 0), 1) * plotW;
   const zero = x(0); // bars grow from 0, or from the axis end nearest it
@@ -24,7 +25,7 @@ export function Parts({ d, width = 320 }: { d: Extract<Drawn, { kind: 'parts' }>
   const what = (g: (typeof d.groups)[number]) => g.bars.map((b) => `${many ? `${LETTERS[b.slot]} ` : ''}${fmt(b.v)}`).join(', ');
   return (
     <>
-      <svg viewBox={`0 0 ${width} ${base + BOTTOM}`} width="100%" role="img" aria-label={`${METRIC_LABEL[d.metric]} per part${share || !d.unit ? '' : ` (${d.unit})`}: ${d.groups.map((g) => `${g.name} ${what(g)}`).join('; ')}`}>
+      <svg viewBox={`0 0 ${width} ${base + BOTTOM}`} width="100%" role="img" aria-label={`${caption ?? `${METRIC_LABEL[d.metric]} per part`}${share || !d.unit ? '' : ` (${d.unit})`}: ${d.groups.map((g) => `${g.name} ${what(g)}`).join('; ')}`}>
         {many && slots.map((s, k) => (
           <g key={s}>
             <rect x={L + 26 * k} y={TOP} width={8} height={8} fill={cat(s)} />
@@ -56,7 +57,7 @@ export function Parts({ d, width = 320 }: { d: Extract<Drawn, { kind: 'parts' }>
         })}
         <line x1={L} x2={L + plotW} y1={base} y2={base} stroke={AXIS} />
         <line x1={zero} x2={zero} y1={top} y2={base} stroke={AXIS} />
-        <text x={L} y={base + 26} fontSize={FONT} fill={TEXT}>{share ? `share of each part's area ${d.metric} the range` : `${d.metric[0] === 'p' ? d.metric.toUpperCase() : d.metric} per part`}</text>
+        <text x={L} y={base + 26} fontSize={FONT} fill={TEXT}>{caption ?? (share ? `share of each part's area ${d.metric} the range` : `${d.metric[0] === 'p' ? d.metric.toUpperCase() : d.metric} per part`)}</text>
         {!share && <text x={L + plotW} y={base + 26} fontSize={FONT} textAnchor="end" fill={TEXT}>{d.unit}</text>}
       </svg>
       {d.more > 0 && <p className="text-muted">First {d.groups.length} of {d.groups.length + d.more} parts</p>}

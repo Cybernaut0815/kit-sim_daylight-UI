@@ -123,6 +123,38 @@ describe('extract', () => {
     });
     expect(Buffer.from(out[5].dmesh()).equals(Buffer.from(toDmesh(out[5].make())))).toBe(true);
   });
+  it('receiver(): the file\'s own faces and points as a .dmesh, its mesh in result rows; read once per geometry', async () => {
+    // two quads with points of their own that meet along an edge: 6 drawn vertices for 8 authored points (topology.test.ts)
+    const geometry = new BufferGeometry().setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2, 1, 0], 3)).setIndex([0, 1, 2, 0, 2, 3, 1, 4, 5, 1, 5, 2]);
+    geometry.addGroup(0, 6, 0);
+    geometry.addGroup(6, 6, 1); // a material subset per quad: slots 0 and 1
+    const map = { faces: Int32Array.of(0, 0, 1, 1), counts: Int32Array.of(4, 4), indices: Int32Array.of(0, 1, 2, 3, 4, 5, 6, 7), weld: Uint32Array.of(0, 1, 2, 3, 5, 6), points: null, flipped: false, authored: true };
+    const root = new Group();
+    root.rotation.x = -Math.PI / 2;
+    const at = (m: Matrix4) => { const o = new Mesh(geometry); o.matrixAutoUpdate = false; o.matrix.copy(m); root.add(o); return o; };
+    const plain = at(new Matrix4().makeTranslation(10, 20, 30)), mirrored = at(new Matrix4().makeScale(-1, 1, 1));
+    const meshMap = vi.fn(async () => map);
+    const [e, m] = extract([{ rid: 1, path: '/W/A', kind: 'mesh', object: plain }, { rid: 2, path: '/W/B', kind: 'mesh', object: mirrored }], root, 0.01, undefined, meshMap);
+    const t = (await e.topology!())!;
+    expect([t.faces, t.points, await e.topology!(), meshMap.mock.calls.length]).toEqual([2, 8, t, 1]); // asked once
+    const r = e.receiver!(t);
+    expect(e.receiver!(t)).toBe(r); // one object per topology: hashed once
+    const pos = geometry.attributes.position.array as Float32Array, own = [...t.pointVertex].flatMap((v) => [pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]]);
+    const want = (o: Mesh) => toDmesh({ positions: own, counts: [4, 4], indices: [0, 1, 2, 3, 4, 5, 6, 7], slots: Uint16Array.of(0, 1) }, { matrix: o.matrixWorld.elements, scale: 0.01 });
+    expect(Buffer.from(r.dmesh()).equals(Buffer.from(want(plain)))).toBe(true);
+    expect(r.stamp()).toEqual([...e.stamp(), t]);
+    const rows = r.mesh();
+    expect([rows.positions.length, Array.from(rows.indices), rows.faceStart]).toEqual([24, [...t.cornerRow], t.faceStart]);
+    close(Array.from(rows.positions).slice(12, 15), [0.11, 0.2, 0.3]); // row 4, the second quad's own point at (1, 0, 0): moved, in metres, Z up
+    // mirrored: toDmesh turns each face around its first corner, and the row mesh's triangles turn with it
+    const rm = m.receiver!((await m.topology!())!);
+    expect(Buffer.from(rm.dmesh()).equals(Buffer.from(want(mirrored)))).toBe(true);
+    expect([...new Int32Array(rm.dmesh().buffer, 32 + 24 * 8 + 4 * 2, 8)]).toEqual([0, 3, 2, 1, 4, 7, 6, 5]);
+    expect(Array.from(rm.mesh().indices).slice(0, 6)).toEqual([0, 2, 1, 0, 3, 2]);
+    // no viewer map, or one for other triangles: none (the receiver is sent as drawn)
+    expect(await extract([{ rid: 1, path: '/W/A', kind: 'mesh', object: plain }], root, 0.01)[0].topology!()).toBeNull();
+    expect(await extract([{ rid: 1, path: '/W/A', kind: 'mesh', object: plain }], root, 0.01, undefined, async () => ({ ...map, faces: Int32Array.of(0) }))[0].topology!()).toBeNull();
+  });
   it('jobMeshes: content ids, twins as h and h_2, a shade equal to a receiver salted, hashed once, a moved mesh refused', async () => {
     const { root, objects, items } = scene();
     const rows = extract(items, root, 0.01).map((e) => ({ ...e, dmesh: vi.fn(e.dmesh) }));

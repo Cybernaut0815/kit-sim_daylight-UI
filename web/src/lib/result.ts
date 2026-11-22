@@ -177,14 +177,72 @@ export const QUANTITY_HELP: Record<string, string> = {
 };
 export const SIDE_HELP: Record<string, string> = { front: 'Front side: where the face normal points.', back: 'Back side: opposite the face normal.' };
 
+/** A column name -> its quantity and side: 'radiation_front' -> ['radiation', 'front'], 'distance_min_back' ->
+ *  ['distance_min', 'back'] (the view analysis' names hold '_' too); a name without a side -> [name, '']. */
+export const splitColumn = (column: string): [string, string] => { const m = /^(.+)_(front|back)$/.exec(column); return m ? [m[1], m[2]] : [column, '']; };
+
+// The view analysis' quantities with a unit; every other one (sky, ground, obstruction, the two joined, glazing, a
+// target group, reach_<D>) is a share of the field, 0 to 1, summed over the area as m².
+const VIEW_UNITS: [RegExp, [string, string]][] = [[/^volume$/, ['m³', '']], [/^area$/, ['m²', '']], [/distance(_min)?$/, ['m', '']]];
+
 /** Column name 'radiation_front' -> per-element and area-integrated units. */
 export function unitFor(column: string): { value: string; total: string } {
-  const [value, total] = UNITS[column.split('_')[0]] ?? ['', ''];
+  const q = splitColumn(column)[0], [value, total] = UNITS[q] ?? VIEW_UNITS.find(([re]) => re.test(q))?.[1] ?? ['', 'm²'];
   return { value, total };
 }
 
-/** 'radiation_front' -> 'Radiation, front', 'sunhours_back' -> 'Sun hours, back'; a quantity alone -> 'Sun hours'. */
-export const columnLabel = (column: string): string => { const [q, side] = column.split('_'); return `${q === 'sunhours' ? 'Sun hours' : `${q[0].toUpperCase()}${q.slice(1)}`}${side ? `, ${side}` : ''}`; };
+/** What a view analysis column means (docs/views.md), as QUANTITY_HELP; a target group or its distances by name. */
+const VIEW_HELP: Record<string, string> = {
+  sky: 'Share of the field of view that is open sky, 0 to 1 by solid angle: 1 sees only sky. The shares of sky, ground, obstruction and the target groups sum to 1.',
+  ground: 'Share of the field that ends on the virtual ground below (the street seen from a facade when no terrain is modelled), 0 to 1.',
+  obstruction: "Share of the field that ends on a mesh that is no target, 0 to 1: buildings, the receivers themselves, a modelled terrain (all around at eye offset 0, also the element's own surface).",
+  obstruction_total: 'Total view obstruction, 0 to 1: everything in the field that is not open sky, whether it ends on the virtual ground, on an obstruction or on a target (1 minus the sky share). It repeats those shares, so it is not another part of the sum to 1.',
+  glazing: 'Share of the field seen through glass, 0 to 1 (See through glass on). It counts beside the class behind the pane, outside the shares that sum to 1.',
+  volume: 'The 3D isovist: the volume in view within the field, m³, every ray capped at Far. Telling indoors or with a small Far; in the open it grows with Far.',
+  area: 'The 2D isovist: the area in view around the eye in the horizontal plane, m², every ray capped at Far (space syntax).',
+  distance: 'How far the element sees: the log (geometric) mean distance over its field, m, an open ray counting as Far. Short is a wall in front, long an open view.',
+  distance_min: 'The nearest thing in view, m (Far when the whole field is open).',
+};
+/** The words under the column selector for a quantity of either analysis. */
+export function helpFor(q: string): string {
+  if (QUANTITY_HELP[q] || VIEW_HELP[q]) return QUANTITY_HELP[q] ?? VIEW_HELP[q];
+  const reach = /^reach_(.+)$/.exec(q), g = /^(.+)_distance(_min)?$/.exec(q);
+  if (reach) return `Share of the field that sees at least ${reach[1]} m before it meets anything, 0 to 1 (EN 17037 view distance levels: 6, 20 and 50 m; the ground below counts at its distance).`;
+  if (g) return g[2] ? `The nearest ${g[1]} in view, m; none where it is not in view.` : `The log mean distance to ${g[1]} over the rays that end on it, m; none where it is not in view.`;
+  return `Share of the field that ends on the target group ${q}, 0 to 1.`;
+}
+
+/** Where the shown column `name` is among a result's `columns`: itself; when it is gone, the first of the same quantity
+ *  (the other side, after the receiving side changed); else the first. */
+export const columnIndex = (columns: readonly string[], name: string): number => {
+  const i = columns.indexOf(name), q = splitColumn(name)[0];
+  return i >= 0 ? i : Math.max(columns.findIndex((c) => splitColumn(c)[0] === q), 0);
+};
+
+/** 'radiation_front' -> 'Radiation, front', 'sunhours_back' -> 'Sun hours, back', 'distance_min_front' -> 'Nearest
+ *  distance, front', 'reach_6_front' -> 'Reach 6 m, front'; a quantity alone -> 'Sun hours'. */
+export const columnLabel = (column: string): string => {
+  const [q, side] = splitColumn(column), cap = (t: string) => `${t[0].toUpperCase()}${t.slice(1)}`;
+  const name = q === 'sunhours' ? 'Sun hours' : q === 'distance_min' ? 'Nearest distance' : q === 'obstruction_total' ? 'Total obstruction' : q.startsWith('reach_') ? `Reach ${q.slice(6)} m`
+    : cap(q.replace(/_distance_min$/, ', nearest distance').replace(/_distance$/, ', distance').replace(/_/g, ' '));
+  return `${name}${side ? `, ${side}` : ''}`;
+};
+
+// Per result and column, the area-weighted mean over every element with a value (the view composition and reach bars).
+const means = new WeakMap<object, Map<string, number>>();
+/** `column`'s area-weighted mean in result `r` (NaN: no such column, or no element with a value). */
+export function areaMean(r: { columns: readonly string[]; data: readonly ArrayLike<number>[]; weights: ArrayLike<number> }, column: string): number {
+  let held = means.get(r);
+  if (!held) means.set(r, (held = new Map()));
+  let m = held.get(column);
+  if (m === undefined) {
+    const c = r.columns.indexOf(column), v = r.data[c];
+    let sw = 0, s = 0;
+    for (let i = 0; c >= 0 && i < v.length; i++) if (Number.isFinite(v[i])) { s += v[i] * r.weights[i]; sw += r.weights[i]; }
+    held.set(column, (m = sw > 0 ? s / sw : NaN));
+  }
+  return m;
+}
 
 /** The number fmtNum shows: 3 significant digits below 1000, whole above (the tools quote what the app and the PDF show). */
 export const roundNum = (v: number): number => (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toPrecision(3)));

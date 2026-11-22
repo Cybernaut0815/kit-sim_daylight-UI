@@ -1,6 +1,6 @@
 // Settings -> CLI flags for /run (every option explicit, so equal settings give equal request keys), and validation.
-import type { ObjectRow, Settings } from '../store';
-import { quantitiesFor } from '../store';
+import type { ObjectRow, Settings, ViewSim } from '../store';
+import { GROUP, QUANTITIES, quantitiesFor } from '../store';
 import { pvgisUrl } from './geo';
 import { doy, fmtClock, fmtTime } from './time';
 import { zoneAt } from './zone';
@@ -50,7 +50,7 @@ export const simFor = (sim: Settings['sim'], elements: number): Settings['sim'] 
 /** A model's receivers that cast no shade, as the core's --no-occlude (mesh ids in the order of their paths, so a run key
  *  with its ids as paths stays the same across re-reads); none while receivers do not block rays, when none casts shade
  *  anyway and the core builds the same scene. */
-export function noOccludeArgs(receivers: readonly Pick<ObjectRow, 'id' | 'path' | 'shade'>[], sim: Settings['sim']): string[] {
+export function noOccludeArgs(receivers: readonly Pick<ObjectRow, 'id' | 'path' | 'shade'>[], sim: Pick<Settings['sim'], 'selfOcclude'>): string[] {
   const ids = sim.selfOcclude ? receivers.filter((o) => o.shade === false).sort((x, y) => (x.path < y.path ? -1 : 1)).map((o) => o.id) : [];
   return ids.length ? ['--no-occlude', ids.join(';')] : [];
 }
@@ -89,5 +89,55 @@ export function validate(s: Settings, hasReceiver: boolean, materialsReady = tru
   if (notLeap && time.mode === 'instant' && feb29(time.date)) e.timeDate = noFeb29;
   if (notLeap && time.mode === 'range' && (feb29(time.from.date) || feb29(time.to.date))) e.timeTo = noFeb29;
   if (!materialsReady && sim.mode === 'physical' && (sim.transmission || sim.bounces > 0)) e.materials = 'Reading the materials…';
+  return e;
+}
+
+/** The view analysis' flags (the core's views; every option explicit, as buildArgs), north the site's. */
+export function viewArgs(v: ViewSim, north: number): string[] {
+  const a = ['--fov', v.fov.join(','), '--cell', String(v.cell), '--sides', v.sides, '--on', v.on, '--offset', String(v.offset), '--far', String(v.far),
+    '--virtual-ground', v.virtualGround ? 'on' : 'off', '--north', String(north)];
+  if (v.virtualGround && v.groundZ !== null) a.push('--ground-z', String(v.groundZ));
+  if (v.reach.trim()) a.push('--reach', v.reach.replace(/\s+/g, ''));
+  if (v.cullBackfaces) a.push('--cull-backfaces');
+  if (!v.selfOcclude) a.push('--no-self-occlude');
+  return a;
+}
+
+/** A model's targets as views --target ID=GROUP;... (shades with a group, in the order of their paths, as noOccludeArgs). */
+export function targetArgs(rows: readonly Pick<ObjectRow, 'id' | 'path' | 'role' | 'group'>[]): string[] {
+  const t = rows.filter((o) => o.role === 'shade' && o.group).sort((x, y) => (x.path < y.path ? -1 : 1)).map((o) => `${o.id}=${o.group}`);
+  return t.length ? ['--target', t.join(';')] : [];
+}
+
+/** Group names the core keeps for its own columns, and the daylight quantities (both analyses share colour settings by name). */
+const RESERVED = /^(sky|ground|obstruction|obstruction_total|glazing|volume|area|distance.*|reach.*|.*_distance|.*_distance_min)$/;
+/** A --reach value: '' (none), 'en17037', or 1 to 8 distinct positive metres. */
+export const reachOk = (r: string) => {
+  const t = r.replace(/\s+/g, '');
+  if (!t || t === 'en17037') return true;
+  const d = t.split(',').map(Number);
+  return d.length <= 8 && d.every((x) => x > 0 && Number.isFinite(x)) && new Set(d.map((x) => `${x}`)).size === d.length;
+};
+
+/**
+ * The view analysis' field id -> message, as validate(): no receiver, the field and cell (at most 2^20 rays per element;
+ * the default isovist all around needs 3 columns and, not flat, 2 rows), far, reach, the target groups of every model (at
+ * most 16, names the core takes), and the materials while glass is passed and they are still read.
+ */
+export function validateViews(v: ViewSim, groups: readonly string[], hasReceiver: boolean, materialsReady = true): Record<string, string> {
+  const e: Record<string, string> = {}, [h, lo, hi] = v.fov, flat = lo === 0 && hi === 0;
+  if (!hasReceiver) e.model = 'No receiver mesh. Select a mesh and mark it as a receiver.';
+  const used = [...new Set(groups)], bad = used.find((g) => !GROUP.test(g) || RESERVED.test(g) || (QUANTITIES as readonly string[]).includes(g));
+  if (bad !== undefined) e.groups = `Target group "${bad}": letters, digits, _ and - only, and not sky, ground, obstruction, obstruction_total, glazing, volume, area, a daylight quantity or a name starting with distance or reach.`;
+  else if (used.length > 16) e.groups = `${used.length} target groups: at most 16.`;
+  if (!((h > 0 && h <= 180) || h === 360)) e.fov = 'The field is up to 180° wide about the normal, or 360° all around.';
+  else if (!flat && !(lo >= -90 && lo < hi && hi <= 90)) e.fov = 'The field runs from a lower to a higher elevation, -90° to 90° (or 0 to 0: horizontal rays).';
+  const cols = Math.max(1, Math.round(h / v.cell)), rows = Math.max(1, Math.round((hi - lo) / v.cell));
+  if (!(v.cell > 0) || !Number.isFinite(v.cell)) e.cell = 'The cell must be more than 0°.';
+  else if (cols * rows > 2 ** 20) e.cell = `${cols} × ${rows} rays per element, over 1,048,576: take a coarser cell.`;
+  else if (!e.fov && h === 360 && (cols < 3 || (!flat && rows < 2))) e.cell = 'The isovist all around needs at least 3 columns and 2 rows: a finer cell, a taller field, or 0 to 0 for the horizontal one.';
+  if (!(v.far > 0.1) || !Number.isFinite(v.far)) e.far = 'Far must be more than 0.1 m.';
+  if (!reachOk(v.reach)) e.reach = 'Reach: EN 17037, or up to 8 different distances in metres, separated by commas.';
+  if (!materialsReady && v.transmission) e.materials = 'Reading the materials…';
   return e;
 }

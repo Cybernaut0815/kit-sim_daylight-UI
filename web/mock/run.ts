@@ -85,6 +85,7 @@ async function compute(req: IncomingMessage): Promise<{ status: 404; text: strin
   if (missing.length) return { status: 404, text: JSON.stringify({ missing }) };
   const arg = (k: string, d: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
   const sides = arg('--sides', 'front'), on = arg('--on', 'faces');
+  if (get('tool')[0] === 'views') return views(sensors, arg, sides, on);
   const columns = arg('--quantity', 'radiation').split(',').flatMap((q) => (sides === 'both' ? ['front', 'back'] : [sides]).map((s) => `${q}_${s}`));
   const from = hours(arg('--from', '')), to = hours(arg('--to', '')), win = /^(\d+):(\d+)-(\d+):(\d+)$/.exec(arg('--hours', ''));
   const duration_h = args.includes('--time') ? 1 : !args.includes('--from') ? 8760
@@ -99,6 +100,33 @@ async function compute(req: IncomingMessage): Promise<{ status: 404; text: strin
     columns, duration_h, dirs: { sky: 145, ground: 145, sun: Math.round(duration_h / 2) }, meshes: mm, run_s: 0.42,
     cache: { response: 'miss', scene: 'built', weather: args.includes('--clear-sky') ? 'none' : 'miss' },
   }) };
+}
+
+/** A views job (tool=views): the core's columns (docs/views.md, Output) with random values, the shares of each row summing
+ *  to 1, and its manifest's view and targets. */
+function views(sensors: string[], arg: (k: string, d: string) => string, sides: string, on: string): { status: 200 } & Result {
+  const [h, lo, hi] = arg('--fov', '120,-70,50').split(',').map(Number), cell = Number(arg('--cell', '2')), far = Number(arg('--far', '1000')), flat = lo === 0 && hi === 0;
+  const targets = arg('--target', '').split(';').filter(Boolean).map((t) => ({ mesh: t.slice(0, t.lastIndexOf('=')), group: t.slice(t.lastIndexOf('=') + 1) }));
+  const groups = [...new Set(targets.map((t) => t.group))], reach = arg('--reach', '') === 'en17037' ? [6, 20, 50] : arg('--reach', '').split(',').filter(Boolean).map(Number);
+  const shares = ['sky', 'ground', 'obstruction', ...groups], glass = arg('--transmission', 'off') === 'on';
+  const names = ['sky', 'ground', 'obstruction', 'obstruction_total', ...groups, ...(glass ? ['glazing'] : []), ...(h === 360 ? [flat ? 'area' : 'volume'] : ['distance', 'distance_min']), ...reach.map((d) => `reach_${d}`)];
+  const columns = names.flatMap((q) => (sides === 'both' ? ['front', 'back'] : [sides]).map((x) => `${q}_${x}`));
+  let first = 0;
+  const mm = sensors.map((id) => { const m = meshes.get(id)!, count = on === 'vertices' ? m.points : m.faces, r = { name: m.name, first, count }; first += count; return r; });
+  const values = new Float32Array(first * columns.length), at = (c: number, r: number) => c * first + r;
+  for (let r = 0; r < first; r++) {
+    for (let k = 0; k < columns.length / names.length; k++) { // per side: shares that sum to 1, then the rest
+      const w = shares.map(() => Math.random()), sum = w.reduce((a, x) => a + x, 0), per = names.length;
+      names.forEach((q, i) => {
+        const c = i * (columns.length / per) + k, open = w[0] / sum;
+        const s = shares.indexOf(q);
+        values[at(c, r)] = s >= 0 ? w[s] / sum : q === 'obstruction_total' ? 1 - w[0] / sum : q === 'glazing' ? 0.1 * Math.random() : q === 'volume' ? 50 + 400 * Math.random() : q === 'area' ? 20 + 200 * Math.random()
+          : q === 'distance' ? 5 * (far / 5) ** open : q === 'distance_min' ? 0.5 + 10 * Math.random() : open + (1 - open) * Math.random() * 0.5;
+      });
+    }
+  }
+  const view = { fov: [h, lo, hi], cell, grid: [Math.max(1, Math.round((hi - lo) / cell)), Math.max(1, Math.round(h / cell))], jitter: true, north: Number(arg('--north', '0')), offset: Number(arg('--offset', '0')), far, near: 0.1, virtual_ground: arg('--virtual-ground', 'on') === 'on', ground_z: 0, reach, classes: shares, image: 'rows from HI down, columns from the left' };
+  return { status: 200, values, rows: first, cols: columns.length, text: JSON.stringify({ columns, view, targets, meshes: mm, run_s: 0.21, cache: { response: 'miss', scene: 'built', weather: 'none' } }) };
 }
 
 /** POST /run's inline values: row-major float64 of the float32 values, base64. */

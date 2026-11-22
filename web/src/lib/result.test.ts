@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnStats, cumulative, faceAreas, fmtNum, globalRange, histogram, percentile, rangeShares, roundNum, shareAbove, shareBelow, fmtDiff, summarize, unionRange, unitFor, vertexAreas } from './result';
+import { areaMean, columnIndex, columnLabel, columnStats, cumulative, faceAreas, fmtNum, globalRange, helpFor, histogram, percentile, rangeShares, roundNum, shareAbove, shareBelow, fmtDiff, splitColumn, summarize, unionRange, unitFor, vertexAreas } from './result';
 
 // unit square in the XY plane as two triangles
 const pos = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -117,5 +117,43 @@ describe('several models', () => {
   it('fmtDiff: signed, in the value\'s format, nothing without a number', () => {
     expect([fmtDiff(12.34), fmtDiff(-1500), fmtDiff(0), fmtDiff(NaN), fmtDiff(Infinity)]).toEqual(['+12.3', '−1,500', '±0', '', '']);
     expect(fmtDiff(-0.05, (v) => `${fmtNum(100 * v)} pts`)).toBe('−5 pts');
+  });
+});
+
+describe('view analysis columns', () => {
+  it('columnIndex finds the shown column by name: itself, the same quantity on the side left, else the first', () => {
+    const views = ['sky_front', 'ground_front', 'obstruction_front', 'obstruction_total_front', 'water_front', 'distance_front'];
+    expect(columnIndex(views, 'distance_front')).toBe(5); // a target group added before it: still the distance
+    expect(columnIndex(['radiation_back', 'sunhours_back'], 'sunhours_front')).toBe(1); // the receiving side changed
+    expect(columnIndex(['radiation_front'], 'sunhours_front')).toBe(0); // the quantity is off: the first
+    expect([columnIndex(views, ''), columnIndex([], 'x')]).toEqual([0, 0]);
+  });
+  it('splitColumn keeps the names that hold _ whole', () => {
+    expect(splitColumn('radiation_front')).toEqual(['radiation', 'front']);
+    expect(splitColumn('distance_min_front')).toEqual(['distance_min', 'front']);
+    expect(splitColumn('reach_2.5_back')).toEqual(['reach_2.5', 'back']);
+    expect(splitColumn('water_distance_min_front')).toEqual(['water_distance_min', 'front']);
+    expect(splitColumn('sunhours')).toEqual(['sunhours', '']);
+  });
+  it('units, labels and help by quantity', () => {
+    expect(unitFor('distance_min_front')).toEqual({ value: 'm', total: '' });
+    expect(unitFor('water_distance_front').value).toBe('m');
+    expect(unitFor('volume_front').value).toBe('m³');
+    expect(unitFor('area_back').value).toBe('m²');
+    expect(unitFor('sky_front')).toEqual({ value: '', total: 'm²' });
+    expect(unitFor('reach_6_front')).toEqual({ value: '', total: 'm²' });
+    expect(unitFor('radiation_front')).toEqual({ value: 'kWh/m²', total: 'kWh' }); // daylight's as before
+    expect(['sky_front', 'distance_min_front', 'reach_6_back', 'water_distance_min_front', 'sunhours_back', 'green_park_front'].map(columnLabel))
+      .toEqual(['Sky, front', 'Nearest distance, front', 'Reach 6 m, back', 'Water, nearest distance, front', 'Sun hours, back', 'Green park, front']);
+    expect(helpFor('reach_20')).toMatch(/at least 20 m/);
+    expect(helpFor('water')).toMatch(/target group water/);
+    expect(helpFor('water_distance_min')).toMatch(/nearest water/);
+    expect(helpFor('sky')).toMatch(/open sky/);
+  });
+  it('areaMean weighs by area and skips the elements without a value', () => {
+    const r = { columns: ['a', 'b'], data: [new Float32Array([1, 3, NaN]), new Float32Array([NaN, NaN, NaN])], weights: new Float32Array([1, 3, 5]) };
+    expect(areaMean(r, 'a')).toBe(2.5);
+    expect(areaMean(r, 'b')).toBeNaN();
+    expect(areaMean(r, 'nope')).toBeNaN();
   });
 });

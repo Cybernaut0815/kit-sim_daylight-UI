@@ -12,9 +12,10 @@ import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
-import { paintStyleOf, type Scale } from '../lib/gradients';
+import { paintOf, type Scale } from '../lib/gradients';
+import { drawnValues, faceRow } from '../lib/topology';
 import { idsUnder } from '../lib/tree';
-import type { Action, ObjectRow, RunResult } from '../store';
+import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 
@@ -22,7 +23,7 @@ const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaqu
 /** The viewers' selection fill (one material for all of them): the accent, fainter over result colours. */
 export const selectionFill = (byValue: boolean) => ({ color: `#${new THREE.Color(solid('--accent')).getHexString()}`, opacity: byValue ? 0.12 : 0.14 });
 // Neutral tone mapping (the Plain view) lowers every colour by up to 0.04 (linear) before output; add it back so the grid
-// keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every zha hairline sits.
+// keeps its token colours over the CSS background. Exact below Neutral's 0.76 shoulder, where every kit-ui hairline sits.
 // ponytail: the sun path keeps its ~10/255 shift in the Plain view; untone its tokens too if it shows
 const untone = (c: THREE.Color) => { const m = Math.min(c.r, c.g, c.b), off = m < 0.04 ? 0.4 * Math.sqrt(m) - m : 0.04; return c.setRGB(c.r + off, c.g + off, c.b + off); };
 /** A view's hover tint, per view: a mesh has one parent, and each view's [meshes] cleanup resets it. A node material,
@@ -48,9 +49,12 @@ interface Props {
   follow: UsdViewerElement | null; // linked cameras: a view that shows a model, whose camera a new model takes instead of its own framing
   loading: boolean; error?: string | null; objects: ObjectRow[]; selected: Set<string>; hovered: string | null; // error: shown here (several models)
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
+  bins?: readonly [number, number][]; // the selected histogram bars' value ranges: kept bright with the hovered one
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
+  around?: readonly string[] | null; // the prim paths of the meshes the sun path is fitted to (null: the whole model)
   section: string | null; // the section shown, in words (null: none)
+  analysis?: Tab; // whose roles `objects` carry (the scene info's words)
 }
 
 interface Ctx {
@@ -59,22 +63,22 @@ interface Ctx {
   dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
 }
 
-/** The scene info at the top right of the view: meshes by role, faces and vertices, units, the section, and the frame
+/** The scene info at the top right of the view: meshes by role, drawn triangles and vertices, units, the section, and the frame
  *  line. */
-function SceneInfo({ objects, unit, section, stats }: { objects: ObjectRow[]; unit: number; section: string | null; stats: RefObject<HTMLSpanElement | null> }) {
+function SceneInfo({ objects, unit, section, stats, analysis }: { objects: ObjectRow[]; unit: number; section: string | null; stats: RefObject<HTMLSpanElement | null>; analysis?: Tab }) {
   const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
-  const ignored = n('none');
+  const ignored = n('none'), targets = objects.reduce((k, o) => k + (o.role === 'shade' && o.group ? 1 : 0), 0);
   return (
     <div className="viewport__info" aria-hidden="true">
-      <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {f(n('shade'))} shading{ignored ? `, ${f(ignored)} ignored` : ''}</span>
-      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
+      <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {analysis === 'views' ? `${f(n('shade') - targets)} blocking, ${f(targets)} targets` : `${f(n('shade'))} shading`}{ignored ? `, ${f(ignored)} ignored` : ''}</span>
+      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} triangles, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
       {section && <span>Section: {section}</span>}
       <span ref={stats} />
     </div>
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, section }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -147,7 +151,8 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.addEventListener('selectionchange', onSel);
 
     // Hover and probe: pointermove raycasts the rows' objects (not their children: the overlays) once per frame; the
-    // element is the face, or the nearest vertex of the hit face. What the section cuts away is passed through.
+    // element is the face the hit triangle belongs to, or the point at the nearest corner of that triangle (the
+    // receiver's own faces and points: lib/topology.ts). What the section cuts away is passed through.
     // ponytail: linear raycast over every mesh; three-mesh-bvh past ~1M triangles
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3();
     const hitAt = (e: PointerEvent) => {
@@ -164,14 +169,15 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       let element: number | null = null, value = NaN;
       const k = recv.get(id) ?? -1;
       if (result && k >= 0 && hit.faceIndex != null) {
-        if (result.on === 'faces') element = hit.faceIndex;
-        else if (hit.face) { // per-vertex results keep the geometry indexed, so the face corners are the row indices
+        const form = result.forms?.[k] ?? null;
+        if (result.on === 'faces') element = faceRow(form, hit.faceIndex);
+        else if (hit.face) { // the geometry stays indexed: the hit face's corners are index[3 faceIndex + j]
           const mesh = hit.object as THREE.Mesh, pos = mesh.geometry.attributes.position;
           let best = Infinity;
-          for (const vi of [hit.face.a, hit.face.b, hit.face.c]) {
+          [hit.face.a, hit.face.b, hit.face.c].forEach((vi, j) => {
             const d = p.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld).distanceToSquared(hit.point);
-            if (d < best) { best = d; element = vi; }
-          }
+            if (d < best) { best = d; element = form ? form.cornerRow[3 * hit.faceIndex! + j] : vi; }
+          });
         }
         const g = result.manifest.meshes[k];
         if (element !== null && element < g.count) value = result.data[column][g.first + element]; else element = null;
@@ -266,17 +272,20 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     };
   }, [dispatch, usd, slot]);
 
-  // A new model: the sun path's dome and the grid fit every mesh, whatever its role.
+  // A new model: the sun path's dome and the grid fit every mesh, whatever its role. The dome alone fits the meshes
+  // at the `around` paths instead, when given (the Time panel's "Around selection"): it stands on their lowest point
+  // and encloses them; paths that are gone (a variant switched) leave the whole model.
   useEffect(() => {
     const c = ctx.current;
     if (!c || !meshes.size) return;
-    const box = new THREE.Box3();
+    const box = new THREE.Box3(), part = new THREE.Box3(), want = new Set(around);
     for (const o of meshes.values()) box.expandByObject(o); // an InstancedMesh by the bounds of its instances
-    const size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
-    const r0 = Math.hypot(size.x / 2, size.y, size.z / 2) || 1; // the dome stands on the ground and encloses the model
-    c.dome = { x: centre.x, y: box.min.y, z: centre.z, r: r0 };
-    c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * r0), x: centre.x, y: box.min.y, z: centre.z };
-  }, [meshes]);
+    for (const o of objects) { const m = want.has(o.path) && meshes.get(o.id); if (m) part.expandByObject(m); }
+    const domeOf = (b: THREE.Box3) => { const s = b.getSize(new THREE.Vector3()), at = b.getCenter(new THREE.Vector3()); return { x: at.x, y: b.min.y, z: at.z, r: Math.hypot(s.x / 2, s.y, s.z / 2) || 1 }; };
+    const size = box.getSize(new THREE.Vector3()), whole = domeOf(box); // the dome stands on the ground and encloses the model
+    c.dome = part.isEmpty() ? whole : domeOf(part);
+    c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * whole.r), x: whole.x, y: whole.y, z: whole.z };
+  }, [meshes, around]); // eslint-disable-line react-hooks/exhaustive-deps -- the rows' paths change with the meshes
 
   // Sun path: the scaffold follows the site and the theme, the frame the model, north and size, the active layer the time.
   useEffect(() => {
@@ -291,7 +300,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     if (!c) return;
     c.sun.frame(c.dome.x, c.dome.y, c.dome.z, c.dome.r * (sun?.scale ?? 1), sun?.north ?? 0); // placed while hidden too
     usd.three.invalidate();
-  }, [meshes, sun?.north, sun?.scale]); // eslint-disable-line react-hooks/exhaustive-deps -- only north and size move the frame
+  }, [meshes, around, sun?.north, sun?.scale]); // eslint-disable-line react-hooks/exhaustive-deps -- only the fit, north and size move the frame
   useEffect(() => {
     const c = ctx.current;
     if (!c || !sun || !hasModel) return;
@@ -330,26 +339,32 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.highlight = selectionFill(!!byValue);
   }, [!!byValue, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
-  // Paint: the viewer draws the receivers from their values (views into the result column, no copies: one value per
-  // drawn triangle, or vertex, in its geometry's order, as the run was sent), the colours from the scale and the hovered
-  // bin as a style of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new
-  // scale, range or bin) only restyle.
+  // Paint: the viewer draws the receivers from their values, the colours from the scale and the hovered bin as a style
+  // of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new scale, range or
+  // bin) only restyle. A receiver's rows are its own faces or points (lib/topology.ts): a face's value goes to each of
+  // its drawn triangles, a point's to the drawn corners that name it (so two parts meeting at one drawn vertex keep
+  // their own values). A receiver sent as drawn has a row per triangle or vertex: views into the column, no copies.
+  // A scaling or moved stops (lib/gradients paintOf): the values go through its map on the way, and are painted again
+  // when the map changes (its key); a linear scale with even stops stays uniforms only.
+  const paint = useMemo(() => (scale ? paintOf(scale) : null), [scale]);
   useEffect(() => {
-    if (scale) usd.paintStyle = paintStyleOf(scale, bin);
-  }, [scale, bin]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
+    if (paint) usd.paintStyle = paint.style(bin || bins?.length ? [...(bins ?? []), ...(bin ? [bin] : [])] : null); // the selected bars and the hovered one
+  }, [paint, bin, bins]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
   useEffect(() => {
     const items: { rid: number; values: Float32Array }[] = [];
+    const perVertex = byValue?.on === 'vertices', corners = perVertex && !!byValue.forms?.some(Boolean); // one mode per paint
+    const map = paint?.map ?? undefined;
     if (byValue && scale) {
       const role = new Map(objects.map((o) => [o.id, o.role])), col = byValue.data[column];
       for (const [id, obj] of meshes) {
         const k = role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1;
         if (k < 0) continue;
-        const g = byValue.manifest.meshes[k];
-        items.push({ rid: obj.userData.rid as number, values: col.subarray(g.first, g.first + g.count) });
+        const g = byValue.manifest.meshes[k], rows = col.subarray(g.first, g.first + g.count), index = (obj as THREE.Mesh).geometry?.index?.array;
+        items.push({ rid: obj.userData.rid as number, values: perVertex && !(corners && index) ? (map ? rows.map(map) : rows) : drawnValues(rows, byValue.forms?.[k] ?? null, byValue.on, index ?? [], map) });
       }
     }
-    void usd.paint(items, byValue?.on === 'vertices' ? 'vertex' : 'face'); // the viewer warns about what it skips (its log)
-  }, [meshes, objects, byValue, recv, column, !!scale]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above
+    void usd.paint(items, !perVertex ? 'face' : corners ? 'corner' : 'vertex'); // the viewer warns about what it skips (its log)
+  }, [meshes, objects, byValue, recv, column, !!scale, paint?.key]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above, a new map paints again
 
   // Hover: a light accent tint over the mesh, fainter over results.
   useEffect(() => {
@@ -390,7 +405,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
           {error && hasModel && <span className="badge badge--warning" title={error}><span className="dot" />Problems</span>}
         </div>
       )}
-      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} section={section} stats={stats} />}
+      {hasModel && <SceneInfo objects={objects} unit={usd.stage?.metersPerUnit ?? 1} section={section} stats={stats} analysis={analysis} />}
       {ready && !hasModel && !loading && (error
         ? <div className="empty-state"><Alert title="Problems loading the model">{error}</Alert></div>
         : (

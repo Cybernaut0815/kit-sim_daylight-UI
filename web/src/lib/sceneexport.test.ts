@@ -12,17 +12,24 @@ const quad = () => new BufferGeometry()
 
 describe('resultGeometry', () => {
   it('per face: the triangles split, each corner with its triangle colour and values (NaN as 0)', () => {
-    const g = resultGeometry(quad(), { perFace: true, rgb: new Float32Array([1, 0, 0, 0, 1, 0]), values: [{ name: 'radiation_front', data: [10, NaN] }] });
+    const g = resultGeometry(quad(), { per: 'face', rgb: new Float32Array([1, 0, 0, 0, 1, 0]), values: [{ name: 'radiation_front', data: [10, NaN] }] });
     expect(g.index).toBeNull();
     expect(g.attributes.position.count).toBe(6);
     expect([...g.attributes.color.array]).toEqual([1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]);
     expect([...g.attributes._daylight_radiation_front.array]).toEqual([10, 10, 10, 0, 0, 0]);
   });
   it('per vertex: the indexed vertices keep their own values', () => {
-    const g = resultGeometry(quad(), { perFace: false, rgb: new Float32Array(12).fill(0.5), values: [{ name: 'x', data: [1, 2, 3, 4] }] });
+    const g = resultGeometry(quad(), { per: 'vertex', rgb: new Float32Array(12).fill(0.5), values: [{ name: 'x', data: [1, 2, 3, 4] }] });
     expect(g.index?.count).toBe(6);
     expect([...g.attributes._daylight_x.array]).toEqual([1, 2, 3, 4]);
     expect(g.attributes.color.count).toBe(4);
+  });
+  it('per corner: the triangles split, each corner with its own value (two points at one drawn vertex differ)', () => {
+    const g = resultGeometry(quad(), { per: 'corner', rgb: Float32Array.from({ length: 18 }, (_, i) => i / 18), values: [{ name: 'x', data: [1, 2, 3, 7, 8, 9] }] });
+    expect(g.index).toBeNull();
+    expect(g.attributes.position.count).toBe(6);
+    expect([...g.attributes._daylight_x.array]).toEqual([1, 2, 3, 7, 8, 9]); // vertex 0: 1 in the first triangle, 7 in the second
+    expect(g.attributes.color.getX(3)).toBeCloseTo(9 / 18, 6);
   });
 });
 
@@ -67,7 +74,7 @@ describe('export space and the scene', () => {
   it('one node per copy with its matrix, receivers unlit with their values', () => {
     const drawn: Drawn[] = [
       { name: '/World/Shade', geometry: quad(), matrices: [new Matrix4(), new Matrix4().makeTranslation(5, 0, 0)], material: null },
-      { name: '/World/Roof', geometry: quad(), matrices: [new Matrix4()], material: null, result: { perFace: true, rgb: new Float32Array(6), values: [{ name: 'a', data: [1, 2] }] } },
+      { name: '/World/Roof', geometry: quad(), matrices: [new Matrix4()], material: null, result: { per: 'face', rgb: new Float32Array(6), values: [{ name: 'a', data: [1, 2] }] } },
     ];
     const scene = gltfScene(drawn);
     const meshes = scene.children.filter((c): c is Mesh => (c as Mesh).isMesh);
@@ -83,7 +90,7 @@ describe('export space and the scene', () => {
 describe('objText', () => {
   it('numbers vertices and normals apart across meshes, colours after the coordinates', () => {
     const drawn: Drawn[] = [
-      { name: 'A mesh', geometry: quad(), matrices: [new Matrix4()], material: null, result: { perFace: false, rgb: new Float32Array(12).fill(1), values: [] } },
+      { name: 'A mesh', geometry: quad(), matrices: [new Matrix4()], material: null, result: { per: 'vertex', rgb: new Float32Array(12).fill(1), values: [] } },
       { name: 'B', geometry: new BufferGeometry().setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)), matrices: [new Matrix4().makeScale(2, 2, 2)], material: new MeshBasicMaterial({ color: 0xff0000 }) },
     ];
     const text = objText(drawn).join(''), lines = text.split('\n');

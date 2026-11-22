@@ -16,7 +16,8 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import type { StageInfo, UsdViewerElement } from 'usd-viewer';
 import { lin, rgbFor, type Scale } from '../lib/gradients';
 import { exportMatrices, gltfScene, objText, type Drawn } from '../lib/sceneexport';
-import { freeName, overlay, overlayArrays, polygonCorners, polygonGeometry, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
+import { drawnValues } from '../lib/topology';
+import { freeName, overlay, overlayArrays, polygonCorners, polygonGeometry, rowsOnPolygons, toCorners, toPolygons, variantsSpec, type OverlayMesh, type ResultMesh } from '../lib/usdexport';
 import { usdz } from '../lib/usdz';
 import { stableKey } from '../mcp/tools';
 import type { ObjectRow, RunResult } from '../store';
@@ -68,15 +69,16 @@ export function npyHeader(shape: number[]): Uint8Array {
 }
 
 /** The values download's files: values.npy (rows x columns, float32), weights.npy (each row's area) and values.json
- *  (the columns, each receiver's rows by path, what ran). The columns go in as they are when they are one buffer. */
+ *  (the columns, each receiver's rows by path and what a row of it is, what ran). The columns go in as they are when
+ *  they are one buffer. */
 export function valuesFiles(r: RunResult, objects: readonly ObjectRow[]): [string, Uint8Array][] {
   const rows = r.weights.length, c0 = r.data[0], one = r.data.every((c, k) => c.buffer === c0.buffer && c.byteOffset === c0.byteOffset + 4 * rows * k);
   const body = one ? new Uint8Array(c0.buffer, c0.byteOffset, 4 * rows * r.data.length) : new Uint8Array(r.data.reduce((b, c, k) => (b.set(new Uint8Array(c.buffer, c.byteOffset, 4 * rows), 4 * rows * k), b), new Uint8Array(4 * rows * r.data.length)).buffer);
   const cat = (a: Uint8Array, b: Uint8Array) => { const out = new Uint8Array(a.length + b.length); out.set(a); out.set(b, a.length); return out; };
   const path = new Map(objects.map((o) => [o.id, o.path]));
   const meta = {
-    columns: r.columns, elements: r.on, rows, order: 'values.npy: rows x columns, float32 (column-major); weights.npy: each row\'s area in m² (vertices: its share of the faces round it)',
-    meshes: r.manifest.meshes.map((g, k) => ({ path: path.get(r.receivers[k]) ?? null, first: g.first, count: g.count })),
+    columns: r.columns, elements: r.on, rows, order: 'values.npy: rows x columns, float32 (column-major); weights.npy: each row\'s area in m² (vertices: its share of the faces round it). A mesh\'s rows: its own faces (in drawn order: the file\'s, faces of a material subset together) or its own points (those a face uses, in order of first use); "triangles" / "vertices": the mesh as drawn',
+    meshes: r.manifest.meshes.map((g, k) => ({ path: path.get(r.receivers[k]) ?? null, first: g.first, count: g.count, rows: r.forms?.[k] ? (r.on === 'faces' ? 'faces' : 'points') : r.on === 'faces' ? 'triangles' : 'vertices' })),
     args: (JSON.parse(stableKey(r.key, objects)) as [string[]])[0], duration_h: r.manifest.duration_h, ...(r.switches ? { switches: r.switches } : {}), // mesh ids as prim paths
   };
   // ponytail: a header and the columns in one copy (a zip writes them in one buffer anyway); Blob parts if 2x hurts
@@ -99,11 +101,13 @@ export async function download(format: Format, mode: ExportMode, o: DownloadOpti
     if (!map) throw new Error(`${row.name}: the viewer has no polygons for this mesh.`);
     const geo = object.geometry, position = geo.getAttribute('position'), normal = geo.getAttribute('normal');
     const index = geo.index ? geo.index.array : Uint32Array.from({ length: position.count }, (_, i) => i);
-    if ((perFace ? index.length / 3 : position.count) !== g.count || map.faces.length !== index.length / 3) throw new Error(`${row.name}: ${g.count} results for another mesh. Run again, then download.`);
+    const form = r.forms?.[k] ?? null, want = perFace ? form?.faces ?? index.length / 3 : form?.points ?? position.count; // its rows: its own faces and points, or as drawn
+    if (want !== g.count || map.faces.length !== index.length / 3 || (form && form.cornerRow.length !== index.length)) throw new Error(`${row.name}: ${g.count} results for another mesh. Run again, then download.`);
     const poly = polygonCorners(index, map), rowsOf = (a: Float32Array) => a.subarray(g.first, g.first + g.count); // views, no copies
+    const from = form && rowsOnPolygons(form, poly, perFace);
     const columns = r.columns.map((name, c) => {
       const raw = rowsOf(r.data[c]);
-      const data = perFace ? toPolygons(raw, poly.polygonOf, poly.counts.length, rowsOf(r.weights)) : toCorners(raw, poly.corners);
+      const data = from ? Float32Array.from(from, (i) => (i >= 0 ? raw[i] : NaN)) : perFace ? toPolygons(raw, poly.polygonOf, poly.counts.length, rowsOf(r.weights)) : toCorners(raw, poly.corners);
       // replace writes the shown column's colours only: no 12 B per element for the others (0.2 GB a column at bhs)
       return { name, data, rgb: mode === 'variants' || c === o.column ? rgbFor(o.scales[c], data, null).map(lin) : new Float32Array(0) };
     });
@@ -175,12 +179,14 @@ async function drawnFile(format: Format, o: DownloadOptions, stem: string): Prom
     if (item.kind !== 'mesh' || !object?.visible) continue;
     const k = receivers.get(object), matrices = exportMatrices(object, scale);
     if (k === undefined) { drawn.push({ name: item.path, geometry: object.geometry, matrices, material: usd.three.materials(item.rid) }); continue; }
-    const g = r.manifest.meshes[k], geo = object.geometry, n = perFace ? (geo.index ? geo.index.count : geo.attributes.position.count) / 3 : geo.attributes.position.count;
-    if (n !== g.count) throw new Error(`${item.path}: ${g.count} results for another mesh. Run again, then download.`);
-    const column = (c: number) => r.data[c].subarray(g.first, g.first + g.count);
+    const g = r.manifest.meshes[k], geo = object.geometry, corners = geo.index ? geo.index.count : geo.attributes.position.count;
+    const form = r.forms?.[k] ?? null, n = perFace ? form?.faces ?? corners / 3 : form?.points ?? geo.attributes.position.count; // its rows: its own faces and points, or as drawn
+    if (n !== g.count || (form && form.cornerRow.length !== corners)) throw new Error(`${item.path}: ${g.count} results for another mesh. Run again, then download.`);
+    // on the drawn triangles: a face's value on each of its triangles, a point's on the corners that name it
+    const column = (c: number) => { const rows = r.data[c].subarray(g.first, g.first + g.count); return form ? drawnValues(rows, form, r.on, []) : rows; };
     drawn.push({
       name: item.path, geometry: geo, matrices, material: null,
-      result: { perFace, rgb: rgbFor(shown, column(o.column), null).map(lin), values: r.columns.map((name, c) => ({ name, data: column(c) })) },
+      result: { per: perFace ? 'face' : form ? 'corner' : 'vertex', rgb: rgbFor(shown, column(o.column), null).map(lin), values: r.columns.map((name, c) => ({ name, data: column(c) })) },
     });
   }
   if (format === 'obj') return save(objText(drawn), `${stem}_daylight.obj`);

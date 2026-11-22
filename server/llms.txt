@@ -21,6 +21,8 @@ putSession, deleteSession.
 2. POST /jobs (multipart/form-data): `sensors` = receiving mesh ids (repeat the field), `context` = shading-only mesh
    ids, `args` = CLI flags, one token per field (e.g. --lat 52.52 --lon 13.41 --tz 1 --quantity radiation,sunhours),
    weather = an `epw` file part, an `epw_url`, or the --clear-sky flag. 404 {"missing": [...]}: upload those, resubmit.
+   View analysis: `tool` = views, the views CLI flags in `args` (--fov, --target NAME=GROUP, --reach en17037, ...;
+   table in RunRequest.tool), no weather; `context` = meshes that only block rays.
 3. GET /jobs/{id}?wait=25 until `state` is done, error or cancelled (each call returns early when something changes).
 4. done: GET /jobs/{id}/values = float32 little-endian, column-major: column 0 for every row, then column 1, ...
    (rows = sum(meshes[].count), ?col=k for one column); rows of mesh k are meshes[k].first .. first+count-1, one per
@@ -32,6 +34,9 @@ putSession, deleteSession.
 ## Conventions
 
 - Mesh coordinates: metres, Z up, right-handed winding; the face normal is the front side.
+- Columns `<quantity>_<side>` (sides inner). Views: `<name>_<side>`: shares sky, ground, obstruction, one per target
+  group (summing to 1), with obstruction_total (all that is not sky: 1 - sky) after obstruction, glazing, then volume m3 or
+  area m2 (the isovist), distance and distance_min m, reach_<D>.
 - Units: radiation, direct, diffuse kWh/m2 over the period; irradiance W/m2 mean; illuminance lux mean; sunhours h.
   direct = beam x transmittance; sunhours = equivalent full-sun hours (an hour behind tau 0.6 counts 0.6; an exact
   count while every surface is opaque, the default). With --bounces > 0, radiation, diffuse, irradiance and
@@ -66,7 +71,8 @@ putSession, deleteSession.
 - Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime, 507 = out of
   memory (the job fails, the server keeps running), 413 = a result over 134,217,728 values (rows x columns). An
   --optics row naming no mesh of the run (or several), a slot out of range or a row given twice, and a --no-occlude
-  NAME that is unknown, ambiguous or a context mesh, fail the job (state error, status 500), not the submission.
+  NAME that is unknown, ambiguous or a context mesh (views: also a --target NAME), fail the job (state error, status
+  500), not the submission.
 - Send X-Client-Id to identify your client: at most 2 jobs queued or running per client (429), 32 in the queue (503),
   both with Retry-After. Finished jobs are kept 15 minutes (the oldest go first
   beyond 1 GB of results). Identical requests are answered from a result cache.

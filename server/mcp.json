@@ -122,14 +122,15 @@
             "description": "Colour scale and problem range of one quantity (its front and back columns share them).",
             "properties": {
               "quantity": { "type": "string", "enum": ["radiation", "direct", "diffuse", "irradiance", "illuminance", "sunhours"], "description": "Quantity; default the shown column's." },
-              "gradient": { "type": "string", "enum": ["inferno", "magma", "plasma", "viridis", "cividis", "turbo", "ladybug", "greys"], "description": "Colour gradient." },
+              "gradient": { "type": "string", "description": "Colour gradient: inferno, magma, plasma, viridis, cividis, turbo, ladybug, greys, blues, greens, oranges, purples, or the key of a gradient the user made in the app (a key that is none gives the quantity's default)." },
+              "scaling": { "type": "string", "enum": ["linear", "log", "sqrt", "square", "equalised"], "description": "How the values spread along the gradient between min and max: linear; log (equal ratios, equal steps: small values spread out); sqrt (stretches the low end); square (stretches the high end); equalised (every colour covers the same number of elements above the lowest value). Colours only: no number changes." },
               "min": { "type": ["number", "null"], "description": "Legend minimum in the quantity's unit; null = the data's, over every model." },
               "max": { "type": ["number", "null"], "description": "Legend maximum in the quantity's unit; null = the data's, over every model." },
               "below": { "type": ["number", "null"], "description": "Problem range: values under it are painted belowColour and count as problems; null = no lower bound." },
               "above": { "type": ["number", "null"], "description": "Problem range: values over it are painted aboveColour and count as problems; null = no upper bound." },
               "belowColour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Colour under the range, '#rrggbb', shared by every quantity (default #0000ff)." },
               "aboveColour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Colour over the range, '#rrggbb', shared by every quantity (default #ff0000)." },
-              "reset": { "type": "string", "enum": ["scale", "range"], "description": "Applied first: 'scale' restores gradient, min and max; 'range' clears the problem range and restores both colours." }
+              "reset": { "type": "string", "enum": ["scale", "range"], "description": "Applied first: 'scale' restores gradient, scaling, min and max; 'range' clears the problem range and restores both colours." }
             },
             "additionalProperties": false
           },

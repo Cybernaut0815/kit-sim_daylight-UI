@@ -2,13 +2,16 @@
 // unrefined keeps its own faces, so only its colours, values and material change; a refined surface or an implicit
 // shape is written as its own polygons (the refined quads, the generated cube faces). The viewer core says which
 // polygon each drawn triangle came from (meshMap); a polygon's triangles are consecutive and fan from its first corner.
-// - per face: one value per polygon, the area-weighted mean of its triangles (uniform);
-// - per vertex: one value per polygon corner, the drawn vertex there (faceVarying, exact across seams).
+// - per face: one value per polygon (uniform): its row, a receiver's rows being its faces (lib/topology.ts); for a
+//   receiver sent as drawn, the area-weighted mean of its triangles;
+// - per vertex: one value per polygon corner (faceVarying, exact across seams and where parts meet): the row of the
+//   point there, or the drawn vertex's for a receiver sent as drawn.
 // Every result is a value primvar (primvars:daylight_<result>, as the Python write_results names them) and the shown
 // colours a linear displayColor, bound to a material that reads it.
 // - overlay(): a root layer over the model files (Replace mode);
 // - variantsSpec(): what the core needs to flatten the stage with a variant set per receiver (Variants mode).
 import type { ExportAttribute, ExportVariantsSpec, MeshMap } from 'usd-viewer';
+import type { Topology } from './topology';
 import { arrayParts, num } from './usda';
 
 export type Interp = 'uniform' | 'faceVarying';
@@ -60,6 +63,25 @@ export function polygonCorners(indices: ArrayLike<number>, map: Pick<MeshMap, 'f
   let at = 0;
   runs.forEach((run, p) => { write(run, corners, at); at += counts[p]; polygonOf.fill(p, run.start, run.end); });
   return { counts, corners, polygonOf };
+}
+
+/**
+ * Where a USD result reads a receiver's rows (lib/topology.ts): per polygon of `poly` its face row, or per polygon
+ * corner the point row there; -1 for what drew nothing (a hole). `poly` = polygonCorners of the same drawn triangles.
+ */
+export function rowsOnPolygons(t: Topology, poly: { counts: Int32Array; polygonOf: Int32Array }, perFace: boolean): Int32Array {
+  const { counts, polygonOf } = poly, off = new Int32Array(counts.length + 1);
+  for (let p = 0; p < counts.length; p++) off[p + 1] = off[p] + counts[p];
+  const out = new Int32Array(perFace ? counts.length : off[counts.length]).fill(-1);
+  for (let r = 0; r < t.faces; r++) {
+    const t0 = t.faceStart[r], p = polygonOf[t0];
+    if (perFace) { out[p] = r; continue; }
+    // the fan back to the polygon's corners: 0, then 1 and 2 of its first triangle, then each next triangle's last
+    out[off[p]] = t.cornerRow[3 * t0];
+    out[off[p] + 1] = t.cornerRow[3 * t0 + (t.flipped ? 2 : 1)];
+    for (let i = t0, k = off[p] + 2; i < t.faceStart[r + 1]; i++, k++) out[k] = t.cornerRow[3 * i + (t.flipped ? 1 : 2)];
+  }
+  return out;
 }
 
 /** Per-triangle values -> per polygon: the area-weighted mean (the plain mean if the areas are all zero; NaN if none). */

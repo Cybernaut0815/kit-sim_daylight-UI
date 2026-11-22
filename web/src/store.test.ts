@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_KEY } from './lib/optics';
-import { defaultSettings, initialState, parseSettings, reducer, runBatch, serializeSettings, type ObjectRow, type RunResult, type State, type Station } from './store';
+import { defaultSettings, initialState, parseSettings, reducer, runBatch, serializeSettings, swapModel, swapState, type ObjectRow, type RunResult, type State, type Station } from './store';
 
 const obj = (id: string, role: ObjectRow['role'] = 'receiver'): ObjectRow => ({ id, name: id, path: `/${id}`, tris: 2, verts: 4, role });
 const m = (s: State, slot = 0) => s.models.find((x) => x.slot === slot)!; // a model's own fields
@@ -270,18 +270,19 @@ describe('several models', () => {
     expect(reducer(gone, { type: 'RUN', slot: 1, run: { status: 'done', result: result('b') } })).toBe(gone);
     expect(reducer(gone, { type: 'LOAD', slot: 1, objects: [obj('c')] })).toBe(gone);
   });
-  it('colourBy turns to values on the first result of any model; the shared column starts over only when no result is left', () => {
+  it('colourBy turns to values on the first result of any model; the shown column, a name, stays through loads and roles', () => {
     let s = reducer(two(), { type: 'RUN', slot: 1, run: { status: 'done', result: result('b', ['radiation_front', 'direct_front']) } });
     expect(s.colourBy).toBe('value');
-    s = reducer(reducer(s, { type: 'COLUMN', column: 1 }), { type: 'COLOUR_BY', colourBy: 'plain' });
+    s = reducer(reducer(s, { type: 'COLUMN', column: 'direct_front' }), { type: 'COLOUR_BY', colourBy: 'plain' });
     s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result('a') } });
     expect(s.colourBy).toBe('plain'); // not the first result any more
-    expect(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('a2')] }).column).toBe(1); // B still has one
-    expect(reducer(s, { type: 'ROLE', slot: 1, ids: ['b'], role: 'shade' }).column).toBe(1); // A still has one
+    expect(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('a2')] }).column).toBe('direct_front');
+    expect(reducer(s, { type: 'ROLE', slot: 1, ids: ['b'], role: 'shade' }).column).toBe('direct_front');
+    // the only result gone (a role changed): the next run shows the same column again, not the first
     const lone = reducer(reducer(s, { type: 'REMOVE', slot: 0 }), { type: 'ROLE', slot: 1, ids: ['b'], role: 'shade' });
-    expect([lone.column, m(lone, 1).result]).toEqual([0, null]); // the only result gone: as for one model
+    expect([lone.column, m(lone, 1).result]).toEqual(['direct_front', null]);
     const none = reducer(reducer(s, { type: 'LOAD', slot: 1, objects: [] }), { type: 'REMOVE', slot: 0 });
-    expect([none.column, none.colourBy]).toEqual([0, 'plain']);
+    expect([none.column, none.colourBy]).toEqual(['direct_front', 'plain']);
   });
   it('Materials edits are per model', () => {
     let s = reducer(two(), { type: 'OPTICS_EDIT', slot: 1, key: '/M/Glass', edit: { rho: 0, tau: 0.5, kind: 'glass' } });
@@ -321,5 +322,70 @@ describe('runBatch', () => {
     const b = batch(), ctrl = new AbortController();
     await runBatch([b.job(0, { ready: () => false }), b.job(1, { abort: ctrl }), b.job(2)], ctrl.signal, b.settle);
     expect(b.log).toEqual(['settle 0 idle', 'run 1', 'settle 1 idle', 'settle 2 idle']);
+  });
+});
+
+describe('the view analysis', () => {
+  const result = (receivers: string[], columns = ['sky_front']): RunResult => ({ data: [], weights: new Float32Array(), columns, receivers, on: 'faces', key: 'k', elapsed: 0, manifest: { columns, meshes: [] } });
+  const loaded = () => reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a'), obj('b', 'none'), obj('c', 'shade')] });
+  it("LOAD gives both analyses the same rows; untagged actions act on daylight's, tagged ones on the view analysis'", () => {
+    let s = loaded();
+    expect(m(s).viewAnalysis.objects).toBe(m(s).objects);
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['b'], role: 'shade', tab: 'views', group: 'water' });
+    s = reducer(s, { type: 'COLUMN', column: 'obstruction_front', tab: 'views' });
+    s = reducer(s, { type: 'ERRORS', errors: { model: 'x' }, tab: 'views' });
+    expect(m(s).objects.map((o) => o.role)).toEqual(['receiver', 'none', 'shade']);
+    expect(m(s).viewAnalysis.objects.map((o) => [o.role, o.group])).toEqual([['receiver', undefined], ['shade', 'water'], ['shade', undefined]]);
+    expect([s.column, s.errors, s.viewAnalysis.column, s.viewAnalysis.errors]).toEqual(['', {}, 'obstruction_front', { model: 'x' }]);
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'none' }); // daylight's: the view roles stay
+    expect([m(s).objects[0].role, m(s).viewAnalysis.objects[0].role]).toEqual(['none', 'receiver']);
+  });
+  it('a run lands in its own analysis; a views result is dropped when its receivers changed meanwhile', () => {
+    let s = loaded();
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result(['a']) }, tab: 'views' });
+    expect([m(s).result, m(s).viewAnalysis.result?.columns, s.viewAnalysis.colourBy, s.colourBy]).toEqual([null, ['sky_front'], 'value', 'plain']);
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'shade', tab: 'views' });
+    expect(m(s).viewAnalysis.result).toBeNull();
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result(['a']) }, tab: 'views' });
+    expect([m(s).viewAnalysis.result, m(s).viewAnalysis.run.status]).toEqual([null, 'idle']);
+  });
+  it('swapState is its own inverse; a tagged action that changes nothing returns the same state', () => {
+    const s = loaded();
+    expect(swapState(swapState(s))).toBe(s);
+    expect(swapModel(swapModel(m(s)))).toBe(m(s));
+    expect(reducer(s, { type: 'ERRORS', errors: {}, tab: 'views' })).toBe(s);
+    expect(reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'receiver', tab: 'views' })).toBe(s);
+    const t = reducer(s, { type: 'ROLE', slot: 0, ids: ['b'], role: 'receiver', tab: 'views' });
+    expect(t.settings).toBe(s.settings);
+  });
+  it('ROLE sets a target group on shades only, and a role or a group change replaces it', () => {
+    let s = loaded();
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['a', 'c'], role: 'shade', group: 'park', tab: 'views' });
+    expect(m(s).viewAnalysis.objects.map((o) => o.group)).toEqual(['park', undefined, 'park']);
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['c'], role: 'shade', tab: 'views' }); // an obstruction again
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'receiver', group: 'park', tab: 'views' }); // a receiver takes no group
+    expect(m(s).viewAnalysis.objects.map((o) => [o.role, o.group])).toEqual([['receiver', undefined], ['none', undefined], ['shade', undefined]]);
+  });
+  it('RELOAD keeps the view roles, groups and no-block flags by path; a new path is none, an instanced receiver none', () => {
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a'), obj('b', 'none'), obj('c', 'none')] });
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['b'], role: 'shade', group: 'water', tab: 'views' });
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['c'], role: 'receiver', tab: 'views' });
+    s = reducer(s, { type: 'SHADE', slot: 0, ids: ['a'], shade: false, tab: 'views' });
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result(['a', 'c']) }, tab: 'views' });
+    s = reducer(s, { type: 'RELOAD', slot: 0, objects: [{ ...obj('a2'), path: '/a' }, { ...obj('b2', 'none'), path: '/b' }, { ...obj('c2', 'none'), path: '/c', instances: 3 }, { ...obj('n', 'none'), path: '/new' }] });
+    expect(m(s).viewAnalysis.objects.map((o) => [o.id, o.role, o.group, o.shade])).toEqual([['a2', 'receiver', undefined, false], ['b2', 'shade', 'water', undefined], ['c2', 'none', undefined, undefined], ['n', 'none', undefined, undefined]]);
+    expect([m(s).viewAnalysis.result, m(s).objects.map((o) => o.shade)]).toEqual([null, [undefined, undefined, undefined, undefined]]);
+  });
+  it('the view colouring starts over when no model keeps a views result, its column stays; old settings get the view defaults', () => {
+    let s = loaded();
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result(['a']) }, tab: 'views' });
+    s = reducer(s, { type: 'COLUMN', column: 'distance_front', tab: 'views' });
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['b'], role: 'shade', group: 'water', tab: 'views' }); // a target: the result goes, the column stays
+    expect([m(s).viewAnalysis.result, s.viewAnalysis.column]).toEqual([null, 'distance_front']);
+    s = reducer(s, { type: 'LOAD', slot: 0, objects: [obj('x')] });
+    expect([s.viewAnalysis.column, s.viewAnalysis.colourBy]).toEqual(['distance_front', 'plain']);
+    const p = parseSettings(JSON.stringify({ viewSim: { fov: [360, 0, 0], cell: 'x', reach: 'en17037', groundZ: 2 } }));
+    expect([p.viewSim.fov, p.viewSim.cell, p.viewSim.reach, p.viewSim.groundZ, p.viewSim.far]).toEqual([[360, 0, 0], 2, 'en17037', 2, 1000]);
+    expect(parseSettings('{"site":{}}').viewSim).toEqual(defaultSettings().viewSim);
   });
 });

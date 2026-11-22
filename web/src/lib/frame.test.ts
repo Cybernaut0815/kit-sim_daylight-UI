@@ -104,6 +104,13 @@ describe('findCritical', () => {
     expect(n.near).toBeGreaterThan(0); // the cutaway stands between the eye and the wall
     expect(n.near).toBeLessThan(new Vector3(...n.view.eye).distanceTo(new Vector3(...n.view.target)));
   });
+  it('face rows of several triangles (a quad is one face): its triangles\' normals summed, its corners framed', () => {
+    const quads: CriticalMesh[] = BLOCK.map((q, k) => ({ ...q, first: k, count: 1, faceStart: [0, 2], w: [faceAreas(q.positions, q.indices).reduce((a, b) => a + b, 0)] }));
+    const r = findCritical({ values: [0.5, 8, 1, 4, 10], column: 'sunhours_front', on: 'faces', meshes: quads, north: 90, mpu: 1, below: 2 });
+    expect(r.clusters.map((c) => [c.path, c.facing, c.elements, c.area, c.share])).toEqual([['/Site/Block/Facade_N', 'N', 1, 120, 1], ['/Site/Block/Facade_W', 'W', 1, 60, 1]]);
+    expect(r.clusters[0].box).toEqual({ min: [0, 0, 0], max: [0, 20, 6] }); // the whole quad, not its first triangle
+    expect(close(r.clusters[0].centroid, [0, 10, 3], 2) && close(r.clusters[0].normal, [-1, 0, 0])).toBe(true);
+  });
   it('a back-side column faces the other way; vertices face as their faces do', () => {
     expect(run('sunhours_back').clusters.map((c) => [c.path, c.facing])).toEqual([['/Site/Block/Facade_N', 'S'], ['/Site/Block/Roof', 'down'], ['/Site/Block/Facade_W', 'E']]);
     const corners4 = BLOCK.flatMap((q) => Array<number>(4).fill(q.name === 'Facade_N' ? 0 : 5));

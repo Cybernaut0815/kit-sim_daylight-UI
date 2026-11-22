@@ -30,7 +30,7 @@ describe('values download', () => {
     expect(f32(w)).toEqual([0.5, 0.5, 2]);
     const meta = JSON.parse(new TextDecoder().decode(files.get('values.json')!));
     expect([meta.columns, meta.rows, meta.elements]).toEqual([['radiation_front', 'sunhours_front'], 3, 'faces']);
-    expect(meta.meshes).toEqual([{ path: '/W/A', first: 0, count: 2 }, { path: '/W/B', first: 2, count: 1 }]);
+    expect(meta.meshes).toEqual([{ path: '/W/A', first: 0, count: 2, rows: 'triangles' }, { path: '/W/B', first: 2, count: 1, rows: 'triangles' }]); // sent as drawn (no forms)
     expect(meta.args).toEqual(['--optics', '/W/A/0=0.5,0']); // mesh ids as prim paths
     const apart = { ...result(), data: [Float32Array.of(1, 2, 3), Float32Array.of(10, 20, 30)] }; // columns in buffers of their own
     expect(f32(new Map(valuesFiles(apart, rows)).get('values.npy')!)).toEqual([1, 2, 3, 10, 20, 30]);

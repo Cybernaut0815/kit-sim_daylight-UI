@@ -1,10 +1,11 @@
 // Model: a tab per model to compare (up to four, A to D: "+" adds one, x removes one), and for the active model: file
 // and folder inputs, the roles of the selected meshes (and whether the selected receivers cast shade), and the stage's
 // prim tree (PrimTree: the hierarchy as in the USD viewer, selected as there; a prim's role goes to every mesh below it).
+// The view analysis' roles are its own: receivers, obstructions, targets (an obstruction whose rays count for a group).
 // The tree sits in a fixed-height, user-resizable box, so loading a model never moves the panels below it.
-import { memo, useCallback, type Dispatch } from 'react';
+import { memo, useCallback, useState, type Dispatch } from 'react';
 import type { UsdViewerElement } from 'usd-viewer';
-import type { Action, Model, Role } from '../store';
+import type { Action, Model, Role, Tab } from '../store';
 import { Alert, Icon, LETTERS, Section, Tag } from '../ui';
 import { PrimTree } from './PrimTree';
 
@@ -12,6 +13,12 @@ const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none
 const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. Not saved to the model.';
 const SHADE_HELP = "Off: the selected receivers are measured but cast no shade and reflect nothing, e.g. a grid of points inside a room, which gets the room's shade and shades nothing else.";
 const SHADE_OFF = 'No receiver casts shade now: Receivers block rays too (Simulation, Advanced) is off.';
+// the view analysis' words for the same roles and switch
+const VIEW_LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Obstruction', none: 'Ignore' };
+const BLOCK_HELP = 'Off: the selected receivers are analysed but block no rays, e.g. a grid of eye points inside a room that must not hide the room from itself.';
+const BLOCK_OFF = 'No receiver blocks rays now: Receivers block rays (View settings, Advanced) is off.';
+const TARGET_HELP = 'Target: the selected meshes block rays as obstructions, and the rays that end on them count for this group (water, park, landmark...): a share column per group. Letters, digits, _ and -.';
+const TARGETS_HELP = 'Every group is measured in the same run, a result column each (16 at most). Select meshes, then Add target for a new group or Assign for one in the list.';
 
 interface Props {
   models: Model[]; active: number; usd: UsdViewerElement; // the active model's viewer
@@ -20,16 +27,21 @@ interface Props {
   onFiles: (slot: number, files: File[]) => void; onVariant: (slot: number, path: string, set: string, variant: string) => void;
   onSubdiv: (level: number) => void; onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRemove: (slot: number) => void; dispatch: Dispatch<Action>;
+  analysis?: Tab; groups?: readonly string[]; // whose roles the rows carry; the view analysis' target groups in use (every model's)
 }
 
 /** After a tab is added or removed, the pressed tab takes the focus (the button pressed may be gone). */
 const focusTab = () => requestAnimationFrame(() => document.querySelector<HTMLElement>('.model-tabs [aria-current="page"]')?.focus());
 
-export const ModelPanel = memo(function ModelPanel({ models, active, usd, names, loading, busy, error, errors, stage, subdiv, selfOcclude, onFiles, onVariant, onSubdiv, onRefine, onRemove, dispatch }: Props) {
+export const ModelPanel = memo(function ModelPanel({ models, active, usd, names, loading, busy, error, errors, stage, subdiv, selfOcclude, onFiles, onVariant, onSubdiv, onRefine, onRemove, dispatch, analysis = 'daylight', groups = [] }: Props) {
   const { objects, selection, selected } = models.find((m) => m.slot === active)!;
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
   const receivers = objects.filter((o) => selected.has(o.id) && o.role === 'receiver'), free = receivers.filter((o) => o.shade === false).length; // the selected receivers; those casting no shade
-  const shadeHelp = selfOcclude ? SHADE_HELP : `${SHADE_OFF} ${SHADE_HELP}`;
+  const views = analysis === 'views', label = views ? VIEW_LABEL : LABEL, targets = objects.reduce((n, o) => n + (o.role === 'shade' && o.group ? 1 : 0), 0);
+  const shadeHelp = views ? (selfOcclude ? BLOCK_HELP : `${BLOCK_OFF} ${BLOCK_HELP}`) : selfOcclude ? SHADE_HELP : `${SHADE_OFF} ${SHADE_HELP}`;
+  const [group, setGroup] = useState(''); // the name Add target gives the selection
+  const inGroup = (g: string) => objects.filter((o) => o.role === 'shade' && o.group === g); // the active model's meshes of a group
+  const target = (ids: string[], g?: string) => dispatch({ type: 'ROLE', slot: active, ids, role: 'shade', ...(g ? { group: g } : {}) }); // no group: a plain obstruction again
   const variant = useCallback((path: string, set: string, v: string) => onVariant(active, path, set, v), [onVariant, active]); // stable for the memoised tree
   const about = (m: Model) => `Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`;
   return (
@@ -92,13 +104,13 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
       <details className="accordion" open>
         <summary>
           <span>Prims</span>
-          <span className="text-muted">{total ? `${total} meshes, ${count('receiver')} receiving, ${count('shade')} shading` : 'none loaded'}</span>
+          <span className="text-muted">{!total ? 'none loaded' : views ? `${total} meshes, ${count('receiver')} receiving, ${count('shade') - targets} blocking, ${targets} targets` : `${total} meshes, ${count('receiver')} receiving, ${count('shade')} shading`}</span>
         </summary>
         <div className="accordion__body stack stack--tight">
           <div className="toolbar" role="group" aria-label="Role of the meshes at or below the selected prims">
             {(['receiver', 'shade', 'none'] as Role[]).map((role) => (
               <button key={role} className="btn btn--secondary" type="button" disabled={!selected.size} onClick={() => dispatch({ type: 'ROLE', slot: active, ids: [...selected], role })}>
-                {LABEL[role]}
+                {label[role]}
               </button>
             ))}
             {/* checked: every selected receiver casts shade; mixed: some do */}
@@ -107,7 +119,7 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
                 type="checkbox" title={shadeHelp} checked={!free} disabled={!receivers.length || !selfOcclude}
                 ref={(el) => { if (el) el.indeterminate = free > 0 && free < receivers.length; }}
                 onChange={(e) => dispatch({ type: 'SHADE', slot: active, ids: receivers.map((o) => o.id), shade: e.target.checked })}
-              /> Casts shade
+              /> {views ? 'Blocks rays' : 'Casts shade'}
             </label>
             <select
               className="select" value="" aria-label="Subdivision of the selected meshes" title={`Subdivision of the selected meshes, over the model's level. ${SUBDIV_HELP}`}
@@ -120,7 +132,36 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
               {[1, 2, 3].map((l) => <option key={l} value={l}>Level {l}</option>)}
             </select>
           </div>
-          <PrimTree usd={usd} objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={variant} dispatch={dispatch} />
+          {views && (
+            // The target groups, all measured in one run: a row per group in use (any model's), then a new one by name
+            <fieldset className="field" aria-labelledby="lg-targets">
+              <legend id="lg-targets">Targets</legend>
+              {groups.map((g) => {
+                const mine = inGroup(g);
+                return (
+                  <div key={g} className="row-fill" role="group" aria-label={`Target group ${g}`}>
+                    <span className="cluster">
+                      <span className="badge badge--success" title={`Target: rays ending on its meshes count for ${g}`}><span className="dot" />{g}</span>
+                      <span className="text-muted">{mine.length} {mine.length === 1 ? 'mesh' : 'meshes'}</span>
+                    </span>
+                    <span className="cluster">
+                      <button className="btn btn--secondary" type="button" disabled={!selected.size} title={`The selected meshes join ${g}`} onClick={() => target([...selected], g)}>Assign</button>
+                      <button className="icon-btn icon-btn--ghost" type="button" disabled={!mine.length} aria-label={`Remove the target group ${g}`} title={`Remove ${g}: its meshes are obstructions again`} onClick={() => target(mine.map((o) => o.id))}>
+                        <Icon name="close" />
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+              <label className="sr-only" htmlFor="target-group">Name of a new target group</label>
+              <div className="row-fill" role="group" aria-label="New target group of the selected meshes">
+                <input className="input" id="target-group" value={group} placeholder="water, park, tower…" title={TARGET_HELP} aria-invalid={errors.groups ? true : undefined} onChange={(e) => setGroup(e.target.value)} />
+                <button className="btn btn--secondary" type="button" title={TARGET_HELP} disabled={!selected.size || !group.trim()} onClick={() => { target([...selected], group.trim()); setGroup(''); }}>Add target</button>
+              </div>
+              {errors.groups ? <span className="field__error">{errors.groups}</span> : <span className="field__help">{TARGETS_HELP}</span>}
+            </fieldset>
+          )}
+          <PrimTree usd={usd} objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={variant} dispatch={dispatch} analysis={analysis} />
         </div>
       </details>
     </Section>

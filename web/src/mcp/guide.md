@@ -15,7 +15,7 @@ with architects and engineers. Where an app help text (the meaning results retur
 - Every number says: the model (letter and file name), the column in words (e.g. sun hours, front side), the period
   (time mode, dates, daily hours, standard time), the statistic (area-weighted mean, median, P10, P90, share of the
   receiver area) and what it covers (whole model, a prim path, a facing side).
-- Values belong to surfaces: each element (triangle or vertex) of the receiver meshes, weighted by its area. They are
+- Values belong to surfaces: each element (face or vertex) of the receiver meshes, weighted by its area. They are
   not room values, and not point values unless the receiver is a small patch at that point.
 - Do not over-claim. A result holds for the model as set up (geometry, roles, materials, north) under the assumptions in
   section 5. Where the app approximates a standard (section 7), say "approximates" and what it leaves out; never say a
@@ -92,11 +92,14 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
 
 ## 4. Elements, sides and statistics
 
-- Elements: sim.on 'faces' (default): one per triangle of the drawn meshes (a quad is two), the sensor at the
-  triangle's centroid, facing along its normal. 'vertices': one per mesh point, along the area-weighted mean normal of
-  its triangles, weighted by a third of each adjacent triangle's area; where a mesh shares a point between faces at an
-  angle (a wall's foot joined to the ground) that normal is tilted and biases the value.
-- Resolution is the mesh's: a facade drawn as two large triangles gets two values and no shadow edge across it. Fine
+- Elements: sim.on 'faces' (default): one per face of the mesh as its file has it (a quad is one, an n-gon is one; a
+  glTF file holds triangles only), the sensor at the face's centroid, facing along its normal. 'vertices': one per
+  point of the file's mesh, along the area-weighted mean normal of the faces that name that point, weighted by a third
+  of each adjacent triangle's area; where a mesh shares a point between faces at an angle (a wall's foot joined to the
+  ground) that normal is tilted and biases the value. Points that only share a position (two parts of one mesh that
+  meet, a box whose faces have their own corners) are separate elements, each facing as its own part does, although
+  the view draws them as one vertex.
+- Resolution is the mesh's: a facade drawn as one large quad gets one value and no shadow edge across it. Fine
   maps need finely meshed receivers; the app refines only catmullClark / loop subdivision meshes (set_geometry
   subdivision).
 - Sides: front = where the face normal points (right-handed winding); back = the opposite. Directions behind an element
@@ -114,7 +117,9 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
   inclusive as 'within'. It drives the shares in results, the default of find_critical and the parts chart metrics
   below / within / above. Set it to the criterion under discussion so the views, charts and numbers agree, and name
   the quantity: viz {quantity: 'sunhours', below: 1.5} (without quantity it applies to the shown column's quantity).
-- Colour scale: viz.gradient, viz.min and viz.max (null = the data's range over every model) only colour the views and
+- Colour scale: viz.gradient, viz.scaling (linear, log, sqrt, square, equalised: how the values spread along the
+  gradient; say it in a figure's caption when it is not linear, since equal colour steps are then not equal value
+  steps), viz.min and viz.max (null = the data's range over every model) only colour the views and
   set the charts' relative axis; no statistic changes.
 
 ## 5. Assumptions and limits

@@ -27,6 +27,27 @@ export interface ChartSpec {
 export const FIELDS: Record<ChartKind, readonly ('range' | 'bins' | 'markers' | 'grid' | 'height' | 'metric')[]> = {
   histogram: ['range', 'bins', 'markers', 'grid', 'height'], curve: ['range', 'markers', 'grid', 'height'], parts: ['metric', 'range', 'grid'],
 };
+// A histogram's bars to select, as the model tree takes clicks. The selection is kept as value ranges (store `bins`),
+// which the 3D views keep bright (the viewer's paint bands); a chart finds its bars in them again.
+/** The most separate ranges a selection holds: the viewer's paint takes 32 bands. */
+export const MAX_BIN_RANGES = 32;
+/** The bars after a click on bar `b`: that bar alone (the only one selected: none); with Ctrl it joins or leaves the
+ *  selection; with Shift the range from the bar clicked last (`anchor`) to it, added to the selection with Ctrl too. */
+export function pickBins(selected: ReadonlySet<number>, anchor: number | null, b: number, mod: { shift: boolean; ctrl: boolean }): Set<number> {
+  if (mod.shift && anchor !== null) return new Set([...(mod.ctrl ? selected : []), ...Array.from({ length: Math.abs(b - anchor) + 1 }, (_, i) => Math.min(anchor, b) + i)]);
+  if (mod.ctrl) { const s = new Set(selected); if (!s.delete(b)) s.add(b); return s; }
+  return selected.size === 1 && selected.has(b) ? new Set() : new Set([b]);
+}
+/** Bars as value ranges [lo, hi), neighbours merged; `lo(b)` / `hi(b)`: a bar's edges. */
+export function binRanges(selected: ReadonlySet<number>, lo: (b: number) => number, hi: (b: number) => number): [number, number][] {
+  const out: [number, number][] = [], s = [...selected].sort((a, b) => a - b);
+  for (let i = 0; i < s.length; i++) { const from = s[i]; while (s[i + 1] === s[i] + 1) i++; out.push([lo(from), hi(s[i])]); }
+  return out;
+}
+/** The bars of `n` that lie whole in one of `ranges`. */
+export const binsIn = (ranges: readonly (readonly [number, number])[], n: number, lo: (b: number) => number, hi: (b: number) => number): Set<number> =>
+  new Set(Array.from({ length: n }, (_, b) => b).filter((b) => ranges.some(([a, z]) => a <= lo(b) && hi(b) <= z)));
+
 export const MARKERS: Record<ChartKind, readonly Marker[]> = { histogram: ['mean', 'median', 'p10', 'p90'], curve: ['p10', 'median', 'p90'], parts: [] };
 export const METRICS: readonly Metric[] = ['mean', 'median', 'p10', 'p90', 'min', 'max', 'below', 'within', 'above'];
 /** The metrics that are area shares of the problem range: their axis is always 0 to 100 %. */
@@ -154,7 +175,7 @@ export type Drawn =
 /** A chart's numbers: its models' receivers (or those under its parts) in its column, on that column's colour scale. */
 export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
   const column = spec.column ?? input.column, results = input.models.flatMap((m) => (m.result ? [m.result] : []));
-  const scale = scaleFor(column, unionRange(results, column), input.viz), unit = unitFor(column).value, grid = spec.grid ?? true;
+  const scale = scaleFor(column, unionRange(results, column), input.viz, results), unit = unitFor(column).value, grid = spec.grid ?? true;
   const mine = input.models.filter((m) => !spec.models || spec.models.includes(m.slot)), ms = mine.filter((m) => m.result?.columns.includes(column));
   if (!ms.length) return { kind: 'empty', reason: 'No result for this column' };
   const data = (m: (typeof ms)[number], ids?: readonly string[]) => dataOf(m.result!, m.result!.columns.indexOf(column), m.objects, ids);

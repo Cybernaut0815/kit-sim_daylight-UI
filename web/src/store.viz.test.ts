@@ -20,16 +20,42 @@ describe('result visualisation state', () => {
     const same = reducer(s, { type: 'PROBE', probe: null });
     expect(same).toBe(s); // no re-render for an unchanged probe
   });
+  it('the selected bars (BINS) stay beside the hovered one; another column or a new result lets them go', () => {
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [{ id: 'a', name: 'a', path: '/a', tris: 2, verts: 4, role: 'receiver' }] });
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } }); // a result of a receiver that is loaded: kept
+    expect(reducer(s, { type: 'BINS', bins: [] })).toBe(s); // none selected, none to clear
+    s = reducer(s, { type: 'BINS', bins: [[1, 2], [5, 6]] });
+    s = reducer(s, { type: 'BIN', bin: [3, 4] });
+    expect([s.bins, s.bin]).toEqual([[[1, 2], [5, 6]], [3, 4]]);
+    expect(reducer(s, { type: 'COLUMN', column: s.column })).toBe(s); // the same column: kept
+    expect(reducer(s, { type: 'COLUMN', column: 'sunhours_front' }).bins).toEqual([]);
+    expect(reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } }).bins).toEqual([]);
+    expect(reducer(s, { type: 'BINS', bins: [] }).bins).toEqual([]);
+  });
   it('VIZ merges per quantity, colours are shared, and a round trip through storage keeps it', () => {
     let s = reducer(initialState(), { type: 'VIZ', quantity: 'radiation', patch: { gradient: 'turbo', lo: 100 } });
     s = reducer(s, { type: 'VIZ', quantity: 'radiation', patch: { hi: 900, below: '#000080' } });
     s = reducer(s, { type: 'VIZ', quantity: 'sunhours', patch: { min: 0, max: 8 } });
     s = reducer(s, { type: 'VIZ', quantity: 'radiation', patch: { lo: null } });
-    expect(s.settings.viz).toEqual({ gradients: { radiation: 'turbo' }, scales: { sunhours: { min: 0, max: 8 } }, ranges: { radiation: { lo: null, hi: 900 } }, colors: { below: '#000080', above: '#ff0000' } });
+    expect(s.settings.viz).toEqual({ gradients: { radiation: 'turbo' }, scales: { sunhours: { min: 0, max: 8 } }, ranges: { radiation: { lo: null, hi: 900 } }, colors: { below: '#000080', above: '#ff0000' }, scalings: {}, library: {} });
     const back = parseSettings(serializeSettings(s.settings));
     expect(back.viz).toEqual(s.settings.viz);
-    expect(parseSettings('{"sim":{}}').viz).toEqual({ gradients: {}, scales: {}, ranges: {}, colors: defaults }); // an older record without viz
+    expect(parseSettings('{"sim":{}}').viz).toEqual({ gradients: {}, scales: {}, ranges: {}, colors: defaults, scalings: {}, library: {} }); // an older record without viz
     expect(parseSettings('{"viz":{"colors":{"below":"#123456"}}}').viz.colors).toEqual({ below: '#123456', above: '#ff0000' });
+  });
+  it('the scaling per quantity and the gradient library (the user\'s own, presets as changed) go through storage; junk is dropped', () => {
+    const mine = { label: 'Mine', stops: ['#ff0000', '#00ff00', '#0000ff'], positions: [0, 0.2, 1] };
+    let s = reducer(initialState(), { type: 'VIZ', quantity: 'distance', patch: { scaling: 'sqrt' } });
+    s = reducer(s, { type: 'GRADIENT', key: 'custom-1', gradient: mine });
+    s = reducer(s, { type: 'GRADIENT', key: 'viridis', gradient: { label: 'Viridis', stops: ['#000000', '#FFFFFF'] } }); // a preset, changed
+    expect(reducer(s, { type: 'GRADIENT', key: 'x', gradient: { label: 'x', stops: ['#000000'] } })).toBe(s); // one stop is no gradient
+    expect([s.settings.viz.scalings, s.settings.viz.library]).toEqual([{ distance: 'sqrt' }, { 'custom-1': mine, viridis: { label: 'Viridis', stops: ['#000000', '#ffffff'] } }]);
+    expect(parseSettings(serializeSettings(s.settings)).viz).toEqual(s.settings.viz);
+    const junk = parseSettings('{"viz":{"scalings":{"sky":"cubic","ground":"log"},"library":{"a":{"stops":["red"]},"b":{"label":"B","stops":["#000000","#ffffff"],"positions":[0,2]}}}}').viz;
+    expect([junk.scalings, junk.library]).toEqual([{ ground: 'log' }, { b: { label: 'B', stops: ['#000000', '#ffffff'] } }]);
+    s = reducer(s, { type: 'GRADIENT', key: 'viridis', gradient: null }); // the preset back as built in
+    s = reducer(s, { type: 'VIZ_RESET', quantity: 'distance', what: 'scale' });
+    expect([s.settings.viz.scalings, Object.keys(s.settings.viz.library)]).toEqual([{}, ['custom-1']]);
   });
   it('VIZ_RESET restores one group for one quantity, colours with the range', () => {
     let s = reducer(initialState(), { type: 'VIZ', quantity: 'radiation', patch: { gradient: 'turbo', min: 1, lo: 2, above: '#800000' } });
