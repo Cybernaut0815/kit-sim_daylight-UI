@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PaintStyle } from 'usd-viewer';
-import { colorAt, defaultScaling, flipped, gradientDef, gradientFor, GRADIENTS, gradientsOf, hexAt, hexToRgb, lin, paintOf, place, position, quantileKnots, rgbFor, scaleFor, svgColor, type Gradient, type Scale } from './gradients';
+import { addStop, colorAt, defaultScaling, flipped, gradientDef, gradientFor, GRADIENTS, gradientsOf, hexAt, hexToRgb, lin, MAX_STOPS, moveStop, paintOf, place, position, positionsOf, quantileKnots, removeStop, rgbFor, scaleFor, svgColor, type Gradient, type Scale } from './gradients';
 
 const grey: Gradient = { key: 'g', label: 'g', stops: ['#000000', '#ffffff'] };
 const scale: Scale = { gradient: grey, vmin: 0, vmax: 10, lo: 2, hi: 8, below: '#0000ff', above: '#ff0000', scaling: 'linear', knots: null };
@@ -65,8 +65,10 @@ describe('the library: the gradients the user made or changed', () => {
     expect(gradientFor('sky', 'custom-1', { 'custom-1': mine }).label).toBe('Mine');
     expect(gradientFor('illuminance', undefined, { viridis: { label: 'V', stops: ['#000000', '#ffffff'] } }).stops).toEqual(['#000000', '#ffffff']);
   });
-  it('gradientDef keeps what is a gradient: 2 to 16 hex stops, positions ascending from 0 to 1 (even ones are dropped)', () => {
+  it('gradientDef keeps what is a gradient: 2 to 16 hex stops, positions ascending within 0 to 1 (even ones are dropped)', () => {
     expect(gradientDef(mine)).toEqual(mine);
+    expect(gradientDef({ ...mine, positions: [0.2, 0.5, 0.8] })?.positions).toEqual([0.2, 0.5, 0.8]); // the ends moved inward
+    expect(gradientDef({ ...mine, positions: [0, 0.5, 1.2] })).toEqual({ label: 'Mine', stops: mine.stops }); // outside 0 to 1
     expect(gradientDef({ ...mine, positions: [0, 0.5, 1] })).toEqual({ label: 'Mine', stops: mine.stops }); // even: as none
     expect(gradientDef({ ...mine, positions: [0, 0.9, 0.5] })).toEqual({ label: 'Mine', stops: mine.stops }); // not ascending to 1
     expect(gradientDef({ label: '', stops: ['#FF0000', '#00ff00'] })).toEqual({ label: 'Gradient', stops: ['#ff0000', '#00ff00'] });
@@ -80,6 +82,23 @@ describe('the library: the gradients the user made or changed', () => {
     const f = flipped(mine);
     expect([f.stops, f.positions!.map((p) => +p.toFixed(6))]).toEqual([['#0000ff', '#00ff00', '#ff0000'], [0, 0.8, 1]]);
     expect(colorAt({ key: 'f', ...f }, 0.9)).toEqual(colorAt(g, 0.1).map((c) => expect.closeTo(c, 9)));
+  });
+  it('the editor\'s steps: a stop moved between its neighbours, added in the colour there, removed (two stay)', () => {
+    const even = { label: 'E', stops: ['#000000', '#808080', '#ffffff'] };
+    expect(moveStop(even, 1, 0.25).positions).toEqual([0, 0.25, 1]);
+    expect(moveStop(even, 1, 7).positions).toEqual([0, 1, 1]); // not past its neighbour
+    expect(moveStop(even, 0, 0.3).positions).toEqual([0.3, 0.5, 1]); // an end stop moves too
+    expect(moveStop(even, 2, -1).positions).toEqual([0, 0.5, 0.5]);
+    const added = addStop(mine, 0.6)!;
+    expect([added.index, added.gradient.stops, added.gradient.positions]).toEqual([2, ['#ff0000', '#00ff00', '#008080', '#0000ff'], [0, 0.2, 0.6, 1]]); // half way from green to blue
+    expect(addStop({ label: 'F', stops: Array<string>(MAX_STOPS).fill('#000000') }, 0.5)).toBeNull();
+    expect(removeStop(mine, 0)).toEqual({ label: 'Mine', stops: ['#00ff00', '#0000ff'], positions: [0.2, 1] });
+    expect(removeStop({ label: 'T', stops: ['#000000', '#ffffff'] }, 0).stops).toHaveLength(2);
+    expect(positionsOf(even)).toEqual([0, 0.5, 1]);
+  });
+  it('end stops moved inward: their colours hold to the edges', () => {
+    const g: Gradient = { key: 'i', label: 'i', stops: ['#ff0000', '#0000ff'], positions: [0.25, 0.75] };
+    expect([colorAt(g, 0), colorAt(g, 0.25), colorAt(g, 0.5), colorAt(g, 0.9)]).toEqual([[1, 0, 0], [1, 0, 0], [0.5, 0, 0.5], [0, 0, 1]]);
   });
 });
 
@@ -136,11 +155,12 @@ describe('the 3D view paints as the legend draws', () => {
     ['linear', scale], ['inferno, no problem range', { ...scale, gradient: GRADIENTS[0], lo: null, hi: null }], ['no span', { ...scale, vmax: 0 }],
     ['log', { ...scale, scaling: 'log' }], ['log from 0.5', { ...scale, scaling: 'log', vmin: 0.5 }], ['sqrt', { ...scale, scaling: 'sqrt', gradient: GRADIENTS[3] }], ['square', { ...scale, scaling: 'square' }],
     ['equalised', { ...scale, scaling: 'equalised', knots }], ['moved stops', { ...scale, gradient: moved }], ['moved stops, log', { ...scale, gradient: moved, scaling: 'log' }],
+    ['end stops moved inward', { ...scale, gradient: { ...moved, positions: [0.2, 0.3, 0.7, 0.9] } }],
   ];
   it.each(scales)('%s: the paint style and map colour as rgbFor does, also with a bin hovered', (_name, s) => {
     const paint = paintOf(s);
     for (const dim of [null, [3, 6]] as const) {
-      const want = rgbFor(s, values, dim ? [...dim] : null), style = paint.style(dim ? [...dim] : null);
+      const want = rgbFor(s, values, dim ? [...dim] : null), style = paint.style(dim ? [[...dim]] : null);
       values.forEach((v, i) => shade(style, paint.map ? paint.map(v) : v).forEach((c, j) => expect(c, `value ${v}`).toBeCloseTo(want[3 * i + j], 6)));
     }
   });
@@ -150,6 +170,11 @@ describe('the 3D view paints as the legend draws', () => {
     expect(log.map).not.toBeNull();
     expect(log.key).not.toBe(paintOf({ ...scale, scaling: 'log', vmax: 20 }).key);
     expect(paintOf({ ...scale, gradient: moved }).key).not.toBe('');
-    expect(paintOf({ ...scale, scaling: 'log' }).style(null)).toMatchObject({ min: 0, max: 1 });
+    expect(paintOf({ ...scale, scaling: 'log' }).style(null)).toMatchObject({ min: 0, max: 1, band: null });
+    // several ranges kept bright (bars selected apart): each through the map, in order
+    expect(paintOf(scale).style([[1, 2], [5, 6]]).band).toEqual([[1, 2], [5, 6]]);
+    const bands = paintOf({ ...scale, scaling: 'sqrt' }).style([[0, 2.5], [2.5, 10]]).band as [number, number][];
+    expect(bands.map((b) => b.map((v) => +v.toFixed(9)))).toEqual([[0, 0.5], [0.5, 1]]);
+    expect(paintOf(scale).style([]).band).toBeNull();
   });
 });

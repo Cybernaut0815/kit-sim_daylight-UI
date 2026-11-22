@@ -98,6 +98,7 @@ export type Run = { status: 'idle' } | { status: 'queued'; position: number; upl
 /** The viewer's selection: prim paths (any prim: a parent stands for every mesh below it), the active one, who made it. */
 export interface Selection { paths: string[]; active: string | null; source: string }
 const NO_SELECTION: Selection = { paths: [], active: null, source: 'api' };
+const NO_BINS: readonly [number, number][] = []; // one empty selection: clearing an empty one changes nothing
 
 /** A model in a pane: `slot` 0..3 = A..D (its letter, its chart colour, its viewer), fixed for its life. */
 export interface Model {
@@ -121,6 +122,7 @@ export interface State {
   hovered: string | null; // row ids are unique across models
   probe: Probe | null; // element under the cursor in a view
   bin: [number, number] | null; // hovered histogram bin [lo, hi): the views fade everything else
+  bins: readonly [number, number][]; // the selected histogram bars as value ranges [lo, hi), neighbours merged: kept bright as the hovered one
   settings: Settings; stations: Station[] | null;
   // the result column shown, by name ('': the first): it stays through new runs, changed roles and new target groups,
   // which move the columns (lib/result columnIndex finds it in a result)
@@ -157,6 +159,7 @@ export type Action =
   | ({ type: 'COLOUR_BY'; colourBy: 'plain' | 'value' } & OfTab)
   | { type: 'PROBE'; probe: Probe | null }
   | { type: 'BIN'; bin: [number, number] | null }
+  | { type: 'BINS'; bins: readonly [number, number][] } // the selected bars' ranges ([]: none)
   | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string; scaling?: Scaling } }
   | { type: 'GRADIENT'; key: string; gradient: GradientDef | null } // the library: put (a new one, or a preset as changed); null: gone (a preset: back as built in)
   | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
@@ -182,7 +185,7 @@ const IDLE: Run = { status: 'idle' };
 const model = (slot: number): Model => ({ slot, name: '', objects: [], selection: NO_SELECTION, selected: new Set(), run: IDLE, result: null, error: null, optics: {}, viewAnalysis: { objects: [], run: IDLE, result: null, error: null } });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  models: [model(0)], active: 0, hovered: null, probe: null, bin: null, settings, stations: null, column: '', colourBy: 'plain', errors: {},
+  models: [model(0)], active: 0, hovered: null, probe: null, bin: null, bins: NO_BINS, settings, stations: null, column: '', colourBy: 'plain', errors: {},
   viewAnalysis: { column: '', colourBy: 'plain', errors: {} },
 });
 
@@ -368,12 +371,14 @@ function analysis(s: State, a: Action): State {
       }
       return {
         ...put(s, a.slot, (x) => ({ ...x, run: r, result: done ? r.result : x.result, error: r.status === 'error' ? r.message : done || r.status === 'idle' ? null : x.error })),
-        probe: done ? null : s.probe, bin: done ? null : s.bin, colourBy: done && !kept(s.models) ? 'value' : s.colourBy, // the column is found by name where it is read
+        probe: done ? null : s.probe, bin: done ? null : s.bin, bins: done ? NO_BINS : s.bins, colourBy: done && !kept(s.models) ? 'value' : s.colourBy, // the column is found by name where it is read
         errors: (r.status === 'running' || r.status === 'queued') && Object.keys(s.errors).length ? {} : s.errors,
       };
     }
-    case 'COLUMN':
-      return { ...s, column: a.column };
+    case 'COLUMN': // another result: its values are others, the selected bars go
+      return a.column === s.column ? s : { ...s, column: a.column, bins: NO_BINS };
+    case 'BINS':
+      return !a.bins.length && !s.bins.length ? s : { ...s, bins: a.bins.length ? a.bins : NO_BINS };
     case 'COLOUR_BY':
       return { ...s, colourBy: a.colourBy };
     case 'PROBE':

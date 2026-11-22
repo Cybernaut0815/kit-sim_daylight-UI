@@ -76,8 +76,9 @@
 .row-fill { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; }
 .chart-ph { aspect-ratio: 320 / 150; }
 .table-box { max-block-size: 16rem; overflow: auto; }
-/* the value readout: a quiet well that always holds two lines, so hovering never resizes the panel */
-.readout { min-block-size: calc(2lh + 2 * var(--space-2)); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle);
+/* the value readout: a quiet well of exactly two lines, so hovering never resizes the panel and the charts under it
+   never move under the pointer (a longer text is cut; its title holds it whole) */
+.readout { box-sizing: content-box; block-size: 2lh; overflow: hidden; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle);
   background: var(--bg-surface-2); color: var(--text-default); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
 .readout--float { position: absolute; inset-block-start: 0; inset-inline-start: 0; min-block-size: 0; pointer-events: none; white-space: nowrap;
   background: var(--bg-surface-1); color: var(--text-strong); } /* follows the cursor over the model; JS translates it */
@@ -134,6 +135,14 @@
 .views__download { justify-content: space-between; align-items: center; gap: var(--space-2); }
 /* a menu's fields (a chart's settings, the section's numbers in the run bar): padded as the menu's items */
 .chart-menu { padding: var(--space-2) var(--space-3); }
+/* the gradient editor: handles grabbed and dragged along the bar (no page scroll under a finger, no text selected on
+   the way), the bar and track a click target for a new stop */
+.gradient-editor { touch-action: none; user-select: none; min-inline-size: 18rem; }
+.gradient-editor__stop { cursor: grab; }
+.gradient-editor__stop:active { cursor: grabbing; }
+.gradient-editor__track { cursor: copy; }
+/* a histogram's bars take clicks (selected as rows of the tree) */
+.chart-bar { cursor: pointer; }
 /* a chart heading with only its settings button: a long title wraps beside the button, which stays top right */
 .chart-head { flex-wrap: nowrap; align-items: start; }
 .chart-head > :first-child { min-inline-size: 0; }

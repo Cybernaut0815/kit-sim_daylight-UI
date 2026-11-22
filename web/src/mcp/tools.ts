@@ -367,7 +367,7 @@ export const inShot = (el: UsdViewerElement) => shooting.has(el);
 export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Look, fn: () => Promise<T>): Promise<T> {
   const x = c(), ref = x.state.models.find((m) => m.result)?.result, col = look.column === undefined ? -1 : ref?.columns.indexOf(look.column) ?? -1;
   if (look.column !== undefined && col < 0) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the views show; run again`);
-  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
+  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, bins: x.state.bins, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
   // the shot's section goes straight to its views, without the gizmo (a drag would edit the shot's); after it they get the
@@ -383,7 +383,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (look.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
       if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
       if (look.pin) x.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: look.pin.min, max: look.pin.max } });
-      if (look.clean) x.dispatch({ type: 'BIN', bin: null });
+      if (look.clean) { x.dispatch({ type: 'BIN', bin: null }); x.dispatch({ type: 'BINS', bins: [] }); }
     });
     if (fill) fill.highlight = { color: '#000000', opacity: 0 }; // after the commit: a colouring change sets it again
     for (const [o] of grids) o.visible = look.grid!;
@@ -409,7 +409,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (look.colourBy) z.dispatch({ type: 'COLOUR_BY', colourBy: was.colourBy });
       if (look.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
       if (look.pin) z.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: was.scale?.min ?? null, max: was.scale?.max ?? null } });
-      if (look.clean) z.dispatch({ type: 'BIN', bin: was.bin });
+      if (look.clean) { z.dispatch({ type: 'BIN', bin: was.bin }); z.dispatch({ type: 'BINS', bins: was.bins }); }
       if (was.tab !== 'daylight') z.setUi((u) => ({ ...u, tab: was.tab }));
     });
     if (fill) fill.highlight = selectionFill(c().state.colourBy === 'value' && !!c().scale);

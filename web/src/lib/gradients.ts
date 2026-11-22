@@ -8,7 +8,8 @@ import type { PaintStyle } from 'usd-viewer';
 import type { Settings } from '../store';
 import { splitColumn } from './result';
 
-/** `positions`: where each stop sits, 0 to 1 ascending, the first 0 and the last 1; absent: evenly spaced. */
+/** `positions`: where each stop sits, ascending within 0 to 1; absent: evenly spaced from 0 to 1. Before the first stop
+ *  and after the last their colours hold. */
 export interface Gradient { key: string; label: string; stops: string[]; positions?: number[] }
 /** A gradient as the settings keep it (viz.library, by key): the user's own, or a preset as the user changed it. */
 export type GradientDef = Omit<Gradient, 'key'>;
@@ -63,11 +64,11 @@ export function gradientFor(quantity: string, key?: string, library: Readonly<Re
   return all.find((g) => g.key === key) ?? all.find((g) => g.key === defaultGradient(quantity)) ?? all[3];
 }
 /** A gradient definition as the settings may hold it, or null: 2 to 16 '#rrggbb' stops; positions (if any) one per
- *  stop, ascending from 0 to 1. */
+ *  stop, ascending within 0 to 1. */
 export function gradientDef(x: unknown): GradientDef | null {
   const g = x as Partial<GradientDef> | null, n = Array.isArray(g?.stops) ? g.stops.length : 0;
   if (!g || n < 2 || n > MAX_STOPS || !g.stops!.every((h) => typeof h === 'string' && /^#[0-9a-f]{6}$/i.test(h))) return null;
-  const p = g.positions, ok = Array.isArray(p) && p.length === n && p[0] === 0 && p[n - 1] === 1 && p.every((v, i) => Number.isFinite(v) && (!i || v >= p[i - 1]))
+  const p = g.positions, ok = Array.isArray(p) && p.length === n && p.every((v, i) => Number.isFinite(v) && v >= 0 && v <= 1 && (!i || v >= p[i - 1]))
     && p.some((v, i) => Math.abs(v - i / (n - 1)) > 1e-9); // evenly spaced is no positions: such a gradient paints without a map
   return { label: typeof g.label === 'string' && g.label.trim() ? g.label.trim().slice(0, 40) : 'Gradient', stops: g.stops!.map((h) => h.toLowerCase()), ...(ok ? { positions: [...p] } : {}) };
 }
@@ -75,6 +76,23 @@ export function gradientDef(x: unknown): GradientDef | null {
 export const flipped = (g: GradientDef): GradientDef => ({ ...g, stops: [...g.stops].reverse(), ...(g.positions ? { positions: g.positions.map((p) => 1 - p).reverse() } : {}) });
 /** Where the stops sit (even when no positions are set). */
 export const positionsOf = (g: GradientDef): number[] => g.positions ?? g.stops.map((_, i) => i / (g.stops.length - 1));
+
+// The editor's steps on a gradient's stops (charts/GradientEditor.tsx), each a new definition.
+/** Stop `i` at `p`: kept between its neighbours, within 0 to 1. */
+export function moveStop(g: GradientDef, i: number, p: number): GradientDef {
+  const at = positionsOf(g), lo = i ? at[i - 1] : 0, hi = i < at.length - 1 ? at[i + 1] : 1;
+  return { ...g, positions: at.map((v, j) => (j === i ? Math.min(Math.max(p, lo), hi) : v)) };
+}
+/** One stop more at `p`, in the colour the gradient has there; `index`: where it went. Null at MAX_STOPS. */
+export function addStop(g: GradientDef, p: number): { gradient: GradientDef; index: number } | null {
+  if (g.stops.length >= MAX_STOPS) return null;
+  const at = positionsOf(g), u = Math.min(Math.max(p, 0), 1), index = at.filter((v) => v <= u).length;
+  return { index, gradient: { ...g, stops: [...g.stops.slice(0, index), hexAt({ key: '', ...g }, u), ...g.stops.slice(index)], positions: [...at.slice(0, index), u, ...at.slice(index)] } };
+}
+/** Without stop `i`; two stops stay at least (then: as it is). */
+export function removeStop(g: GradientDef, i: number): GradientDef {
+  return g.stops.length <= 2 ? g : { ...g, stops: g.stops.filter((_, j) => j !== i), positions: positionsOf(g).filter((_, j) => j !== i) };
+}
 
 /** sRGB -> linear per channel: the scales speak the legend sRGB; three.js colour attributes and USD displayColor are linear. */
 export const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
@@ -99,7 +117,7 @@ function among(g: Gradient, t: number): number {
   let k = 0;
   while (k < n - 1 && u >= p[k + 1]) k++;
   const span = p[k + 1] - p[k];
-  return k + (span > 0 ? Math.min((u - p[k]) / span, 1) : 1);
+  return k + (span > 0 ? Math.min(Math.max((u - p[k]) / span, 0), 1) : 1); // before the first stop and after the last: their colours
 }
 /** RGB (0..1) at t in [0, 1], linear between the stops. */
 export function colorAt(g: Gradient, t: number): [number, number, number] {
@@ -190,14 +208,17 @@ export function svgColor(s: Scale, v: number): string {
  * The scale as the viewer's paint draws it on the GPU (usd.paintStyle, usd.paint): the same colours as rgbFor. The
  * viewer maps a value linearly between a min and a max onto evenly spaced stops, so:
  * - a linear scale with even stops goes as it is: the result's own values, the domain and the problem range as
- *   uniforms (`map` null: a new range or bin restyles, nothing is painted again);
+ *   uniforms (`map` null: a new range, a hovered or selected bar restyles, nothing is painted again);
  * - any other (a scaling, moved stops) paints `map(value)` instead, the value's place among the stops (0 to 1; beyond
  *   for values outside the range, so the problem range and the hovered bin still split them), with every threshold
  *   through the same map. `key` names the map: the values are painted again when it changes.
  */
-export function paintOf(s: Scale): { key: string; map: ((v: number) => number) | null; style: (dim: [number, number] | null) => PaintStyle } {
+export function paintOf(s: Scale): { key: string; map: ((v: number) => number) | null; style: (dim: readonly (readonly [number, number])[] | null) => PaintStyle } {
   const stops = s.gradient.stops, plain = s.scaling === 'linear' && !s.gradient.positions, n = stops.length - 1;
-  const map = (v: number) => { const p = position(s, v); return p >= 0 && p <= 1 ? among(s.gradient, p) / n : p; };
+  // before the first stop and after the last the colour holds, but the map keeps rising (by the distance to that stop:
+  // under 0 and over 1, which the viewer clamps to the end colours), so a threshold there still splits the values
+  const stopsAt = positionsOf(s.gradient), first = stopsAt[0], last = stopsAt[n];
+  const map = (v: number) => { const p = position(s, v); return p < first ? p - first : p > last ? 1 + p - last : among(s.gradient, p) / n; };
   const at = plain ? (v: number) => v : map;
   return {
     key: plain ? '' : `${s.scaling}|${s.vmin}|${s.vmax}|${s.gradient.positions?.join()}|${s.knots?.join()}`,
@@ -206,7 +227,7 @@ export function paintOf(s: Scale): { key: string; map: ((v: number) => number) |
       stops, min: plain ? s.vmin : 0, max: plain ? s.vmax : 1,
       below: s.lo === null ? null : { value: at(s.lo), color: s.below },
       above: s.hi === null ? null : { value: at(s.hi), color: s.above },
-      band: dim && [at(dim[0]), at(dim[1])],
+      band: dim?.length ? dim.map(([lo, hi]): [number, number] => [at(lo), at(hi)]) : null, // the value ranges kept bright: a hovered bar, the selected ones
     }),
   };
 }

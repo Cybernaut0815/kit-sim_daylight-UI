@@ -49,6 +49,7 @@ interface Props {
   follow: UsdViewerElement | null; // linked cameras: a view that shows a model, whose camera a new model takes instead of its own framing
   loading: boolean; error?: string | null; objects: ObjectRow[]; selected: Set<string>; hovered: string | null; // error: shown here (several models)
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
+  bins?: readonly [number, number][]; // the selected histogram bars' value ranges: kept bright with the hovered one
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
   around?: readonly string[] | null; // the prim paths of the meshes the sun path is fitted to (null: the whole model)
@@ -77,7 +78,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, around, section, analysis }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -347,8 +348,8 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   // when the map changes (its key); a linear scale with even stops stays uniforms only.
   const paint = useMemo(() => (scale ? paintOf(scale) : null), [scale]);
   useEffect(() => {
-    if (paint) usd.paintStyle = paint.style(bin);
-  }, [paint, bin]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
+    if (paint) usd.paintStyle = paint.style(bin || bins?.length ? [...(bins ?? []), ...(bin ? [bin] : [])] : null); // the selected bars and the hovered one
+  }, [paint, bin, bins]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
   useEffect(() => {
     const items: { rid: number; values: Float32Array }[] = [];
     const perVertex = byValue?.on === 'vertices', corners = perVertex && !!byValue.forms?.some(Boolean); // one mode per paint

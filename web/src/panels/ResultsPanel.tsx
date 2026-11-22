@@ -25,6 +25,7 @@ export type Compared = Model & { col: number; stale: boolean };
 
 interface Props {
   models: Compared[]; column: number; colourBy: 'plain' | 'value'; hovered: string | null; probe: Probe | null; bin: [number, number] | null;
+  bins: readonly [number, number][]; // the selected bars of the distribution, as value ranges
   scale: Scale | null; domain: [number, number]; viz: Settings['viz']; charts: Settings['charts']; auto: boolean; // domain: the data range, every model's
   dispatch: Dispatch<Action>;
   reports: Stored[] | null; onReportChart: (id: string, e: ChartEdit) => void; // the stored reports; a report chart's settings changed
@@ -119,7 +120,7 @@ const points = (v: number) => `${fmtNum(100 * v)} pts`; // a difference of share
 
 const RANGE_OPTIONS = [['absolute', 'Absolute'], ['relative', 'Relative']] as const;
 
-export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, scale, domain, viz, charts, auto, dispatch, reports, onReportChart, reportError, analysis }: Props) {
+export const ResultsPanel = memo(function ResultsPanel({ models, column, colourBy, hovered, probe, bin, bins, scale, domain, viz, charts, auto, dispatch, reports, onReportChart, reportError, analysis }: Props) {
   // what the tables and charts read of each model, kept across a selection or a run's status (each makes new models)
   const inputs = [0, 1, 2, 3].flatMap((k) => { const m = models.find((x) => x.slot === k); return [m?.objects, m?.result, m?.col]; }); // fixed length: memo deps
   const runs = useMemo(() => models.map(({ slot, objects, result, col }) => ({ slot, objects, result, col })), inputs); // eslint-disable-line react-hooks/exhaustive-deps
@@ -217,7 +218,12 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             ? `Bin ${fmtNum(bin[0])} to ${Number.isFinite(bin[1]) ? fmtNum(bin[1]) : fmtNum(domain[1])} ${unit.value}: the rest of ${many ? 'every' : 'the'} model is faded.`
             : hov
               ? `${letter(kh)}${hov.name}: ${fmtNum(hov.stats.mean)} ${unit.value} mean, ${fmtNum(hov.stats.min)} to ${fmtNum(hov.stats.max)}, ${pct(datas[kh]!.total ? hov.stats.total / datas[kh]!.total : 0)} of ${many ? `model ${LETTERS[models[kh].slot]}'s` : 'the'} total.`
-              : '';
+              : bins.length // the selected bars: their values, the area they hold, and how to let them go
+                ? `Selected ${fmtNum(bins[0][0])} to ${fmtNum(Math.min(bins[bins.length - 1][1], domain[1]))} ${unit.value}${bins.length > 1 ? ` in ${bins.length} ranges` : ''}: ${models.flatMap((m, j) => {
+                  const d = datas[j];
+                  return d ? [`${many ? `${LETTERS[m.slot]} ` : ''}${pct(bins.reduce((sum, [lo, hi]) => sum + shareBelow(d.cum, hi) - shareBelow(d.cum, lo), 0))}`] : [];
+                }).join(', ')} of the area.${many ? '' : ' Click the plot to clear.'}`
+                : '';
         const splits = datas.map((d) => d && rangeShares(d.cum, scale.lo, scale.hi));
         /** A comparison cell: the value, then (under it) its difference to the first model; '–' where there is none. */
         const cell = (k: number, get: (d: Data, k: number) => number, fmt: (v: number) => string = fmtNum, diff: (v: number) => string = fmtNum) => {
@@ -250,7 +256,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
                   <ChartSettings id={`${idp}:${c.id}`} title={title} spec={c} d={d} column={at} viz={viz} many={many} dispatch={dispatch} onChart={onChart} />
                 </div>
               </div>
-              <Chart d={d} probe={live ? probe?.value ?? null : null} bin={live ? bin : null} dispatch={live ? dispatch : undefined} />
+              <Chart d={d} probe={live ? probe?.value ?? null : null} bin={live ? bin : null} bins={live ? bins : undefined} dispatch={live ? dispatch : undefined} />
               {((d.kind === 'histogram' && d.series) || (d.kind === 'curve' && d.curves)) && keyOf(c)}
             </Fragment>
           );
@@ -328,7 +334,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
               </table>
             )}
             <Legend scale={scale} unit={unit.value} probe={probe?.value ?? null} />
-            <div className="readout" role="status" aria-live="polite">{readout}</div>
+            <div className="readout" role="status" aria-live="polite" title={readout || undefined}>{readout}</div>
             <ScaleFields quantity={quantity} scale={scale} viz={viz} many={many} dispatch={dispatch} />
             {/* the settings' charts in order: Distribution and Cumulative area, then one's own */}
             {group(charts, (e) => dispatch({ type: 'CHART', ...e }))}

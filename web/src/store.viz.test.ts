@@ -20,6 +20,18 @@ describe('result visualisation state', () => {
     const same = reducer(s, { type: 'PROBE', probe: null });
     expect(same).toBe(s); // no re-render for an unchanged probe
   });
+  it('the selected bars (BINS) stay beside the hovered one; another column or a new result lets them go', () => {
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [{ id: 'a', name: 'a', path: '/a', tris: 2, verts: 4, role: 'receiver' }] });
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } }); // a result of a receiver that is loaded: kept
+    expect(reducer(s, { type: 'BINS', bins: [] })).toBe(s); // none selected, none to clear
+    s = reducer(s, { type: 'BINS', bins: [[1, 2], [5, 6]] });
+    s = reducer(s, { type: 'BIN', bin: [3, 4] });
+    expect([s.bins, s.bin]).toEqual([[[1, 2], [5, 6]], [3, 4]]);
+    expect(reducer(s, { type: 'COLUMN', column: s.column })).toBe(s); // the same column: kept
+    expect(reducer(s, { type: 'COLUMN', column: 'sunhours_front' }).bins).toEqual([]);
+    expect(reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result } }).bins).toEqual([]);
+    expect(reducer(s, { type: 'BINS', bins: [] }).bins).toEqual([]);
+  });
   it('VIZ merges per quantity, colours are shared, and a round trip through storage keeps it', () => {
     let s = reducer(initialState(), { type: 'VIZ', quantity: 'radiation', patch: { gradient: 'turbo', lo: 100 } });
     s = reducer(s, { type: 'VIZ', quantity: 'radiation', patch: { hi: 900, below: '#000080' } });

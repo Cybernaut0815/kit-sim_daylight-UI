@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { binRanges, binsIn, pickBins } from './charts';
 import { defaultSettings, type ObjectRow, type RunResult } from '../store';
 import { chartData, cleanSpec, dataOf, putChart, stepOf, type ChartInput, type ChartKind, type ChartSpec, type Drawn } from './charts';
 
@@ -140,5 +141,25 @@ describe('chartData', () => {
     const many = Array.from({ length: 30 }, (_, i) => obj(`r${i}`, `/S/R${i}`));
     const M = { slot: 0, objects: many, result: result(many.map((o) => o.id), many.map((_, i) => [i])) };
     expect([draw('parts', {}, [M]).groups.length, draw('parts', {}, [M]).more, draw('parts', {}, [P]).more]).toEqual([24, 6, 0]);
+  });
+});
+
+describe('bars to select', () => {
+  const set = (...b: number[]) => new Set(b), none = { shift: false, ctrl: false }, list = (s: Set<number>) => [...s].sort((a, b) => a - b);
+  it('pickBins takes clicks as the model tree does: one, Ctrl in or out, Shift the range from the bar clicked last', () => {
+    expect(list(pickBins(set(2, 3), null, 5, none))).toEqual([5]);
+    expect(list(pickBins(set(5), 5, 5, none))).toEqual([]); // the only one, again: none
+    expect(list(pickBins(set(2), 2, 5, { shift: false, ctrl: true }))).toEqual([2, 5]);
+    expect(list(pickBins(set(2, 5), 5, 2, { shift: false, ctrl: true }))).toEqual([5]);
+    expect(list(pickBins(set(9), 2, 5, { shift: true, ctrl: false }))).toEqual([2, 3, 4, 5]);
+    expect(list(pickBins(set(9), 5, 2, { shift: true, ctrl: true }))).toEqual([2, 3, 4, 5, 9]); // backwards, added
+    expect(list(pickBins(set(9), null, 4, { shift: true, ctrl: false }))).toEqual([4]); // no bar clicked before: a plain click
+  });
+  it('binRanges merges neighbours into value ranges; binsIn finds the bars again', () => {
+    const edges = [0, 1, 2, 3, 4, 5], lo = (b: number) => edges[b], hi = (b: number) => (b < 4 ? edges[b + 1] : Infinity); // the last bar keeps the top
+    expect(binRanges(set(3, 0, 1, 4), lo, hi)).toEqual([[0, 2], [3, Infinity]]);
+    expect(binRanges(set(), lo, hi)).toEqual([]);
+    expect(list(binsIn([[0, 2], [3, Infinity]], 5, lo, hi))).toEqual([0, 1, 3, 4]);
+    expect(list(binsIn([[0.5, 2]], 5, lo, hi))).toEqual([1]); // a bar half in a range is not selected
   });
 });

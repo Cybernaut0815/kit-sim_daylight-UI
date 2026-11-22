@@ -511,7 +511,7 @@ export default function App() {
   useEffect(() => (agents ? connect(() => ctl.current) : undefined), [agents]);
 
   // A tab switch shows the other analysis' roles, results and colours: the cursor's and the bin's marks go
-  const onTab = (t: Tab) => { dispatch({ type: 'PROBE', probe: null }); dispatch({ type: 'BIN', bin: null }); setUi((u) => ({ ...u, tab: t })); };
+  const onTab = (t: Tab) => { dispatch({ type: 'PROBE', probe: null }); dispatch({ type: 'BIN', bin: null }); dispatch({ type: 'BINS', bins: [] }); setUi((u) => ({ ...u, tab: t })); };
   const tabs: [Tab, string][] = [['daylight', 'Daylight'], ['views', 'View analysis']];
   return (
     <div className="app-shell" style={knob('--sidebar-w', '0px')}>
@@ -562,7 +562,7 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
-                      scale={A.scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} around={sunAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab}
+                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} around={sunAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
@@ -609,7 +609,7 @@ export default function App() {
           </div>
           <div className="panel-wrap">
             <aside className="panel stack" data-density="compact" aria-label="Results">
-              <ResultsPanel models={A.compared} column={A.column} colourBy={colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} scale={A.scale} domain={A.domain} viz={s.viz} charts={charts} auto={A.autoOn && !A.slow} analysis={ui.tab} dispatch={views ? dispatchViews : dispatch} reports={views ? null : reports} reportError={reportError} onReportChart={onReportChart} />
+              <ResultsPanel models={A.compared} column={A.column} colourBy={colourBy} hovered={state.hovered} probe={state.probe} bin={state.bin} bins={state.bins} scale={A.scale} domain={A.domain} viz={s.viz} charts={charts} auto={A.autoOn && !A.slow} analysis={ui.tab} dispatch={views ? dispatchViews : dispatch} reports={views ? null : reports} reportError={reportError} onReportChart={onReportChart} />
             </aside>
             <Splitter side="right" value={ui.widths.right} min={MIN_W} max={MAX_W} defaultValue={UI.widths.right} label="Results panel width" onChange={(right) => setUi((u) => ({ ...u, widths: { ...u.widths, right } }))} />
           </div>
