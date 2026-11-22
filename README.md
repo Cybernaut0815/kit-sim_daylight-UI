@@ -48,8 +48,8 @@ materials, with roles, settings and results of its own: receivers, obstructions,
 for a named group: water, a park) and ignored meshes; the field of view (out of a window about each face's normal, all
 around, or the horizontal ring of the 2D isovist), cell, eye offset, far, reach (EN 17037's 6 / 20 / 50 m or own
 distances), the virtual ground and whether rays pass glass. Results per element: the shares of the field that end on
-the sky, the ground, an obstruction and each target group, the ground and the obstructions joined (what is neither sky
-nor a target), the share seen through glass, the view distances (log mean, nearest) or the isovist (volume, area) and
+the sky, the ground, an obstruction and each target group, the total obstruction (everything that is not sky: ground,
+obstructions and targets), the share seen through glass, the view distances (log mean, nearest) or the isovist (volume, area) and
 the reach shares, painted on the meshes (each kind of result in a gradient of its own: sky blues, ground oranges,
 obstruction greys, targets greens, distances logarithmic), with the distribution charts, a view composition donut (bars
 per model when comparing) and reach bars. Switching tabs keeps each analysis' roles and

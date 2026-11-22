@@ -43,7 +43,7 @@ describe('gradients', () => {
 describe('the defaults per result', () => {
   it('every view result has a gradient of its own kind; any other name is a target group', () => {
     const key = (q: string) => gradientFor(q).key;
-    expect(['sky', 'ground', 'obstruction', 'ground_obstruction', 'glazing', 'volume', 'area', 'distance', 'distance_min', 'water_distance', 'reach_20', 'water', 'green_park'].map(key))
+    expect(['sky', 'ground', 'obstruction', 'obstruction_total', 'glazing', 'volume', 'area', 'distance', 'distance_min', 'water_distance', 'reach_20', 'water', 'green_park'].map(key))
       .toEqual(['blues', 'oranges', 'greys', 'greys', 'purples', 'plasma', 'plasma', 'viridis', 'viridis', 'viridis', 'cividis', 'greens', 'greens']);
     expect(['radiation', 'sunhours', 'illuminance'].map(key)).toEqual(['inferno', 'cividis', 'viridis']);
     expect(['distance', 'water_distance_min', 'sky', 'radiation'].map(defaultScaling)).toEqual(['log', 'log', 'linear', 'linear']);
@@ -126,7 +126,8 @@ describe('the 3D view paints as the legend draws', () => {
     const u = (span > 0 ? Math.min(Math.max((v - p.min) / span, 0), 1) : 0) * last, k = Math.min(Math.floor(u), last - 1);
     const c = !Number.isFinite(v) ? [0.5, 0.5, 0.5] : p.below && v < p.below.value ? hexToRgb(p.below.color) : p.above && v > p.above.value ? hexToRgb(p.above.color)
       : s[k].map((x, j) => x + (u - k) * (s[k + 1][j] - x));
-    return p.band && !(v >= p.band[0] && v < p.band[1]) ? c.map((x) => 0.15 * x + 0.51) : c;
+    const bands = !p.band ? null : Array.isArray(p.band[0]) ? (p.band as [number, number][]) : [p.band as [number, number]]; // one range or several
+    return bands && !bands.some((b) => v >= b[0] && v < b[1]) ? c.map((x) => 0.15 * x + 0.51) : c;
   };
   const values = [-1, 0, 0.004, 1.9, 2, 3.3, 5, 7.7, 8, 8.1, 10, 11, NaN];
   const moved: Gradient = { key: 'm', label: 'm', stops: ['#ff0000', '#00ff00', '#0000ff', '#ffffff'], positions: [0, 0.1, 0.7, 1] };

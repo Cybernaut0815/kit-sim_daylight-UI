@@ -546,7 +546,7 @@
         "type": "object",
         "description": "The result fields; all present on a `RunResult` and on a `done` job.",
         "properties": {
-          "columns": { "type": "array", "items": { "type": "string" }, "description": "Column names `<quantity>_<side>`, in `--quantity` order, sides inner (views: `<name>_<side>`, see `RunRequest.tool`).", "examples": [["radiation_front", "sunhours_front"], ["sky_front", "ground_front", "obstruction_front", "ground_obstruction_front", "water_front", "distance_front", "distance_min_front"]] },
+          "columns": { "type": "array", "items": { "type": "string" }, "description": "Column names `<quantity>_<side>`, in `--quantity` order, sides inner (views: `<name>_<side>`, see `RunRequest.tool`).", "examples": [["radiation_front", "sunhours_front"], ["sky_front", "ground_front", "obstruction_front", "obstruction_total_front", "water_front", "distance_front", "distance_min_front"]] },
           "duration_h": { "type": "number", "description": "Daylight: hours represented by the evaluated steps." },
           "dirs": { "type": "object", "description": "Daylight: ray directions traced per sensor.", "properties": { "sky": { "type": "integer" }, "ground": { "type": "integer" }, "sun": { "type": "integer" } } },
           "view": { "type": "object", "description": "Views: the field as run: `fov` [H, LO, HI], `cell`, `grid` [rows, columns], `jitter`, `north`, `offset`, `far`, `near` (the 0.1 m floor), `virtual_ground`, `ground_z` (the plane's height), `transmission` (only when on), `reach`, `classes` and `image` (the ray order)." },

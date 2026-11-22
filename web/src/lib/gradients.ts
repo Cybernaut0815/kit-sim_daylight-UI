@@ -37,7 +37,7 @@ export const GRADIENTS: Gradient[] = [
 export const DEFAULT_GRADIENT: Record<string, string> = { radiation: 'inferno', direct: 'inferno', diffuse: 'inferno', irradiance: 'magma', illuminance: 'viridis', sunhours: 'cividis' };
 // The view analysis: each share in the hue of what it sees (sky blue, ground earth, obstruction grey, glass purple, a
 // target group green: any other name is one), sizes and distances on the perceptual maps.
-const VIEW_GRADIENT: [RegExp, string][] = [[/^sky$/, 'blues'], [/^ground$/, 'oranges'], [/^(ground_)?obstruction$/, 'greys'], [/^glazing$/, 'purples'], [/^(volume|area)$/, 'plasma'], [/distance(_min)?$/, 'viridis'], [/^reach_/, 'cividis']];
+const VIEW_GRADIENT: [RegExp, string][] = [[/^sky$/, 'blues'], [/^ground$/, 'oranges'], [/^obstruction(_total)?$/, 'greys'], [/^glazing$/, 'purples'], [/^(volume|area)$/, 'plasma'], [/distance(_min)?$/, 'viridis'], [/^reach_/, 'cividis']];
 const defaultGradient = (quantity: string) => DEFAULT_GRADIENT[quantity] ?? VIEW_GRADIENT.find(([re]) => re.test(quantity))?.[1] ?? 'greens';
 /** Problem-range colours: pure blue under, pure red over. */
 export const DEFAULT_BELOW = '#0000ff', DEFAULT_ABOVE = '#ff0000';

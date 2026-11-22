@@ -109,7 +109,7 @@ function views(sensors: string[], arg: (k: string, d: string) => string, sides: 
   const targets = arg('--target', '').split(';').filter(Boolean).map((t) => ({ mesh: t.slice(0, t.lastIndexOf('=')), group: t.slice(t.lastIndexOf('=') + 1) }));
   const groups = [...new Set(targets.map((t) => t.group))], reach = arg('--reach', '') === 'en17037' ? [6, 20, 50] : arg('--reach', '').split(',').filter(Boolean).map(Number);
   const shares = ['sky', 'ground', 'obstruction', ...groups], glass = arg('--transmission', 'off') === 'on';
-  const names = ['sky', 'ground', 'obstruction', 'ground_obstruction', ...groups, ...(glass ? ['glazing'] : []), ...(h === 360 ? [flat ? 'area' : 'volume'] : ['distance', 'distance_min']), ...reach.map((d) => `reach_${d}`)];
+  const names = ['sky', 'ground', 'obstruction', 'obstruction_total', ...groups, ...(glass ? ['glazing'] : []), ...(h === 360 ? [flat ? 'area' : 'volume'] : ['distance', 'distance_min']), ...reach.map((d) => `reach_${d}`)];
   const columns = names.flatMap((q) => (sides === 'both' ? ['front', 'back'] : [sides]).map((x) => `${q}_${x}`));
   let first = 0;
   const mm = sensors.map((id) => { const m = meshes.get(id)!, count = on === 'vertices' ? m.points : m.faces, r = { name: m.name, first, count }; first += count; return r; });
@@ -120,7 +120,7 @@ function views(sensors: string[], arg: (k: string, d: string) => string, sides: 
       names.forEach((q, i) => {
         const c = i * (columns.length / per) + k, open = w[0] / sum;
         const s = shares.indexOf(q);
-        values[at(c, r)] = s >= 0 ? w[s] / sum : q === 'ground_obstruction' ? (w[1] + w[2]) / sum : q === 'glazing' ? 0.1 * Math.random() : q === 'volume' ? 50 + 400 * Math.random() : q === 'area' ? 20 + 200 * Math.random()
+        values[at(c, r)] = s >= 0 ? w[s] / sum : q === 'obstruction_total' ? 1 - w[0] / sum : q === 'glazing' ? 0.1 * Math.random() : q === 'volume' ? 50 + 400 * Math.random() : q === 'area' ? 20 + 200 * Math.random()
           : q === 'distance' ? 5 * (far / 5) ** open : q === 'distance_min' ? 0.5 + 10 * Math.random() : open + (1 - open) * Math.random() * 0.5;
       });
     }

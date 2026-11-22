@@ -369,7 +369,7 @@ bool views_job(const std::shared_ptr<Job>& j, std::vector<char*>& av, const std:
   j->weatherCache = "none";
   views::Field f;
   if (!views::field({}, a.opt, f, err)) return fail(400, err);
-  // columns per side, in the core's order: sky ground obstruction ground_obstruction, a share per group, glazing, the
+  // columns per side, in the core's order: sky ground obstruction obstruction_total, a share per group, glazing, the
   // isovist, the distances, each group's distances, reach_<D>
   std::unordered_set<std::string> groups;
   for (const auto& t : a.opt.targets) groups.insert(t.group);
