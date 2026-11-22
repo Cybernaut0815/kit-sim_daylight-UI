@@ -3,3 +3,5 @@ node_modules/
 dist/
 .venv/
 __pycache__/
+
+future_prompts/
