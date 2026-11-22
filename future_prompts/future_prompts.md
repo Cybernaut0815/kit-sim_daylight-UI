@@ -60,10 +60,21 @@ Plesae add MCP functionality for the view analysis and update the colour setting
 ## Prompt 5
 
 ___
+2026|11|22 - 15:15 pm
+
+Please add for each setting on the analysis a small diagram on the current setting, that shows diagramatically, how the current setting is
+So for views only under "field of view" and for "daylight" under "time"
+Please for views also (similar to the sun path) add a visualization on the mesh directly which would prefview the view fields according ot the settings - make sure that hit only shows it kind as a camera and make sure it will not comporise the performance of the viewer with many analytics parts
+Also make sure, it can be same as the sunpath turnged on and off and also edits can be made as scaleing it in scale and so on, but it should show the user the raycast field taken in account
+
+## Prompt 6
+
+___
 2026|11|22 - 14:55 pm
 
 Please make sure, that there is an additional tab, which can show accumlated views on meshes
 That tab should always be on the right, not matter how many tabs like currently "daylight" or "view analysis" will be added
-In this one I want to be able to create custom views, which either just take specific meshes from teh analytics, but if meshes have several anaysis, that they can also be combined (with a weigting and also functions that can be applied on the values and visulisations)
+In this one I want to be able to create custom views, which either just take specific meshes from th analytics, but if meshes have several anaysis, that they can also be combined (with a weigting and also functions that can be applied on the values and visulisations )
 So I could for example try to apply several results on a facade surface, so evaluate a cumulative result on the "performance" of it and visulize that also accordingly
-Please mke sure, that this visualization tab and the according visualization also has full MCP access
+Also in this view, but also int he other result view it should be possible to sample values on the 3d mesh - so show values direclty in the 3d view over the gradient (only of not covered by other meshes and also should make sure, that it is not too dense/to many values previews on each vertex if zoomed out and it should not comprommise the perfomance of the viewer and shoudl be toggle-able - by default off)
+Please make sure, that this visualization tab and the according visualization also has full MCP access
