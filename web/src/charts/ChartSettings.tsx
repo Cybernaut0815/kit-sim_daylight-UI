@@ -3,11 +3,12 @@
 // Results panel shows over its charts.
 import type { Dispatch } from 'react';
 import { BUILT_IN, FIELDS, MARKERS, METRICS, isShare, type ChartSpec, type Drawn, type Metric } from '../lib/charts';
-import { GRADIENTS, scaleFor, type Scale } from '../lib/gradients';
+import { SCALINGS, gradientsOf, scaleFor, type Scale, type Scaling } from '../lib/gradients';
 import { columnLabel, fmtNum, splitColumn, unitFor } from '../lib/result';
 import type { Action, Settings } from '../store';
 import { ColorQuad, MenuButton, NumberField, ResetButton, Segmented } from '../ui';
 import { niceStep } from './axes';
+import { GradientEditor } from './GradientEditor';
 import { METRIC_LABEL } from './Parts';
 
 /** What the CHART action does to a chart: put by id, removed (one's own), its look back to the kind's. */
@@ -21,10 +22,13 @@ const rounded = ([a, b]: [number, number]): [number, number] => { const s = nice
 /**
  * A quantity's colour scale and problem range (VIZ / VIZ_RESET), shared by the 3D views and every chart: in the Results
  * panel and in each chart's menu (ids after `idp`). Min / Max blank: the data's bound, shown as the placeholder.
+ * Scaling: how the values spread along the gradient between Min and Max; Edit: the gradient's own stops (the library,
+ * shared by every quantity).
  */
 export function ScaleFields({ idp = '', quantity, scale, viz, many, dispatch }: { idp?: string; quantity: string; scale: Scale; viz: Settings['viz']; many: boolean; dispatch: Dispatch<Action> }) {
   const unit = unitFor(quantity).value, inUnit = unit ? ` (${unit})` : ''; // the unit once per group: the labels stay one short word
   const setViz = (patch: Extract<Action, { type: 'VIZ' }>['patch']) => dispatch({ type: 'VIZ', quantity, patch });
+  const scalingHelp = SCALINGS.find(([k]) => k === scale.scaling)?.[2];
   return (
     // one row of five controls when there is room for them, else two
     <div className="scale-row">
@@ -34,11 +38,23 @@ export function ScaleFields({ idp = '', quantity, scale, viz, many, dispatch }: 
           <div className="field">
             <label className="field__label" htmlFor={`${idp}gradient`}>Gradient</label>
             <select className="select" id={`${idp}gradient`} value={scale.gradient.key} onChange={(e) => setViz({ gradient: e.target.value })}>
-              {GRADIENTS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+              {gradientsOf(viz.library).map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
             </select>
           </div>
           <NumberField id={`${idp}scale-min`} label="Min" value={viz.scales[quantity]?.min ?? NaN} placeholder={fmtNum(scale.vmin)} onCommit={(v) => setViz({ min: orNull(v) })} />
           <NumberField id={`${idp}scale-max`} label="Max" value={viz.scales[quantity]?.max ?? NaN} placeholder={fmtNum(scale.vmax)} onCommit={(v) => setViz({ max: orNull(v) })} />
+        </div>
+        <div className="scale-row__cols">
+          <div className="field">
+            <label className="field__label" htmlFor={`${idp}scaling`}>Scaling</label>
+            <select className="select" id={`${idp}scaling`} value={scale.scaling} title={scalingHelp} onChange={(e) => setViz({ scaling: e.target.value as Scaling })}>
+              {SCALINGS.map(([k, label, help]) => <option key={k} value={k} title={help}>{label}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <span className="field__label">Stops</span>
+            <GradientEditor id={`${idp}gradient-edit`} gradient={scale.gradient} library={viz.library} dispatch={dispatch} onUse={(key) => setViz({ gradient: key })} />
+          </div>
         </div>
       </fieldset>
       <fieldset className="field" aria-labelledby={`${idp}lg-range`}>

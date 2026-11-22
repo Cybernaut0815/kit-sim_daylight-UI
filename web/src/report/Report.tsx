@@ -117,7 +117,7 @@ function Page(p: ReportInput) {
   const byLetter = (l: string) => models.find((m) => LETTERS[m.slot] === l)!;
   const range = (column: string) => s.viz.ranges[column.split('_')[0]] ?? { lo: null, hi: null };
   const summary = (m: Model, column: string, by: 'parts' | 'mesh' | 'facing', paths?: readonly string[]) => summaries(p, m, column, by, paths, range(column).lo ?? null, range(column).hi ?? null);
-  const scaleOf = (column: string) => scaleFor(column, unionRange(models.map((m) => m.result), column), s.viz); // the report models' scale: the images' (generate.ts pins it)
+  const scaleOf = (column: string) => scaleFor(column, unionRange(models.map((m) => m.result), column), s.viz, models.map((m) => m.result)); // the report models' scale: the images' (generate.ts pins it)
   let figures = 0, tables = 0;
   const numbers = r.blocks.map((b) => (b.type === 'chart' || b.type === 'view' ? ++figures : b.type === 'table' ? ++tables : 0));
   const columns = [...new Set([...(r.stats ?? []).map((x) => x.column), ...r.blocks.flatMap((b) => (b.type === 'chart' ? [b.chart.column!] : b.type === 'view' ? (b.column ? [b.column] : []) : b.type === 'table' ? [b.column] : []))])];

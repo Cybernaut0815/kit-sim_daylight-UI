@@ -154,7 +154,7 @@ export type Drawn =
 /** A chart's numbers: its models' receivers (or those under its parts) in its column, on that column's colour scale. */
 export function chartData(spec: ChartSpec, input: ChartInput): Drawn {
   const column = spec.column ?? input.column, results = input.models.flatMap((m) => (m.result ? [m.result] : []));
-  const scale = scaleFor(column, unionRange(results, column), input.viz), unit = unitFor(column).value, grid = spec.grid ?? true;
+  const scale = scaleFor(column, unionRange(results, column), input.viz, results), unit = unitFor(column).value, grid = spec.grid ?? true;
   const mine = input.models.filter((m) => !spec.models || spec.models.includes(m.slot)), ms = mine.filter((m) => m.result?.columns.includes(column));
   if (!ms.length) return { kind: 'empty', reason: 'No result for this column' };
   const data = (m: (typeof ms)[number], ids?: readonly string[]) => dataOf(m.result!, m.result!.columns.indexOf(column), m.objects, ids);

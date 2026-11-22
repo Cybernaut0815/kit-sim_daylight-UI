@@ -4,7 +4,7 @@ import type { RemoteManifest } from 'daylight-mesh';
 import { BUILT_IN, FIELDS, putChart, type ChartSpec } from './lib/charts';
 import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
-import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
+import { DEFAULT_ABOVE, DEFAULT_BELOW, SCALINGS, gradientDef, type GradientDef, type Scaling } from './lib/gradients';
 import type { OpticsEdit } from './lib/optics';
 import type { Topology } from './lib/topology';
 import { idsUnder } from './lib/tree';
@@ -43,11 +43,14 @@ export interface Settings {
     transmission: boolean; fresnel: boolean; // light through glass / porous materials; glass by angle (Radiance glass)
     bounces: number; bounceSamples: number; // reflected light: diffuse reflections 0..20 (0 = off), paths per sensor 64..65536
   };
-  // Result colouring per quantity: gradient key, legend domain (null = data range), the problem range (null = open),
-  // and the two range colours (hex, shared by every quantity).
+  // Result colouring per quantity: gradient key, legend domain (null = data range), how the values spread along the
+  // gradient (absent: the quantity's default), the problem range (null = open), and the two range colours (hex, shared
+  // by every quantity). `library`: the gradients the user made or changed, by key (a preset's key: that preset as
+  // changed), shared by every quantity and both analyses.
   viz: {
     gradients: Record<string, string>; scales: Record<string, { min: number | null; max: number | null }>; ranges: Record<string, { lo: number | null; hi: number | null }>;
     colors: { below: string; above: string };
+    scalings: Record<string, Scaling>; library: Record<string, GradientDef>;
   };
   charts: ChartSpec[]; // the Results charts in drawing order: the two built-ins (their look), then extras
   viewSim: ViewSim; // the view analysis' settings (its own; north is the site's, sim.north)
@@ -152,7 +155,8 @@ export type Action =
   | ({ type: 'COLOUR_BY'; colourBy: 'plain' | 'value' } & OfTab)
   | { type: 'PROBE'; probe: Probe | null }
   | { type: 'BIN'; bin: [number, number] | null }
-  | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string } }
+  | { type: 'VIZ'; quantity: string; patch: { gradient?: string; min?: number | null; max?: number | null; lo?: number | null; hi?: number | null; below?: string; above?: string; scaling?: Scaling } }
+  | { type: 'GRADIENT'; key: string; gradient: GradientDef | null } // the library: put (a new one, or a preset as changed); null: gone (a preset: back as built in)
   | { type: 'VIZ_RESET'; quantity: string; what: 'scale' | 'range' }
   | ({ type: 'CHART' } & ({ spec: ChartSpec } | { id: string; remove: true } | { id: string; reset: true })) // put in place by id, removed (an extra), its look back to the kind's
   | ({ type: 'ERRORS'; errors: Record<string, string> } & OfTab)
@@ -167,7 +171,7 @@ export const defaultSettings = (): Settings => ({
   epwMeta: null,
   time: { mode: 'annual', date: solstice, hour: 720, from: { date: solstice, hour: 480 }, to: { date: solstice, hour: 1080 }, stepMin: 60 },
   sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true, bounces: 0, bounceSamples: 1024 },
-  viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } },
+  viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE }, scalings: {}, library: {} },
   charts: BUILT_IN.map((c) => ({ ...c })),
   viewSim: { fov: [120, -70, 50], cell: 2, sides: 'front', on: 'faces', offset: 0, far: 1000, virtualGround: true, groundZ: null, reach: '', transmission: false, cullBackfaces: false, selfOcclude: true },
 });
@@ -374,8 +378,9 @@ function analysis(s: State, a: Action): State {
     case 'BIN':
       return { ...s, bin: a.bin };
     case 'VIZ': {
-      const { gradients, scales, ranges, colors } = s.settings.viz, q = a.quantity, p = a.patch;
+      const { gradients, scales, ranges, colors, scalings, library } = s.settings.viz, q = a.quantity, p = a.patch;
       const viz = {
+        library, scalings: p.scaling !== undefined ? { ...scalings, [q]: p.scaling } : scalings,
         gradients: p.gradient !== undefined ? { ...gradients, [q]: p.gradient } : gradients,
         scales: p.min !== undefined || p.max !== undefined ? { ...scales, [q]: { min: p.min !== undefined ? p.min : scales[q]?.min ?? null, max: p.max !== undefined ? p.max : scales[q]?.max ?? null } } : scales,
         ranges: p.lo !== undefined || p.hi !== undefined ? { ...ranges, [q]: { lo: p.lo !== undefined ? p.lo : ranges[q]?.lo ?? null, hi: p.hi !== undefined ? p.hi : ranges[q]?.hi ?? null } } : ranges,
@@ -384,12 +389,17 @@ function analysis(s: State, a: Action): State {
       return { ...s, settings: { ...s.settings, viz } };
     }
     case 'VIZ_RESET': {
-      const { gradients, scales, ranges } = s.settings.viz, q = a.quantity;
+      const { gradients, scales, ranges, scalings } = s.settings.viz, q = a.quantity;
       const drop = <T,>(r: Record<string, T>) => { const { [q]: _gone, ...rest } = r; return rest; };
       const viz = a.what === 'scale'
-        ? { ...s.settings.viz, gradients: drop(gradients), scales: drop(scales) }
+        ? { ...s.settings.viz, gradients: drop(gradients), scales: drop(scales), scalings: drop(scalings) }
         : { ...s.settings.viz, ranges: drop(ranges), colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE } };
       return { ...s, settings: { ...s.settings, viz } };
+    }
+    case 'GRADIENT': { // as stored (gradientDef): a definition that is none changes nothing
+      const { [a.key]: _was, ...rest } = s.settings.viz.library, g = a.gradient && gradientDef(a.gradient);
+      if (a.gradient && !g) return s;
+      return { ...s, settings: { ...s.settings, viz: { ...s.settings.viz, library: g ? { ...rest, [a.key]: g } : rest } } };
     }
     case 'CHART': { // a built-in is never removed
       const cs = s.settings.charts, old = 'spec' in a ? undefined : cs.find((c) => c.id === a.id);
@@ -439,7 +449,11 @@ export function parseSettings(raw: string | null): Settings {
     return {
       site: { lat: num(site.lat, d.site.lat), lon: num(site.lon, d.site.lon), place: typeof site.place === 'string' ? site.place : d.site.place }, weather: { ...d.weather, ...p.weather, file: null },
       epwMeta: (p.epwMeta as EpwMeta | null | undefined) ?? null, time: { ...d.time, ...p.time }, sim: { ...d.sim, ...p.sim },
-      viz: { gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges }, colors: { ...d.viz.colors, ...viz.colors } },
+      viz: {
+        gradients: { ...viz.gradients }, scales: { ...viz.scales }, ranges: { ...viz.ranges }, colors: { ...d.viz.colors, ...viz.colors },
+        scalings: Object.fromEntries(Object.entries(viz.scalings ?? {}).filter(([, v]) => SCALINGS.some(([k]) => k === v))),
+        library: Object.fromEntries(Object.entries(viz.library ?? {}).flatMap(([key, g]) => { const def = gradientDef(g); return def ? [[key, def]] : []; })),
+      },
       charts: (Array.isArray(p.charts) ? p.charts : []).reduce<ChartSpec[]>(put1, d.charts), // over the built-ins; junk is dropped
       viewSim: viewSimOf(p.viewSim, d.viewSim),
     };

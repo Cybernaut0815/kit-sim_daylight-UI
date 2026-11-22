@@ -15,7 +15,7 @@ import { validate, weatherLeap } from '../lib/args';
 import { BUILT_IN, FIELDS, dataOf, putChart, type ChartSpec } from '../lib/charts';
 import { boxToWorld, cornersOf, describeView, facingOf, findCritical, frameView, meanNormal, viewDir, type Box, type Facing, type Points, type Vec3 } from '../lib/frame';
 import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, photonReverse, photonSearch, proxyUrl } from '../lib/geo';
-import { gradientFor, type Scale } from '../lib/gradients';
+import { defaultScaling, gradientFor, type Scale } from '../lib/gradients';
 import { DEFAULT_KEY, GLASS_KEY, PRESETS, editOptics, type Optics, type resolveOptics } from '../lib/optics';
 import { QUANTITY_HELP, SIDE_HELP, fmtNum, roundNum, roundPct, summarize, unitFor, type Summary } from '../lib/result';
 import { NONE, describe, given, toStage, type Bounds, type Section } from '../lib/section';
@@ -484,7 +484,7 @@ export function publicSettings(s: Settings) {
     viz: {
       belowColour: viz.colors.below, aboveColour: viz.colors.above,
       quantities: Object.fromEntries(QUANTITIES.map((q) => [q, {
-        gradient: gradientFor(q, viz.gradients[q]).key, min: viz.scales[q]?.min ?? null, max: viz.scales[q]?.max ?? null, below: viz.ranges[q]?.lo ?? null, above: viz.ranges[q]?.hi ?? null,
+        gradient: gradientFor(q, viz.gradients[q], viz.library).key, scaling: viz.scalings[q] ?? defaultScaling(q), min: viz.scales[q]?.min ?? null, max: viz.scales[q]?.max ?? null, below: viz.ranges[q]?.lo ?? null, above: viz.ranges[q]?.hi ?? null,
       }])),
     },
     charts: s.charts.map((c) => (c.models ? { ...c, models: c.models.map(letter) } : c)),
@@ -544,10 +544,10 @@ export function settingsActions(a: Args, s: State, shown: string | null, file?: 
   }
   if (a.sim) out.push(...(a.sim.mode ? [simMode(a.sim.mode)] : []), { type: 'SIM', patch: a.sim });
   if (a.viz) {
-    const { quantity = shown?.split('_')[0], reset, gradient, min, max, below, above, belowColour, aboveColour } = a.viz;
+    const { quantity = shown?.split('_')[0], reset, gradient, scaling, min, max, below, above, belowColour, aboveColour } = a.viz;
     if (!quantity) throw new Error('viz.quantity: no result is shown yet; name the quantity');
     if (reset) out.push({ type: 'VIZ_RESET', quantity, what: reset }); // first: the other fields go over it
-    const patch = Object.fromEntries(Object.entries({ gradient, min, max, lo: below, hi: above, below: belowColour, above: aboveColour }).filter(([, v]) => v !== undefined));
+    const patch = Object.fromEntries(Object.entries({ gradient, scaling, min, max, lo: below, hi: above, below: belowColour, above: aboveColour }).filter(([, v]) => v !== undefined));
     if (Object.keys(patch).length) out.push({ type: 'VIZ', quantity, patch });
   }
   let st = s; // the charts so far
@@ -1149,10 +1149,10 @@ function pickup(c: () => Ctl): void {
         d(simMode(p.sim.mode));
         d({ type: 'SIM', patch: p.sim });
         for (const quantity of QUANTITIES) {
-          const g = p.viz.gradients[quantity], sc = p.viz.scales[quantity], rg = p.viz.ranges[quantity];
+          const g = p.viz.gradients[quantity], sc = p.viz.scales[quantity], rg = p.viz.ranges[quantity], sg = p.viz.scalings[quantity];
           d({ type: 'VIZ_RESET', quantity, what: 'scale' });
           d({ type: 'VIZ_RESET', quantity, what: 'range' });
-          d({ type: 'VIZ', quantity, patch: { ...(g ? { gradient: g } : {}), min: sc?.min ?? null, max: sc?.max ?? null, lo: rg?.lo ?? null, hi: rg?.hi ?? null, below: p.viz.colors.below, above: p.viz.colors.above } });
+          d({ type: 'VIZ', quantity, patch: { ...(g ? { gradient: g } : {}), ...(sg ? { scaling: sg } : {}), min: sc?.min ?? null, max: sc?.max ?? null, lo: rg?.lo ?? null, hi: rg?.hi ?? null, below: p.viz.colors.below, above: p.viz.colors.above } });
         }
         for (const ch of c().state.settings.charts) if (!p.charts.some((k) => k.id === ch.id)) d({ type: 'CHART', id: ch.id, remove: true });
         for (const spec of p.charts) d({ type: 'CHART', spec });

@@ -464,7 +464,7 @@ export default function App() {
     try {
       await download(format, mode, {
         usd: viewer(xm.slot).el, result, objects: xm.objects, meshes: ap.meshes, column: col, model: picked,
-        scales: result.columns.map((c) => scaleFor(c, unionRange(X.results, c), s.viz)), // the colours on screen: one scale over every model
+        scales: result.columns.map((c) => scaleFor(c, unionRange(X.results, c), s.viz, X.results)), // the colours on screen: one scale over every model
       });
     } catch (e) {
       setExportError({ key: result.key, message: (e as Error).message });
@@ -793,7 +793,7 @@ function useAnalysis(c: AnalysisCfg) {
   const bySlot = [0, 1, 2, 3].map((k) => models.find((m) => m.slot === k)?.result ?? null); // fixed length: memo deps
   const results = useMemo(() => bySlot.filter((r): r is RunResult => !!r), bySlot); // eslint-disable-line react-hooks/exhaustive-deps
   const domain = useMemo<[number, number]>(() => (shown ? unionRange(results, shown) : [NaN, NaN]), [results, shown]); // ponytail: O(rows) per new result; cache per result if it shows
-  const scale = useMemo<Scale | null>(() => (shown ? scaleFor(shown, domain, c.viz) : null), [shown, domain[0], domain[1], c.viz]); // eslint-disable-line react-hooks/exhaustive-deps -- by value: an equal range repaints nothing
+  const scale = useMemo<Scale | null>(() => (shown ? scaleFor(shown, domain, c.viz, results) : null), [shown, domain[0], domain[1], c.viz, results]); // eslint-disable-line react-hooks/exhaustive-deps -- by value: an equal range repaints nothing
   const stale = per.map((p) => !!p.m.result && !inFlight(p.m.run) && p.m.result.key !== p.key && !(autoOn && p.key !== lastKey.current[p.m.slot])); // unless Auto is about to run it
   const staleKey = stale.map(Number).join('');
   const compared = useMemo<Compared[]>(() => models.map((m, i) => ({ ...m, col: cols[i], stale: staleKey[i] === '1' })), [models, shown, staleKey]); // eslint-disable-line react-hooks/exhaustive-deps -- cols follow the models and the column: stable across the cursor's moves

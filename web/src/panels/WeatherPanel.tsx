@@ -109,7 +109,7 @@ export const WeatherPanel = memo(function WeatherPanel({ weather, site, epwMeta,
                 ? epwLine
                 : <><span className="spinner" aria-hidden="true" /> Reading the weather file</>}
             </p>
-            <EpwCharts monthly={epwMeta?.monthly ?? null} sun={gradientFor('sunhours', viz.gradients.sunhours)} rad={gradientFor('radiation', viz.gradients.radiation)} />
+            <EpwCharts monthly={epwMeta?.monthly ?? null} sun={gradientFor('sunhours', viz.gradients.sunhours, viz.library)} rad={gradientFor('radiation', viz.gradients.radiation, viz.library)} />
           </>)}
       {errors.weather && <p className="field__error">{errors.weather}</p>}
     </Section>

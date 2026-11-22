@@ -12,7 +12,7 @@ import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
-import { paintStyleOf, type Scale } from '../lib/gradients';
+import { paintOf, type Scale } from '../lib/gradients';
 import { drawnValues, faceRow } from '../lib/topology';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
@@ -339,23 +339,27 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   // bin) only restyle. A receiver's rows are its own faces or points (lib/topology.ts): a face's value goes to each of
   // its drawn triangles, a point's to the drawn corners that name it (so two parts meeting at one drawn vertex keep
   // their own values). A receiver sent as drawn has a row per triangle or vertex: views into the column, no copies.
+  // A scaling or moved stops (lib/gradients paintOf): the values go through its map on the way, and are painted again
+  // when the map changes (its key); a linear scale with even stops stays uniforms only.
+  const paint = useMemo(() => (scale ? paintOf(scale) : null), [scale]);
   useEffect(() => {
-    if (scale) usd.paintStyle = paintStyleOf(scale, bin);
-  }, [scale, bin]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
+    if (paint) usd.paintStyle = paint.style(bin);
+  }, [paint, bin]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
   useEffect(() => {
     const items: { rid: number; values: Float32Array }[] = [];
     const perVertex = byValue?.on === 'vertices', corners = perVertex && !!byValue.forms?.some(Boolean); // one mode per paint
+    const map = paint?.map ?? undefined;
     if (byValue && scale) {
       const role = new Map(objects.map((o) => [o.id, o.role])), col = byValue.data[column];
       for (const [id, obj] of meshes) {
         const k = role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1;
         if (k < 0) continue;
         const g = byValue.manifest.meshes[k], rows = col.subarray(g.first, g.first + g.count), index = (obj as THREE.Mesh).geometry?.index?.array;
-        items.push({ rid: obj.userData.rid as number, values: perVertex && !(corners && index) ? rows : drawnValues(rows, byValue.forms?.[k] ?? null, byValue.on, index ?? []) });
+        items.push({ rid: obj.userData.rid as number, values: perVertex && !(corners && index) ? (map ? rows.map(map) : rows) : drawnValues(rows, byValue.forms?.[k] ?? null, byValue.on, index ?? [], map) });
       }
     }
     void usd.paint(items, !perVertex ? 'face' : corners ? 'corner' : 'vertex'); // the viewer warns about what it skips (its log)
-  }, [meshes, objects, byValue, recv, column, !!scale]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above
+  }, [meshes, objects, byValue, recv, column, !!scale, paint?.key]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above, a new map paints again
 
   // Hover: a light accent tint over the mesh, fainter over results.
   useEffect(() => {

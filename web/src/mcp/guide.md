@@ -117,7 +117,9 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
   inclusive as 'within'. It drives the shares in results, the default of find_critical and the parts chart metrics
   below / within / above. Set it to the criterion under discussion so the views, charts and numbers agree, and name
   the quantity: viz {quantity: 'sunhours', below: 1.5} (without quantity it applies to the shown column's quantity).
-- Colour scale: viz.gradient, viz.min and viz.max (null = the data's range over every model) only colour the views and
+- Colour scale: viz.gradient, viz.scaling (linear, log, sqrt, square, equalised: how the values spread along the
+  gradient; say it in a figure's caption when it is not linear, since equal colour steps are then not equal value
+  steps), viz.min and viz.max (null = the data's range over every model) only colour the views and
   set the charts' relative axis; no statistic changes.
 
 ## 5. Assumptions and limits
