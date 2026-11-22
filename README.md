@@ -9,10 +9,24 @@ grid of points in a room) in the stage's prim tree, switch its variants, hide or
 catmullClark / loop meshes (creases included) so the run uses the smooth surface, set
 the site on a map, the weather (upload, nearest station, PVGIS or clear sky), the time (a single date and time, a date
 range such as 09:00 to 17:00 every day of the summer, or the whole year) on timelines or by dragging the sun path drawn
-around the model, and every CLI option; run on the GPU box (or tick "Run on every change"), read the results on the
-meshes (per-quantity gradients, a problem range painted blue / red) and in charts (legend, area-weighted histogram,
-cumulative area curve, each over the colour scale or the whole data range, range split, per-mesh table); the cursor's
-element is read out on every chart. Set the 3D view to one of the model's cameras or to a view saved in the app (kept
+around the model (or around the selected meshes: *Around selection* in the Time panel), and every CLI option; run on
+the GPU box (or tick "Run on every change"), read the results on the meshes (per-quantity gradients, a problem range
+painted blue / red) and in charts (legend, area-weighted histogram, cumulative area curve, each over the colour scale
+or the whole data range, range split, per-mesh table); the cursor's element is read out on every chart.
+
+**Receivers keep the file's own mesh.** The 3D view draws every mesh as triangles, with points that share a position
+as one vertex. A run does not take that as the mesh: a receiver is sent as the faces and points its file has, so "on
+faces" gives one result per face (a quad is one, also in an `.obj`; a glTF file holds triangles) and "on vertices" one
+per point of the file, each facing along the faces that name that point. Two parts of a mesh that only meet at a
+position keep their own points and directions; the view shows each part's own values there. With subdivision on, the
+faces are the subdivided ones.
+
+**Colour scale.** Per result: a gradient (the built-in ones, or your own: *Edit* beside the gradient sets each stop's
+colour and position, adds and removes stops, turns the gradient round, saves it under a name; a built-in one can be
+changed and reset), Min and Max, and a scaling that spreads the values along the gradient: linear, logarithmic, square
+root, square, or equalised (every colour covers the same number of elements), to show small differences among low
+values, among high ones, or wherever the values lie. The gradients are shared by every result and both analyses, and
+kept in the browser with the other settings. Set the 3D view to one of the model's cameras or to a view saved in the app (kept
 for the session, never written to a file, removed again from the same menu). Compare up to four models: "+" in the
 Model panel adds one (tabs A to D; the Model and Materials panels show the active one, a click in a view makes its model
 active), each in its own 3D view (side by side, stacked or 2 x 2; cameras linked or independent); Run runs every model
@@ -34,9 +48,11 @@ materials, with roles, settings and results of its own: receivers, obstructions,
 for a named group: water, a park) and ignored meshes; the field of view (out of a window about each face's normal, all
 around, or the horizontal ring of the 2D isovist), cell, eye offset, far, reach (EN 17037's 6 / 20 / 50 m or own
 distances), the virtual ground and whether rays pass glass. Results per element: the shares of the field that end on
-the sky, the ground, an obstruction and each target group, the share seen through glass, the view distances (log mean,
-nearest) or the isovist (volume, area) and the reach shares, painted on the meshes, with the distribution charts, a
-view composition donut (bars per model when comparing) and reach bars. Switching tabs keeps each analysis' roles and
+the sky, the ground, an obstruction and each target group, the ground and the obstructions joined (what is neither sky
+nor a target), the share seen through glass, the view distances (log mean, nearest) or the isovist (volume, area) and
+the reach shares, painted on the meshes (each kind of result in a gradient of its own: sky blues, ground oranges,
+obstruction greys, targets greens, distances logarithmic), with the distribution charts, a view composition donut (bars
+per model when comparing) and reach bars. Switching tabs keeps each analysis' roles and
 results; Daylight's inputs stay as they were.
 
 **Materials.** By default every surface is opaque and black (today's numbers and speed, as Ladybug's RadiationStudy);

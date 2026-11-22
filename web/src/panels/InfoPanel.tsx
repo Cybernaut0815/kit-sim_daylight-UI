@@ -26,8 +26,8 @@ export function InfoButton() {
           <ol>
             <li><em>Model</em>: open the model files (USD, USDZ, glTF, GLB, or OBJ with its MTL and textures), or a folder holding a USD scene and its assets. In the prim tree select meshes or whole groups and give them a role: <em>Receiver</em> (measured and painted with the result), <em>Shade</em> (casts shadows) or <em>Ignore</em> (left out of the run). A receiver casts shadows too; untick <em>Casts shade</em> for one that should only measure, such as a grid of points inside a room (with <em>Receivers block rays too</em> off, under Simulation, Advanced, no receiver casts any).</li>
             <li><em>Location</em>: search a place, click the map, drag the marker or type coordinates.</li>
-            <li><em>Time</em>: <em>Annual</em>, a <em>Single date</em> or a <em>Date range</em>; or drag the sun path drawn around the model.</li>
-            <li><em>Simulation</em>: the quantities, the receiving side, sensors on faces or vertices.</li>
+            <li><em>Time</em>: <em>Annual</em>, a <em>Single date</em> or a <em>Date range</em>; or drag the sun path drawn around the model. <em>Around selection</em> draws it around the selected meshes instead.</li>
+            <li><em>Simulation</em>: the quantities, the receiving side, sensors on faces or vertices. The faces and points are the file's own: a quad is one face, and two parts that only meet at a position keep their own points, although the view draws triangles and joins such points.</li>
             <li><em>Weather</em>: the nearest station, PVGIS, an uploaded EPW file or a clear sky.</li>
             <li><em>Run simulation</em> in the bar under the 3D view, or tick <em>Run on every change</em>.</li>
           </ol>
@@ -36,6 +36,8 @@ export function InfoButton() {
           <ul>
             <li><em>Result</em> picks the quantity shown; the meshes take its colours (<em>Values</em>) or stay <em>Plain</em>.</li>
             <li><em>Gradient</em>, <em>Min</em> and <em>Max</em> set the colour scale. A <em>Problem range</em> (<em>Below</em>, <em>Above</em>) paints the values outside it in its own colours.</li>
+            <li><em>Scaling</em> spreads the values along the gradient: <em>Logarithmic</em> or <em>Square root</em> show differences among low values, <em>Square</em> among high ones, <em>Equalised</em> gives every colour the same number of elements. The legend's ticks show where the values sit; the numbers do not change.</li>
+            <li><em>Edit</em> opens the gradient: each stop's colour and position, <em>Add stop</em>, <em>Flip</em>, <em>Save as new</em> for a gradient of your own, <em>Reset</em> for a built-in one. Every result that uses the gradient takes the change.</li>
             <li><em>Distribution</em> and <em>Cumulative area</em> are weighted by area, <em>Problem range split</em> gives the share of the area below, within and above the range, and the table lists every receiver mesh (a click selects it).</li>
             <li>Hover a mesh to read its value; hover a bar of the <em>Distribution</em> to see where those values lie on the model.</li>
           </ul>

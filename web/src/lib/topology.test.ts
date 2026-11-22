@@ -54,6 +54,16 @@ describe('receiverTopology', () => {
     expect([t.faces, t.points, [...t.faceStart]]).toEqual([2, 5, [0, 2, 3]]);
     expect([...t.cornerRow]).toEqual([0, 1, 2, 0, 2, 3, 1, 2, 4]);
   });
+  it('null for a mesh that is its drawn triangles: every face a triangle, every point one vertex (sent as drawn)', () => {
+    const tris = { faces: Int32Array.of(0, 1), counts: Int32Array.of(3, 3), indices: Int32Array.of(0, 1, 2, 0, 2, 3), weld: null, flipped: false };
+    expect(receiverTopology([0, 1, 2, 0, 2, 3], tris)).toBeNull();
+    expect(receiverTopology([0, 1, 2, 0, 2, 3], { ...tris, indices: Int32Array.of(7, 1, 2, 7, 2, 9) })).toBeNull(); // other numbers, the same sharing
+    // a point drawn as two vertices (a seam), or two points drawn as one (welded): not the drawn mesh
+    expect(receiverTopology([0, 1, 2, 3, 2, 4], { ...tris, indices: Int32Array.of(0, 1, 2, 0, 2, 3) })!.points).toBe(4);
+    expect(receiverTopology([0, 1, 2, 0, 2, 3], { ...tris, indices: Int32Array.of(0, 1, 2, 4, 2, 3) })!.points).toBe(5);
+    // triangles of a refined surface or of a core without the authored corners: the same test on the surface vertices
+    expect(receiverTopology([0, 1, 2, 0, 2, 3], { faces: Int32Array.of(4, 5), counts: null, weld: null, flipped: false })).toBeNull();
+  });
   it('null when the map is for other triangles; counts that do not fit the runs fall back to the surface vertices', () => {
     expect(receiverTopology([0, 1, 2], SPLIT.map)).toBeNull();
     expect(receiverTopology([], { faces: new Int32Array(0), counts: null, weld: null, flipped: false })).toBeNull();

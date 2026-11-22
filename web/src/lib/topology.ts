@@ -29,6 +29,9 @@ export interface Topology {
  * triangles are consecutive and fan from its first corner (protocol.ts MeshMap). Points: the authored ones (`indices`,
  * a mesh drawn with its own faces), else the surface's vertices (`weld`: a refined surface, an implicit shape, a core
  * without `indices`); only those a drawn face uses get a row, in order of first use.
+ * Null too when it would say nothing the drawn mesh does not: every face a triangle, every point drawn as exactly one
+ * vertex and every vertex one point (a triangulated export without repeated points, most large models). Such a mesh is
+ * sent as drawn: the same faces and the same shared points, with the bytes, the content id and no map to keep.
  */
 export function receiverTopology(index: ArrayLike<number>, map: Pick<MeshMap, 'faces' | 'counts' | 'weld' | 'flipped'> & { indices?: ArrayLike<number> | null }): Topology | null {
   const { faces, flipped, weld } = map, T = faces.length;
@@ -50,7 +53,10 @@ export function receiverTopology(index: ArrayLike<number>, map: Pick<MeshMap, 'f
   let top = -1;
   if (ids) { for (let i = 0; i < ids.length; i++) if (ids[i] > top) top = ids[i]; } else for (let c = 0; c < index.length; c++) { const v = weld ? weld[index[c]] : index[c]; if (v > top) top = v; }
   const rowOf = new Int32Array(top + 1).fill(-1), cornerRow = new Int32Array(3 * T), pointVertex = new Int32Array(top + 1);
-  let P = 0, most = 3;
+  let drawn = 0;
+  for (let c = 0; c < index.length; c++) if (index[c] >= drawn) drawn = index[c] + 1;
+  const rowAt = new Int32Array(drawn).fill(-1); // the point row at each drawn vertex, while there is one for each
+  let P = 0, most = 3, same = F === T;
   for (let r = 0; r < F; r++) {
     const t0 = starts[r], at = off ? off[faces[t0]] : 0;
     most = Math.max(most, starts[r + 1] - t0 + 2);
@@ -63,9 +69,11 @@ export function receiverTopology(index: ArrayLike<number>, map: Pick<MeshMap, 'f
         let row = rowOf[id];
         if (row < 0) { row = rowOf[id] = P; pointVertex[P++] = v; }
         cornerRow[c] = row;
+        if (same) { if (rowAt[v] < 0) rowAt[v] = row; same = rowAt[v] === row && pointVertex[row] === v; } // two points at a vertex, or a point at two
       }
     }
   }
+  if (same) return null;
   return { faces: F, points: P, corners: most, faceStart: starts.slice(0, F + 1), cornerRow, pointVertex: pointVertex.slice(0, P), flipped };
 }
 
