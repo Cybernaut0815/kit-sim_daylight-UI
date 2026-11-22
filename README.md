@@ -12,7 +12,9 @@ range such as 09:00 to 17:00 every day of the summer, or the whole year) on time
 around the model (or around the selected meshes: *Around selection* in the Time panel), and every CLI option; run on
 the GPU box (or tick "Run on every change"), read the results on the meshes (per-quantity gradients, a problem range
 painted blue / red) and in charts (legend, area-weighted histogram, cumulative area curve, each over the colour scale
-or the whole data range, range split, per-mesh table); the cursor's element is read out on every chart.
+or the whole data range, range split, per-mesh table); the cursor's element is read out on every chart. A bar of the
+histogram shows where its values lie on the model, on hover or kept by a click (Shift+click a range, Ctrl+click to add
+or remove, a drag across bars). The result shown stays the one picked through new runs and changed roles.
 
 **Receivers keep the file's own mesh.** The 3D view draws every mesh as triangles, with points that share a position
 as one vertex. A run does not take that as the mesh: a receiver is sent as the faces and points its file has, so "on
@@ -21,9 +23,10 @@ per point of the file, each facing along the faces that name that point. Two par
 position keep their own points and directions; the view shows each part's own values there. With subdivision on, the
 faces are the subdivided ones.
 
-**Colour scale.** Per result: a gradient (the built-in ones, or your own: *Edit* beside the gradient sets each stop's
-colour and position, adds and removes stops, turns the gradient round, saves it under a name; a built-in one can be
-changed and reset), Min and Max, and a scaling that spreads the values along the gradient: linear, logarithmic, square
+**Colour scale.** Per result: a gradient (the built-in ones, or your own: *Edit* beside the gradient shows it as a bar
+with a handle per stop: drag a handle to move the stop, click the bar for a new one, drag a handle off to remove it,
+pick the selected stop's colour; turn the gradient round, save it under a name; a built-in one can be changed and
+reset), Min and Max, and a scaling that spreads the values along the gradient: linear, logarithmic, square
 root, square, or equalised (every colour covers the same number of elements), to show small differences among low
 values, among high ones, or wherever the values lie. The gradients are shared by every result and both analyses, and
 kept in the browser with the other settings. Set the 3D view to one of the model's cameras or to a view saved in the app (kept
@@ -44,8 +47,9 @@ glass and reflective materials.
 Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM; `web/src/kit.css`).
 
 **View analysis.** The *View analysis* tab in the app bar runs the core's `views` tool on the same models, meshes and
-materials, with roles, settings and results of its own: receivers, obstructions, targets (an obstruction whose rays count
-for a named group: water, a park) and ignored meshes; the field of view (out of a window about each face's normal, all
+materials, with roles, settings and results of its own: receivers, obstructions, targets (obstructions whose rays count
+for a named group: water, a park, a tower; several groups, listed in the Model panel, are measured in one run) and
+ignored meshes; the field of view (out of a window about each face's normal, all
 around, or the horizontal ring of the 2D isovist), cell, eye offset, far, reach (EN 17037's 6 / 20 / 50 m or own
 distances), the virtual ground and whether rays pass glass. Results per element: the shares of the field that end on
 the sky, the ground, an obstruction and each target group, the total obstruction (everything that is not sky: ground,

@@ -37,9 +37,10 @@ export function InfoButton() {
             <li><em>Result</em> picks the quantity shown; the meshes take its colours (<em>Values</em>) or stay <em>Plain</em>.</li>
             <li><em>Gradient</em>, <em>Min</em> and <em>Max</em> set the colour scale. A <em>Problem range</em> (<em>Below</em>, <em>Above</em>) paints the values outside it in its own colours.</li>
             <li><em>Scaling</em> spreads the values along the gradient: <em>Logarithmic</em> or <em>Square root</em> show differences among low values, <em>Square</em> among high ones, <em>Equalised</em> gives every colour the same number of elements. The legend's ticks show where the values sit; the numbers do not change.</li>
-            <li><em>Edit</em> opens the gradient: each stop's colour and position, <em>Add stop</em>, <em>Flip</em>, <em>Save as new</em> for a gradient of your own, <em>Reset</em> for a built-in one. Every result that uses the gradient takes the change.</li>
+            <li><em>Edit</em> opens the gradient as a bar with a handle per stop: drag a handle to move its stop, click the bar for a new one, drag a handle down (or press Delete) to remove it; the selected stop's colour and location are below. <em>Flip</em> turns it round, <em>Save as new</em> keeps a gradient of your own, <em>Reset</em> restores a built-in one. Every result that uses the gradient takes the change.</li>
             <li><em>Distribution</em> and <em>Cumulative area</em> are weighted by area, <em>Problem range split</em> gives the share of the area below, within and above the range, and the table lists every receiver mesh (a click selects it).</li>
-            <li>Hover a mesh to read its value; hover a bar of the <em>Distribution</em> to see where those values lie on the model.</li>
+            <li>Hover a mesh to read its value; hover a bar of the <em>Distribution</em> to see where those values lie on the model. Click a bar to keep it: Shift+click takes the range from the bar clicked before, Ctrl+click adds or removes a bar, a drag takes the bars it crosses; a click on the empty plot lets go.</li>
+            <li>The result shown stays the one you picked when you change roles or settings and run again.</li>
           </ul>
 
           <h3>Comparing models</h3>
@@ -88,10 +89,11 @@ export function InfoButton() {
             and how far it sees. It uses the same models and materials as Daylight; its roles, settings and results are its own.
           </p>
           <ul>
-            <li><em>Model</em>: <em>Receiver</em> (analysed and painted), <em>Obstruction</em> (blocks the view), <em>Ignore</em>, and <em>Target</em> with a group name (water, park...): an obstruction whose rays count for that group. Untick <em>Blocks rays</em> for a grid of eye points.</li>
+            <li><em>Model</em>: <em>Receiver</em> (analysed and painted), <em>Obstruction</em> (blocks the view), <em>Ignore</em>, and <em>Targets</em>: obstructions whose rays count for a named group (water, park, a tower). Select meshes, name a group and press <em>Add target</em>; <em>Assign</em> puts the selection into a group of the list, × removes a group. Every group is measured in the same run, each as a result of its own. Untick <em>Blocks rays</em> for a grid of eye points.</li>
             <li><em>Field of view</em>: <em>Window</em> (about each face's normal, 120° wide by default), <em>All around</em> (360°, an eye turning on the spot: lift it with the <em>Eye offset</em>), or <em>Horizontal</em> (the 2D isovist, the area in view).</li>
             <li><em>Distances</em>: <em>Far</em> is what an open ray counts as; <em>Reach</em> adds the share that sees at least 6, 20 and 50 m (EN 17037) or your distances.</li>
             <li><em>See through glass</em>: rays pass the glass of the Materials table and count what lies behind; off, windows block.</li>
+            <li><em>Total obstruction</em> is everything that is not open sky: the ground, the obstructions and the targets together (1 minus the sky share).</li>
             <li>Results: the shares (0 to 1 of the field), the distances (m) and the isovist (m³ or m²) per element, the <em>View composition</em> of the field and the <em>Reach</em>, beside the same distribution charts as Daylight.</li>
           </ul>
 
