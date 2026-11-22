@@ -1,14 +1,15 @@
-// File[] -> THREE.Group via GLTFLoader (Draco, meshopt; multi-file .gltf through a LoadingManager URL modifier) and
-// OBJLoader (+ MTLLoader for picked .mtl files). Materials the files do not define (glTF's default, OBJ without .mtl)
-// are marked `userData.fallback`: toUsda writes no material for them, so such models stay as the viewer draws them.
+// File[] -> THREE.Group via GLTFLoader (Draco, meshopt; multi-file .gltf through a LoadingManager URL modifier) and,
+// for OBJ, lib/obj.ts (the file's own faces and shared points; MTLLoader for picked .mtl files). Materials the files do
+// not define (glTF's default, OBJ without .mtl) are marked `userData.fallback`: toUsda writes no material for them, so
+// such models stay as the viewer draws them.
 import { Group, InterleavedBufferAttribute, LoadingManager, Mesh, type Material, type Object3D, type Texture } from 'three';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { GLTFLoader, type GLTFParser } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import dracoJs from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url';
 import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url';
+import { parseObj } from './obj';
 
 /** Every triangle Mesh under `root` (what fromThree() converts). */
 export function listMeshes(root: Object3D): Mesh[] {
@@ -98,9 +99,7 @@ export async function loadFiles(files: File[], warn: (m: string) => void = () =>
         });
         group.add(g.scene);
       } else if (ext === 'obj') {
-        const obj = new OBJLoader();
-        if (creator) obj.setMaterials(creator);
-        const o = obj.parse(await f.text());
+        const o = parseObj(await f.text(), creator ? (name) => creator.create(name) : undefined);
         o.traverse((x) => { for (const m of materialsOf(x as Mesh)) if (!own.has(m)) m.userData.fallback = true; });
         group.add(o);
       }
