@@ -92,6 +92,9 @@ export default function App() {
   // the two analyses' runs (useAnalysis, below), for the stable callbacks: a model removed or opened ends its jobs in both
   const analyses = useRef<Pick<Analysis, 'jobs' | 'lastKey' | 'held'>[]>([]);
   const [sunScale, setSunScale] = useState(1); // the sun path's radius over the one fitted to the model; 1 on every model load
+  // Per model (slot), the prim paths of the meshes its sun path is fitted to instead of the whole model: picked in the
+  // Time panel from the selection, for this session; gone when the slot opens another model.
+  const [sunAround, setSunAround] = useState<Readonly<Record<number, readonly string[]>>>({});
   // the section every view shows (lib/section.ts, model metres): view only, this session; never a setting, a run input or
   // a key, and never cleared by a new model, a variant switch or a re-read
   const [section, setSection] = useState<Section>(NONE);
@@ -284,6 +287,7 @@ export default function App() {
       if (!objects.length) throw new Error(problems[0] ?? 'No visible meshes in this model.');
       pane(slot, { meshes: map, names: own });
       setSunScale(1);
+      setSunAround(({ [slot]: _gone, ...rest }) => rest);
       dispatch({ type: 'LOAD', slot, objects, name: info.url.replace(/^.*\//, '').replace(/\.\w+$/, '') });
       if (problems.length) pane(slot, { loadError: problems.slice(0, 3).join(' ') });
     } catch (e) {
@@ -393,6 +397,7 @@ export default function App() {
     delete model.current[slot];
     delete choices.current[slot];
     setPanes(({ [slot]: _gone, ...rest }) => rest);
+    setSunAround(({ [slot]: _gone, ...rest }) => rest);
     dispatch({ type: 'REMOVE', slot });
     void viewer(slot).el.close().catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- dropConv reads a ref only
@@ -450,6 +455,13 @@ export default function App() {
   const sunView = useMemo<SunView | null>(() => (ui.sunPath ? { site: sunSite, north: s.sim.north, time: s.time, scale: sunScale } : null), [ui.sunPath, sunSite, s.sim.north, s.time, sunScale]);
   const selectedHref = s.weather.source === 'station' ? s.weather.station?.href ?? null : null;
   const n = state.models.length, ai = Math.max(0, state.models.findIndex((m) => m.slot === state.active)), am = A.models[ai], ap = panes[am.slot] ?? NO_PANE;
+  // The sun path around the selected meshes of the active model, or its whole model again (stable: the Time panel is memoised)
+  const activeModel = useRef(am);
+  activeModel.current = am;
+  const onSunFit = useCallback((on: boolean) => {
+    const m = activeModel.current, paths = on ? m.objects.filter((o) => m.selected.has(o.id)).map((o) => o.path) : [];
+    setSunAround(({ [m.slot]: _was, ...rest }) => (paths.length ? { ...rest, [m.slot]: paths } : rest));
+  }, []);
   const charts = useMemo(() => (views ? s.charts.filter((c) => BUILT_IN.some((b) => b.id === c.id)) : s.charts), [views, s.charts]); // the views tab: the built-ins, their look shared
   const groups = useMemo(() => [...new Set(vModels.flatMap((m) => m.objects.flatMap((o) => (o.role === 'shade' && o.group ? [o.group] : []))))], [vModels]); // the target groups in use
   // one download at a time; its error is its result's, by run key (holding the result itself would keep a replaced one's
@@ -531,7 +543,7 @@ export default function App() {
                 {/* daylight's own inputs stay mounted on the view analysis tab (the weather header, the map), hidden */}
                 <div className="panel-group" hidden={views}>
                   <LocationPanel site={s.site} tz={tz} zone={zone} north={s.sim.north} stations={state.stations} selectedHref={selectedHref} errors={state.errors} theme={theme} dispatch={dispatch} />
-                  <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} />
+                  <TimePanel time={s.time} site={s.site} tz={tz} zone={zone} leap={leap} errors={state.errors} dispatch={dispatch} sunPath={ui.sunPath} sunScale={sunScale} onSunPath={onSunPath} onSunScale={setSunScale} sunFit={sunAround[am.slot]?.length ?? 0} canSunFit={am.selected.size > 0} onSunFit={onSunFit} />
                   <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
                   <WeatherPanel weather={s.weather} site={s.site} epwMeta={s.epwMeta} viz={s.viz} stations={state.stations} errors={state.errors} dispatch={dispatch} />
                 </div>
@@ -550,7 +562,7 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
-                      scale={A.scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} section={sectionWords} analysis={ui.tab}
+                      scale={A.scale} bin={state.bin} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} around={sunAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>

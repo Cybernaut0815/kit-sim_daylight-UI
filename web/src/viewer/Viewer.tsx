@@ -51,6 +51,7 @@ interface Props {
   colourBy: 'plain' | 'value'; result: RunResult | null; column: number; scale: Scale | null; bin: [number, number] | null;
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
+  around?: readonly string[] | null; // the prim paths of the meshes the sun path is fitted to (null: the whole model)
   section: string | null; // the section shown, in words (null: none)
   analysis?: Tab; // whose roles `objects` carry (the scene info's words)
 }
@@ -76,7 +77,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, section, analysis }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, probeLabel, theme, dispatch, children, sun, around, section, analysis }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -270,17 +271,20 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     };
   }, [dispatch, usd, slot]);
 
-  // A new model: the sun path's dome and the grid fit every mesh, whatever its role.
+  // A new model: the sun path's dome and the grid fit every mesh, whatever its role. The dome alone fits the meshes
+  // at the `around` paths instead, when given (the Time panel's "Around selection"): it stands on their lowest point
+  // and encloses them; paths that are gone (a variant switched) leave the whole model.
   useEffect(() => {
     const c = ctx.current;
     if (!c || !meshes.size) return;
-    const box = new THREE.Box3();
+    const box = new THREE.Box3(), part = new THREE.Box3(), want = new Set(around);
     for (const o of meshes.values()) box.expandByObject(o); // an InstancedMesh by the bounds of its instances
-    const size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
-    const r0 = Math.hypot(size.x / 2, size.y, size.z / 2) || 1; // the dome stands on the ground and encloses the model
-    c.dome = { x: centre.x, y: box.min.y, z: centre.z, r: r0 };
-    c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * r0), x: centre.x, y: box.min.y, z: centre.z };
-  }, [meshes]);
+    for (const o of objects) { const m = want.has(o.path) && meshes.get(o.id); if (m) part.expandByObject(m); }
+    const domeOf = (b: THREE.Box3) => { const s = b.getSize(new THREE.Vector3()), at = b.getCenter(new THREE.Vector3()); return { x: at.x, y: b.min.y, z: at.z, r: Math.hypot(s.x / 2, s.y, s.z / 2) || 1 }; };
+    const size = box.getSize(new THREE.Vector3()), whole = domeOf(box); // the dome stands on the ground and encloses the model
+    c.dome = part.isEmpty() ? whole : domeOf(part);
+    c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * whole.r), x: whole.x, y: whole.y, z: whole.z };
+  }, [meshes, around]); // eslint-disable-line react-hooks/exhaustive-deps -- the rows' paths change with the meshes
 
   // Sun path: the scaffold follows the site and the theme, the frame the model, north and size, the active layer the time.
   useEffect(() => {
@@ -295,7 +299,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     if (!c) return;
     c.sun.frame(c.dome.x, c.dome.y, c.dome.z, c.dome.r * (sun?.scale ?? 1), sun?.north ?? 0); // placed while hidden too
     usd.three.invalidate();
-  }, [meshes, sun?.north, sun?.scale]); // eslint-disable-line react-hooks/exhaustive-deps -- only north and size move the frame
+  }, [meshes, around, sun?.north, sun?.scale]); // eslint-disable-line react-hooks/exhaustive-deps -- only the fit, north and size move the frame
   useEffect(() => {
     const c = ctx.current;
     if (!c || !sun || !hasModel) return;

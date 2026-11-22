@@ -9,9 +9,11 @@ import { ResetButton, Segmented, knob, Section } from '../ui';
 interface Props {
   time: Settings['time']; site: Settings['site']; tz: number; zone: Zone; leap: boolean; errors: Record<string, string>; dispatch: Dispatch<Action>; // zone: the site's civil zone; leap: the core's weather year
   sunPath: boolean; sunScale: number; onSunPath: (on: boolean) => void; onSunScale: (scale: number) => void; // the 3D sun path: shown, size x the fitted radius
+  // what it is fitted to: `sunFit` meshes of the active model (0: its whole model); `canSunFit`: that model has a selection
+  sunFit: number; canSunFit: boolean; onSunFit: (toSelection: boolean) => void;
 }
 
-export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, errors, dispatch, sunPath, sunScale, onSunPath, onSunScale }: Props) {
+export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, errors, dispatch, sunPath, sunScale, onSunPath, onSunScale, sunFit, canSunFit, onSunFit }: Props) {
   const year = yearOf(time.date);
   const set = (patch: Partial<Settings['time']>) => dispatch({ type: 'TIME', patch });
   const step = timeStep(time);
@@ -86,6 +88,11 @@ export const TimePanel = memo(function TimePanel({ time, site, tz, zone, leap, e
           <input id="sunpath-size" type="range" min={-2} max={2} step={0.1} value={Math.log2(sunScale)} aria-valuetext={`${Math.round(sunScale * 100)} %`} disabled={!sunPath} onChange={(e) => onSunScale(2 ** e.target.valueAsNumber)} />
           <span className="slider-row__value">{Math.round(sunScale * 100)} %</span>
         </label>
+        <div className="cluster">
+          <button className="btn btn--secondary" id="sunpath-fit" type="button" disabled={!sunPath || !canSunFit} title={canSunFit ? 'Centre the sun path on the selected meshes and size it to them' : 'Select one or several meshes first'} onClick={() => onSunFit(true)}>Around selection</button>
+          <button className="btn btn--secondary" id="sunpath-whole" type="button" disabled={!sunFit} title="Centre the sun path on the whole model again" onClick={() => onSunFit(false)}>Whole model</button>
+        </div>
+        <p className="text-muted line">{sunFit ? `Around ${sunFit} selected mesh${sunFit === 1 ? '' : 'es'}; Size scales it.` : 'Around the whole model; Size scales it.'}</p>
         <p className="text-muted lines-2">{time.mode === 'annual' ? 'Annual: the arcs of every month (the 21st) and the loop of every hour span the whole year.' : 'Drag the sun or a handle to set its date and time, an arc for the date, the compass ring for north.'}</p>
       </fieldset>
     </Section>
