@@ -35,7 +35,8 @@ putSession, deleteSession.
 
 - Mesh coordinates: metres, Z up, right-handed winding; the face normal is the front side.
 - Columns `<quantity>_<side>` (sides inner). Views: `<name>_<side>`: shares sky, ground, obstruction, one per target
-  group (summing to 1), glazing, then volume m3 or area m2 (the isovist), distance and distance_min m, reach_<D>.
+  group (summing to 1), with ground_obstruction (ground + obstruction) after obstruction, glazing, then volume m3 or
+  area m2 (the isovist), distance and distance_min m, reach_<D>.
 - Units: radiation, direct, diffuse kWh/m2 over the period; irradiance W/m2 mean; illuminance lux mean; sunhours h.
   direct = beam x transmittance; sunhours = equivalent full-sun hours (an hour behind tau 0.6 counts 0.6; an exact
   count while every surface is opaque, the default). With --bounces > 0, radiation, diffuse, irradiance and

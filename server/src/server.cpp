@@ -369,12 +369,12 @@ bool views_job(const std::shared_ptr<Job>& j, std::vector<char*>& av, const std:
   j->weatherCache = "none";
   views::Field f;
   if (!views::field({}, a.opt, f, err)) return fail(400, err);
-  // columns per side, in the core's order: sky ground obstruction, a share per group, glazing, the isovist, the
-  // distances, each group's distances, reach_<D>
+  // columns per side, in the core's order: sky ground obstruction ground_obstruction, a share per group, glazing, the
+  // isovist, the distances, each group's distances, reach_<D>
   std::unordered_set<std::string> groups;
   for (const auto& t : a.opt.targets) groups.insert(t.group);
   const size_t G = groups.size(), mean = (f.dist & views::DistMean) ? 1 : 0, minimum = (f.dist & views::DistMin) ? 1 : 0;
-  const size_t perSide = 3 + G + (a.opt.transmission ? 1 : 0) + ((f.dist & views::DistIsovist) ? 1 : 0) + mean + minimum +
+  const size_t perSide = 4 + G + (a.opt.transmission ? 1 : 0) + ((f.dist & views::DistIsovist) ? 1 : 0) + mean + minimum +
                          ((f.dist & views::DistGroup) ? G * (mean + minimum) : 0) + a.opt.reach.size();
   return sized(*j, a.opt, perSide, 0, sensors, context, "pick one side, fewer --reach distances or fewer receivers", no);
 }

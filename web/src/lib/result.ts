@@ -181,8 +181,8 @@ export const SIDE_HELP: Record<string, string> = { front: 'Front side: where the
  *  ['distance_min', 'back'] (the view analysis' names hold '_' too); a name without a side -> [name, '']. */
 export const splitColumn = (column: string): [string, string] => { const m = /^(.+)_(front|back)$/.exec(column); return m ? [m[1], m[2]] : [column, '']; };
 
-// The view analysis' quantities with a unit; every other one (sky, ground, obstruction, glazing, a target group,
-// reach_<D>) is a share of the field, 0 to 1, summed over the area as m².
+// The view analysis' quantities with a unit; every other one (sky, ground, obstruction, the two joined, glazing, a
+// target group, reach_<D>) is a share of the field, 0 to 1, summed over the area as m².
 const VIEW_UNITS: [RegExp, [string, string]][] = [[/^volume$/, ['m³', '']], [/^area$/, ['m²', '']], [/distance(_min)?$/, ['m', '']]];
 
 /** Column name 'radiation_front' -> per-element and area-integrated units. */
@@ -196,6 +196,7 @@ const VIEW_HELP: Record<string, string> = {
   sky: 'Share of the field of view that is open sky, 0 to 1 by solid angle: 1 sees only sky. The shares of sky, ground, obstruction and the target groups sum to 1.',
   ground: 'Share of the field that ends on the virtual ground below (the street seen from a facade when no terrain is modelled), 0 to 1.',
   obstruction: "Share of the field that ends on a mesh that is no target, 0 to 1: buildings, the receivers themselves, a modelled terrain (all around at eye offset 0, also the element's own surface).",
+  ground_obstruction: 'Ground and obstruction joined, 0 to 1: the share of the field that is neither open sky nor a target, whether it ends on the virtual ground or on a mesh. It repeats those two shares, so it is not another part of the sum to 1.',
   glazing: 'Share of the field seen through glass, 0 to 1 (See through glass on). It counts beside the class behind the pane, outside the shares that sum to 1.',
   volume: 'The 3D isovist: the volume in view within the field, m³, every ray capped at Far. Telling indoors or with a small Far; in the open it grows with Far.',
   area: 'The 2D isovist: the area in view around the eye in the horizontal plane, m², every ray capped at Far (space syntax).',
@@ -215,7 +216,7 @@ export function helpFor(q: string): string {
  *  distance, front', 'reach_6_front' -> 'Reach 6 m, front'; a quantity alone -> 'Sun hours'. */
 export const columnLabel = (column: string): string => {
   const [q, side] = splitColumn(column), cap = (t: string) => `${t[0].toUpperCase()}${t.slice(1)}`;
-  const name = q === 'sunhours' ? 'Sun hours' : q === 'distance_min' ? 'Nearest distance' : q.startsWith('reach_') ? `Reach ${q.slice(6)} m`
+  const name = q === 'sunhours' ? 'Sun hours' : q === 'distance_min' ? 'Nearest distance' : q === 'ground_obstruction' ? 'Ground + obstruction' : q.startsWith('reach_') ? `Reach ${q.slice(6)} m`
     : cap(q.replace(/_distance_min$/, ', nearest distance').replace(/_distance$/, ', distance').replace(/_/g, ' '));
   return `${name}${side ? `, ${side}` : ''}`;
 };

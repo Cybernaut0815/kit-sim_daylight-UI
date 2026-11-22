@@ -110,7 +110,7 @@ export function targetArgs(rows: readonly Pick<ObjectRow, 'id' | 'path' | 'role'
 }
 
 /** Group names the core keeps for its own columns, and the daylight quantities (both analyses share colour settings by name). */
-const RESERVED = /^(sky|ground|obstruction|glazing|volume|area|distance.*|reach.*|.*_distance|.*_distance_min)$/;
+const RESERVED = /^(sky|ground|obstruction|ground_obstruction|glazing|volume|area|distance.*|reach.*|.*_distance|.*_distance_min)$/;
 /** A --reach value: '' (none), 'en17037', or 1 to 8 distinct positive metres. */
 export const reachOk = (r: string) => {
   const t = r.replace(/\s+/g, '');
@@ -128,7 +128,7 @@ export function validateViews(v: ViewSim, groups: readonly string[], hasReceiver
   const e: Record<string, string> = {}, [h, lo, hi] = v.fov, flat = lo === 0 && hi === 0;
   if (!hasReceiver) e.model = 'No receiver mesh. Select a mesh and mark it as a receiver.';
   const used = [...new Set(groups)], bad = used.find((g) => !GROUP.test(g) || RESERVED.test(g) || (QUANTITIES as readonly string[]).includes(g));
-  if (bad !== undefined) e.groups = `Target group "${bad}": letters, digits, _ and - only, and not sky, ground, obstruction, glazing, volume, area, a daylight quantity or a name starting with distance or reach.`;
+  if (bad !== undefined) e.groups = `Target group "${bad}": letters, digits, _ and - only, and not sky, ground, obstruction, ground_obstruction, glazing, volume, area, a daylight quantity or a name starting with distance or reach.`;
   else if (used.length > 16) e.groups = `${used.length} target groups: at most 16.`;
   if (!((h > 0 && h <= 180) || h === 360)) e.fov = 'The field is up to 180° wide about the normal, or 360° all around.';
   else if (!flat && !(lo >= -90 && lo < hi && hi <= 90)) e.fov = 'The field runs from a lower to a higher elevation, -90° to 90° (or 0 to 0: horizontal rays).';
