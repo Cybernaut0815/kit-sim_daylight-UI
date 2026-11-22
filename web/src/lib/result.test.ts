@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { areaMean, columnLabel, columnStats, cumulative, faceAreas, fmtNum, globalRange, helpFor, histogram, percentile, rangeShares, roundNum, shareAbove, shareBelow, fmtDiff, splitColumn, summarize, unionRange, unitFor, vertexAreas } from './result';
+import { areaMean, columnIndex, columnLabel, columnStats, cumulative, faceAreas, fmtNum, globalRange, helpFor, histogram, percentile, rangeShares, roundNum, shareAbove, shareBelow, fmtDiff, splitColumn, summarize, unionRange, unitFor, vertexAreas } from './result';
 
 // unit square in the XY plane as two triangles
 const pos = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -121,6 +121,13 @@ describe('several models', () => {
 });
 
 describe('view analysis columns', () => {
+  it('columnIndex finds the shown column by name: itself, the same quantity on the side left, else the first', () => {
+    const views = ['sky_front', 'ground_front', 'obstruction_front', 'obstruction_total_front', 'water_front', 'distance_front'];
+    expect(columnIndex(views, 'distance_front')).toBe(5); // a target group added before it: still the distance
+    expect(columnIndex(['radiation_back', 'sunhours_back'], 'sunhours_front')).toBe(1); // the receiving side changed
+    expect(columnIndex(['radiation_front'], 'sunhours_front')).toBe(0); // the quantity is off: the first
+    expect([columnIndex(views, ''), columnIndex([], 'x')]).toEqual([0, 0]);
+  });
   it('splitColumn keeps the names that hold _ whole', () => {
     expect(splitColumn('radiation_front')).toEqual(['radiation', 'front']);
     expect(splitColumn('distance_min_front')).toEqual(['distance_min', 'front']);

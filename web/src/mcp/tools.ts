@@ -379,7 +379,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       x.dispatch({ type: 'HOVER', id: null });
       x.dispatch({ type: 'PROBE', probe: null }); // the pointer's, not the shot's
       if (was.tab !== 'daylight') x.setUi((u) => ({ ...u, tab: 'daylight' })); // the views show daylight's results and colours: the tools' analysis
-      if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: col });
+      if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: look.column });
       if (look.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
       if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
       if (look.pin) x.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: look.pin.min, max: look.pin.max } });
@@ -933,7 +933,7 @@ export const HANDLERS: Record<string, Handler> = {
       const section = a.section && sectionArg(x, a.section, a.active); // a view's look: no run key holds it, results stay fresh
       flushSync(() => {
         if (a.active) x.dispatch({ type: 'ACTIVE', slot: LETTERS.indexOf(a.active) });
-        if (a.column) x.dispatch({ type: 'COLUMN', column: ref!.columns.indexOf(a.column) });
+        if (a.column) x.dispatch({ type: 'COLUMN', column: a.column });
         if (a.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: a.colourBy });
         if (a.highlight !== undefined) x.dispatch({ type: 'BIN', bin: a.highlight });
         if (a.theme) x.setTheme(a.theme);

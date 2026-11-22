@@ -270,18 +270,19 @@ describe('several models', () => {
     expect(reducer(gone, { type: 'RUN', slot: 1, run: { status: 'done', result: result('b') } })).toBe(gone);
     expect(reducer(gone, { type: 'LOAD', slot: 1, objects: [obj('c')] })).toBe(gone);
   });
-  it('colourBy turns to values on the first result of any model; the shared column starts over only when no result is left', () => {
+  it('colourBy turns to values on the first result of any model; the shown column, a name, stays through loads and roles', () => {
     let s = reducer(two(), { type: 'RUN', slot: 1, run: { status: 'done', result: result('b', ['radiation_front', 'direct_front']) } });
     expect(s.colourBy).toBe('value');
-    s = reducer(reducer(s, { type: 'COLUMN', column: 1 }), { type: 'COLOUR_BY', colourBy: 'plain' });
+    s = reducer(reducer(s, { type: 'COLUMN', column: 'direct_front' }), { type: 'COLOUR_BY', colourBy: 'plain' });
     s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result('a') } });
     expect(s.colourBy).toBe('plain'); // not the first result any more
-    expect(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('a2')] }).column).toBe(1); // B still has one
-    expect(reducer(s, { type: 'ROLE', slot: 1, ids: ['b'], role: 'shade' }).column).toBe(1); // A still has one
+    expect(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('a2')] }).column).toBe('direct_front');
+    expect(reducer(s, { type: 'ROLE', slot: 1, ids: ['b'], role: 'shade' }).column).toBe('direct_front');
+    // the only result gone (a role changed): the next run shows the same column again, not the first
     const lone = reducer(reducer(s, { type: 'REMOVE', slot: 0 }), { type: 'ROLE', slot: 1, ids: ['b'], role: 'shade' });
-    expect([lone.column, m(lone, 1).result]).toEqual([0, null]); // the only result gone: as for one model
+    expect([lone.column, m(lone, 1).result]).toEqual(['direct_front', null]);
     const none = reducer(reducer(s, { type: 'LOAD', slot: 1, objects: [] }), { type: 'REMOVE', slot: 0 });
-    expect([none.column, none.colourBy]).toEqual([0, 'plain']);
+    expect([none.column, none.colourBy]).toEqual(['direct_front', 'plain']);
   });
   it('Materials edits are per model', () => {
     let s = reducer(two(), { type: 'OPTICS_EDIT', slot: 1, key: '/M/Glass', edit: { rho: 0, tau: 0.5, kind: 'glass' } });
@@ -331,11 +332,11 @@ describe('the view analysis', () => {
     let s = loaded();
     expect(m(s).viewAnalysis.objects).toBe(m(s).objects);
     s = reducer(s, { type: 'ROLE', slot: 0, ids: ['b'], role: 'shade', tab: 'views', group: 'water' });
-    s = reducer(s, { type: 'COLUMN', column: 2, tab: 'views' });
+    s = reducer(s, { type: 'COLUMN', column: 'obstruction_front', tab: 'views' });
     s = reducer(s, { type: 'ERRORS', errors: { model: 'x' }, tab: 'views' });
     expect(m(s).objects.map((o) => o.role)).toEqual(['receiver', 'none', 'shade']);
     expect(m(s).viewAnalysis.objects.map((o) => [o.role, o.group])).toEqual([['receiver', undefined], ['shade', 'water'], ['shade', undefined]]);
-    expect([s.column, s.errors, s.viewAnalysis.column, s.viewAnalysis.errors]).toEqual([0, {}, 2, { model: 'x' }]);
+    expect([s.column, s.errors, s.viewAnalysis.column, s.viewAnalysis.errors]).toEqual(['', {}, 'obstruction_front', { model: 'x' }]);
     s = reducer(s, { type: 'ROLE', slot: 0, ids: ['a'], role: 'none' }); // daylight's: the view roles stay
     expect([m(s).objects[0].role, m(s).viewAnalysis.objects[0].role]).toEqual(['none', 'receiver']);
   });
@@ -375,12 +376,14 @@ describe('the view analysis', () => {
     expect(m(s).viewAnalysis.objects.map((o) => [o.id, o.role, o.group, o.shade])).toEqual([['a2', 'receiver', undefined, false], ['b2', 'shade', 'water', undefined], ['c2', 'none', undefined, undefined], ['n', 'none', undefined, undefined]]);
     expect([m(s).viewAnalysis.result, m(s).objects.map((o) => o.shade)]).toEqual([null, [undefined, undefined, undefined, undefined]]);
   });
-  it('the view column and colouring start over when no model keeps a views result; old settings get the view defaults', () => {
+  it('the view colouring starts over when no model keeps a views result, its column stays; old settings get the view defaults', () => {
     let s = loaded();
     s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: result(['a']) }, tab: 'views' });
-    s = reducer(s, { type: 'COLUMN', column: 3, tab: 'views' });
+    s = reducer(s, { type: 'COLUMN', column: 'distance_front', tab: 'views' });
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['b'], role: 'shade', group: 'water', tab: 'views' }); // a target: the result goes, the column stays
+    expect([m(s).viewAnalysis.result, s.viewAnalysis.column]).toEqual([null, 'distance_front']);
     s = reducer(s, { type: 'LOAD', slot: 0, objects: [obj('x')] });
-    expect([s.viewAnalysis.column, s.viewAnalysis.colourBy]).toEqual([0, 'plain']);
+    expect([s.viewAnalysis.column, s.viewAnalysis.colourBy]).toEqual(['distance_front', 'plain']);
     const p = parseSettings(JSON.stringify({ viewSim: { fov: [360, 0, 0], cell: 'x', reach: 'en17037', groundZ: 2 } }));
     expect([p.viewSim.fov, p.viewSim.cell, p.viewSim.reach, p.viewSim.groundZ, p.viewSim.far]).toEqual([[360, 0, 0], 2, 'en17037', 2, 1000]);
     expect(parseSettings('{"site":{}}').viewSim).toEqual(defaultSettings().viewSim);

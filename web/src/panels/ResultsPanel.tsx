@@ -271,7 +271,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
             <div className="row-fill">
               <div className="field">
                 <label className="sr-only" htmlFor="column">Result</label>
-                <select className="select" id="column" value={column} disabled={r.columns.length < 2} onChange={(e) => dispatch({ type: 'COLUMN', column: Number(e.target.value) })}>
+                <select className="select" id="column" value={column} disabled={r.columns.length < 2} onChange={(e) => dispatch({ type: 'COLUMN', column: r.columns[Number(e.target.value)] })}>
                   {r.columns.map((c, i) => <option key={c} value={i}>{columnLabel(c)}</option>)}
                 </select>
               </div>

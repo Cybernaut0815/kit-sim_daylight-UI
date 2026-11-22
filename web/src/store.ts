@@ -122,10 +122,12 @@ export interface State {
   probe: Probe | null; // element under the cursor in a view
   bin: [number, number] | null; // hovered histogram bin [lo, hi): the views fade everything else
   settings: Settings; stations: Station[] | null;
-  column: number; // the result column shown: an index into the first result in slot order, found by name in the others
+  // the result column shown, by name ('': the first): it stays through new runs, changed roles and new target groups,
+  // which move the columns (lib/result columnIndex finds it in a result)
+  column: string;
   colourBy: 'plain' | 'value';
   errors: Record<string, string>; // validate() output keyed by field id
-  viewAnalysis: { column: number; colourBy: 'plain' | 'value'; errors: Record<string, string> }; // the view analysis' own
+  viewAnalysis: { column: string; colourBy: 'plain' | 'value'; errors: Record<string, string> }; // the view analysis' own
 }
 
 /** Tagged `tab: 'views'`, an action of one analysis (ROLE, SHADE, RUN, COLUMN, COLOUR_BY, ERRORS) acts on the view
@@ -151,7 +153,7 @@ export type Action =
   | { type: 'STATIONS'; stations: Station[] }
   | { type: 'VIEW_SIM'; patch: Partial<ViewSim> }
   | ({ type: 'RUN'; slot: number; run: Run } & OfTab)
-  | ({ type: 'COLUMN'; column: number } & OfTab)
+  | ({ type: 'COLUMN'; column: string } & OfTab)
   | ({ type: 'COLOUR_BY'; colourBy: 'plain' | 'value' } & OfTab)
   | { type: 'PROBE'; probe: Probe | null }
   | { type: 'BIN'; bin: [number, number] | null }
@@ -180,8 +182,8 @@ const IDLE: Run = { status: 'idle' };
 const model = (slot: number): Model => ({ slot, name: '', objects: [], selection: NO_SELECTION, selected: new Set(), run: IDLE, result: null, error: null, optics: {}, viewAnalysis: { objects: [], run: IDLE, result: null, error: null } });
 
 export const initialState = (settings = defaultSettings()): State => ({
-  models: [model(0)], active: 0, hovered: null, probe: null, bin: null, settings, stations: null, column: 0, colourBy: 'plain', errors: {},
-  viewAnalysis: { column: 0, colourBy: 'plain', errors: {} },
+  models: [model(0)], active: 0, hovered: null, probe: null, bin: null, settings, stations: null, column: '', colourBy: 'plain', errors: {},
+  viewAnalysis: { column: '', colourBy: 'plain', errors: {} },
 });
 
 // The view analysis seen as daylight is: its rows, run, result and error (per model) and its column, colouring and errors
@@ -223,7 +225,8 @@ const put = (s: State, slot: number, f: (m: Model) => Model): State => {
   const models = s.models.map((m) => (m.slot === slot ? f(m) : m));
   return models.every((m, i) => m === s.models[i]) ? s : { ...s, models };
 };
-/** A model still shows a result: the shared column (and colouring) stay; else they start over, as for one model. */
+/** A model still shows a result: the shared colouring stays; else it starts over, as for one model. (The shown column
+ *  is a name and always stays.) */
 const kept = (models: readonly Model[]) => models.some((m) => m.result);
 /** Row `o` casting shade (no flag), or not. */
 const shading = (o: ObjectRow, shade: boolean): ObjectRow => { const { shade: _was, ...rest } = o; return shade ? rest : { ...rest, shade: false }; };
@@ -246,8 +249,8 @@ export async function runBatch(jobs: readonly { slot: number; ready: () => boole
 
 /** A model still shows a view analysis result. */
 const keptViews = (models: readonly Model[]) => models.some((m) => m.viewAnalysis.result);
-/** The view analysis' column and colouring start over when no model shows one of its results. */
-const viewsKept = (s: State): State => (keptViews(s.models) ? s : { ...s, viewAnalysis: { ...s.viewAnalysis, column: 0, colourBy: 'plain' } });
+/** The view analysis' colouring starts over when no model shows one of its results. */
+const viewsKept = (s: State): State => (keptViews(s.models) ? s : { ...s, viewAnalysis: { ...s.viewAnalysis, colourBy: 'plain' } });
 
 export function reducer(s: State, a: Action): State {
   if ('tab' in a && a.tab === 'views') { // the view analysis' action: daylight's rules on its slice; nothing changed = the same state
@@ -264,7 +267,7 @@ function analysis(s: State, a: Action): State {
         ...model(m.slot), name: a.name ?? '', objects: a.objects, run: inFlight(m.run) ? m.run : IDLE,
         viewAnalysis: { objects: a.objects, run: inFlight(m.viewAnalysis.run) ? m.viewAnalysis.run : IDLE, result: null, error: null },
       }));
-      return n === s ? s : viewsKept({ ...n, hovered: null, ...(kept(n.models) ? {} : { column: 0, colourBy: 'plain' as const }) });
+      return n === s ? s : viewsKept({ ...n, hovered: null, ...(kept(n.models) ? {} : { colourBy: 'plain' as const }) });
     }
     case 'ROLE': { // instanced rows draw one mesh many times: Shade or Ignore only (rows and colours are per drawn mesh)
       const ids = new Set(a.ids), group = a.role === 'shade' ? a.group : undefined; // a Set: a model of 14k meshes, all re-assigned, is 14k lookups, not 14k x 14k compares
@@ -273,7 +276,7 @@ function analysis(s: State, a: Action): State {
           ? (({ group: _g, ...r }) => ({ ...r, role: a.role, ...(group ? { group } : {}) }))(shading(o, true)) : o));
         return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null }; // nothing changed: keep the result
       });
-      return n === s || kept(n.models) ? n : { ...n, column: 0 };
+      return n; // the shown column stays: the next run shows it again
     }
     case 'SHADE': { // the same receivers with other run arguments: the result stays, stale where the arguments differ
       const ids = new Set(a.ids);
@@ -301,7 +304,7 @@ function analysis(s: State, a: Action): State {
           viewAnalysis: { objects: vobjects, run: inFlight(v.run) ? v.run : IDLE, result: null, error: null },
         };
       });
-      return n === s ? s : viewsKept({ ...n, hovered: null, probe: null, ...(kept(n.models) ? {} : { column: 0 }) });
+      return n === s ? s : viewsKept({ ...n, hovered: null, probe: null });
     }
     case 'SELECTION':
       return put(s, a.slot, (m) => ({ ...m, selection: { paths: a.paths, active: a.active, source: a.source }, selected: new Set(idsUnder(a.paths, m.objects)) }));
@@ -313,7 +316,7 @@ function analysis(s: State, a: Action): State {
       const i = s.models.findIndex((m) => m.slot === a.slot);
       if (i < 0 || s.models.length === 1) return s;
       const models = s.models.filter((m) => m.slot !== a.slot), active = s.active === a.slot ? (models[i] ?? models[i - 1]).slot : s.active; // the next tab, else the one before
-      return viewsKept({ ...s, models, active, hovered: null, probe: null, ...(kept(models) ? {} : { column: 0, colourBy: 'plain' as const }) });
+      return viewsKept({ ...s, models, active, hovered: null, probe: null, ...(kept(models) ? {} : { colourBy: 'plain' as const }) });
     }
     case 'ACTIVE':
       return s.active === a.slot || !s.models.some((m) => m.slot === a.slot) ? s : { ...s, active: a.slot };
@@ -365,7 +368,7 @@ function analysis(s: State, a: Action): State {
       }
       return {
         ...put(s, a.slot, (x) => ({ ...x, run: r, result: done ? r.result : x.result, error: r.status === 'error' ? r.message : done || r.status === 'idle' ? null : x.error })),
-        probe: done ? null : s.probe, bin: done ? null : s.bin, colourBy: done && !kept(s.models) ? 'value' : s.colourBy, // the column is clamped where it is read
+        probe: done ? null : s.probe, bin: done ? null : s.bin, colourBy: done && !kept(s.models) ? 'value' : s.colourBy, // the column is found by name where it is read
         errors: (r.status === 'running' || r.status === 'queued') && Object.keys(s.errors).length ? {} : s.errors,
       };
     }

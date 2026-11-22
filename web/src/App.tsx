@@ -18,7 +18,7 @@ import { loadFiles, png } from './lib/loaders';
 import { opticsArgs, readKey, resolveOptics, runSwitches, type TextureStats } from './lib/optics';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
-import { faceAreas, fmtNum, roundNum, unionRange, unitFor, vertexAreas } from './lib/result';
+import { columnIndex, faceAreas, fmtNum, roundNum, unionRange, unitFor, vertexAreas } from './lib/result';
 import { rowAreas } from './lib/topology';
 import { NONE, active, describe, fromStage, toStage, type Section } from './lib/section';
 import { link, type SavedView } from './lib/views';
@@ -628,7 +628,7 @@ type TexStats = Readonly<Record<number, ReadonlyMap<string, TextureStats | null>
 /** One analysis' inputs: its models (daylight's, or the view analysis' seen as daylight's), its column, whether its tab
  *  shows (Auto runs that one only), and how its runs are made: the run arguments, the checks, the job's tool and weather. */
 interface AnalysisCfg {
-  models: Model[]; column: number; visible: boolean; auto: boolean; dispatch: Dispatch<Action>; viz: Settings['viz'];
+  models: Model[]; column: string; visible: boolean; auto: boolean; dispatch: Dispatch<Action>; viz: Settings['viz']; // column: the shown one's name
   conv: RefObject<Map<string, Conv>>; reading: RefObject<boolean>; texStats: TexStats; setTexStats: Dispatch<SetStateAction<TexStats>>;
   reflect: boolean; live: boolean; // the diffuse textures count (Reflections); textures count at all (glass, screens)
   on: 'faces' | 'vertices'; epw?: File | { url: string }; weather: unknown; tool?: 'views';
@@ -800,7 +800,7 @@ function useAnalysis(c: AnalysisCfg) {
   // colour scale for the views and the charts over every model's values: the quantity's gradient, its legend domain
   // (the data's unless overridden), its problem range and the two range colours, from the persisted viz settings.
   const ref = models.find((m) => m.result)?.result ?? null;
-  const column = ref ? Math.min(c.column, ref.columns.length - 1) : 0, shown = ref?.columns[column] ?? null;
+  const column = ref ? columnIndex(ref.columns, c.column) : 0, shown = ref?.columns[column] ?? null;
   const cols = models.map((m) => (m.result && shown ? m.result.columns.indexOf(shown) : -1)); // a result without it counts as none
   const bySlot = [0, 1, 2, 3].map((k) => models.find((m) => m.slot === k)?.result ?? null); // fixed length: memo deps
   const results = useMemo(() => bySlot.filter((r): r is RunResult => !!r), bySlot); // eslint-disable-line react-hooks/exhaustive-deps
