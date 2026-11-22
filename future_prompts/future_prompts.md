@@ -1,6 +1,5 @@
 # List of future prompts
 
-
 ## Prompt 1
 
 ___
@@ -69,7 +68,10 @@ ___
 
 I also want an option, that the user can save different anayslis sets
 So they user can set different sets of receiver/ obstruction and so on for different analytics (as for example some meshes may need facade analytics, some all around or on daylight, some may need Illumonacne for interiors or radiation for calculation for solar panels)
-So I want to be able to save sets of mehs settings, with simluation settings and selected results 
+So I want to be able to save sets of mehs settings, with simluation settings and selected results
+
+Also concerning the UI, it cna happen, that large numbers are not shown correctly in the UI - can you make sure that too large numbers get scietific notation to prevent this
+
 Please plan this accordingly
 
 ## Prompt 6
