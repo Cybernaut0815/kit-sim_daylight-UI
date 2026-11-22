@@ -16,13 +16,13 @@ ___
 2026|11|20 - 11:01 am
 
 ~~Please have a look at the frontend of this
-Create a new branch on this
+Create a new branch on this~~
 
-The frontend should have a second tab - so do not toch the right and left panel of the current daylight, but there should be a new tab for the view analysis, only featuring the view settings and results
+~~The frontend should have a second tab - so do not toch the right and left panel of the current daylight, but there should be a new tab for the view analysis, only featuring the view settings and results
 But it should reference of course the same usd model, also transparencies and so on
-But what is blocking/receiving for the analysis should be independent in the 2 sets, because that can be sometimes different for daylight and views
+But what is blocking/receiving for the analysis should be independent in the 2 sets, because that can be sometimes different for daylight and views~~
 
-in the @kit-sim_daylight_frontend/CLAUDE.md there is still a reference to the zha-ui - but that should be updated to the actual ui used, which is kitforge ui package and skill now~~
+~~in the @kit-sim_daylight_frontend/CLAUDE.md there is still a reference to the zha-ui - but that should be updated to the actual ui used, which is kitforge ui package and skill now~~
 *implemented*
 
 ## Prompt 3
@@ -34,17 +34,17 @@ ___
 At the moment if set on face, it always returns triangles, even if the faces are quads - please try to fix this
 Also if I have disconnected parts of a same mesh, but the vertices are on the same location, that shoud not get the view direction from the joined edge, but should keep them seperate for the analysis
 For visualization, the meshes are joined if they have common vertices and also need to be tris for visualization in three.js, but the visualization should keep the original mesh shape as the USD or glb.
-Please try to change this
+Please try to change this~~
 
-I also want you to do few adaptations on the UI
+~~I also want you to do few adaptations on the UI
 There should be also wa way to set a fully custom gradient and als edit the preset ones
 So change the colour posisons, flip the direction or choose different colours
 Also there should be an option to apply a method to the visualization values, (as log or choose well fitting ones) to make smaller or large differences more clear
-Also good standard gradients for the different view results
+Also good standard gradients for the different view results~~
 
-Also I want to be able to set the sun path custom around one or serverla selcted objects
+~~Also I want to be able to set the sun path custom around one or serverla selcted objects~~
 
-I also want to have a small change on the view results: I want to be to have a result all virutal ground and obstruction joined
+~~I also want to have a small change on the view results: I want to be to have a result all virutal ground and obstruction joined
 Please plan this accordingly~~
 *implemented*
 
@@ -59,7 +59,7 @@ Also I would like to be able to have different display options (as the USD viewr
 Except the result meshes should not be influenced by that, but always shown as just pure coloured meshes
 
 Also on "All around" ground always returns 0 - why is that? Please investigate and try to fix that
-Another think I want you to add is that the settings (in both, daylight and views) can also be set back to their default settings
+Another thing I want you to add is that the settings (in both, daylight and views) can also be set back to their default settings
 
 ## Prompt 5
 
@@ -70,7 +70,7 @@ I also want an option, that the user can save different anayslis sets
 So they user can set different sets of receiver/ obstruction and so on for different analytics (as for example some meshes may need facade analytics, some all around or on daylight, some may need Illumonacne for interiors or radiation for calculation for solar panels)
 So I want to be able to save sets of mehs settings, with simluation settings and selected results
 
-Also concerning the UI, it cna happen, that large numbers are not shown correctly in the UI - can you make sure that too large numbers get scietific notation to prevent this
+Also concerning the UI, it can happen, that large numbers are not shown correctly in the UI - can you make sure that too large numbers get scietific notation to prevent this
 
 Please plan this accordingly
 
