@@ -18,6 +18,7 @@ const VIEW_LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Obstruc
 const BLOCK_HELP = 'Off: the selected receivers are analysed but block no rays, e.g. a grid of eye points inside a room that must not hide the room from itself.';
 const BLOCK_OFF = 'No receiver blocks rays now: Receivers block rays (View settings, Advanced) is off.';
 const TARGET_HELP = 'Target: the selected meshes block rays as obstructions, and the rays that end on them count for this group (water, park, landmark...): a share column per group. Letters, digits, _ and -.';
+const TARGETS_HELP = 'Every group is measured in the same run, a result column each (16 at most). Select meshes, then Add target for a new group or Assign for one in the list.';
 
 interface Props {
   models: Model[]; active: number; usd: UsdViewerElement; // the active model's viewer
@@ -38,7 +39,9 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
   const receivers = objects.filter((o) => selected.has(o.id) && o.role === 'receiver'), free = receivers.filter((o) => o.shade === false).length; // the selected receivers; those casting no shade
   const views = analysis === 'views', label = views ? VIEW_LABEL : LABEL, targets = objects.reduce((n, o) => n + (o.role === 'shade' && o.group ? 1 : 0), 0);
   const shadeHelp = views ? (selfOcclude ? BLOCK_HELP : `${BLOCK_OFF} ${BLOCK_HELP}`) : selfOcclude ? SHADE_HELP : `${SHADE_OFF} ${SHADE_HELP}`;
-  const [group, setGroup] = useState('target'); // the group the Target button gives
+  const [group, setGroup] = useState(''); // the name Add target gives the selection
+  const inGroup = (g: string) => objects.filter((o) => o.role === 'shade' && o.group === g); // the active model's meshes of a group
+  const target = (ids: string[], g?: string) => dispatch({ type: 'ROLE', slot: active, ids, role: 'shade', ...(g ? { group: g } : {}) }); // no group: a plain obstruction again
   const variant = useCallback((path: string, set: string, v: string) => onVariant(active, path, set, v), [onVariant, active]); // stable for the memoised tree
   const about = (m: Model) => `Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`;
   return (
@@ -130,15 +133,33 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
             </select>
           </div>
           {views && (
-            <div className="field">
-              <label className="sr-only" htmlFor="target-group">Target group</label>
-              <div className="row-fill" role="group" aria-label="Target group of the selected meshes">
-                <input className="input" id="target-group" list="target-groups" value={group} title={TARGET_HELP} aria-invalid={errors.groups ? true : undefined} onChange={(e) => setGroup(e.target.value)} />
-                <button className="btn btn--secondary" type="button" title={TARGET_HELP} disabled={!selected.size || !group.trim()} onClick={() => dispatch({ type: 'ROLE', slot: active, ids: [...selected], role: 'shade', group: group.trim() })}>Target</button>
+            // The target groups, all measured in one run: a row per group in use (any model's), then a new one by name
+            <fieldset className="field" aria-labelledby="lg-targets">
+              <legend id="lg-targets">Targets</legend>
+              {groups.map((g) => {
+                const mine = inGroup(g);
+                return (
+                  <div key={g} className="row-fill" role="group" aria-label={`Target group ${g}`}>
+                    <span className="cluster">
+                      <span className="badge badge--success" title={`Target: rays ending on its meshes count for ${g}`}><span className="dot" />{g}</span>
+                      <span className="text-muted">{mine.length} {mine.length === 1 ? 'mesh' : 'meshes'}</span>
+                    </span>
+                    <span className="cluster">
+                      <button className="btn btn--secondary" type="button" disabled={!selected.size} title={`The selected meshes join ${g}`} onClick={() => target([...selected], g)}>Assign</button>
+                      <button className="icon-btn icon-btn--ghost" type="button" disabled={!mine.length} aria-label={`Remove the target group ${g}`} title={`Remove ${g}: its meshes are obstructions again`} onClick={() => target(mine.map((o) => o.id))}>
+                        <Icon name="close" />
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+              <label className="sr-only" htmlFor="target-group">Name of a new target group</label>
+              <div className="row-fill" role="group" aria-label="New target group of the selected meshes">
+                <input className="input" id="target-group" value={group} placeholder="water, park, tower…" title={TARGET_HELP} aria-invalid={errors.groups ? true : undefined} onChange={(e) => setGroup(e.target.value)} />
+                <button className="btn btn--secondary" type="button" title={TARGET_HELP} disabled={!selected.size || !group.trim()} onClick={() => { target([...selected], group.trim()); setGroup(''); }}>Add target</button>
               </div>
-              <datalist id="target-groups">{groups.map((g) => <option key={g} value={g} />)}</datalist>
-              {errors.groups && <span className="field__error">{errors.groups}</span>}
-            </div>
+              {errors.groups ? <span className="field__error">{errors.groups}</span> : <span className="field__help">{TARGETS_HELP}</span>}
+            </fieldset>
           )}
           <PrimTree usd={usd} objects={objects} selection={selection} selected={selected} names={names} stage={stage} loading={loading} onVariant={variant} dispatch={dispatch} analysis={analysis} />
         </div>
