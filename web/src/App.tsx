@@ -12,13 +12,14 @@ import type { ChartEdit } from './charts/ChartSettings';
 import { buildArgs, derivedTz, epwRef, noOccludeArgs, simFor, targetArgs, validate, validateViews, viewArgs, weatherLeap } from './lib/args';
 import { BUILT_IN } from './lib/charts';
 import { zoneAt } from './lib/zone';
-import { extract, jobMeshes, same, type Extracted, type Hashed } from './lib/extract';
+import { extract, jobMeshes, same, type Extracted, type Hashed, type RowMesh } from './lib/extract';
 import { scaleFor, type Scale } from './lib/gradients';
 import { loadFiles, png } from './lib/loaders';
 import { opticsArgs, readKey, resolveOptics, runSwitches, type TextureStats } from './lib/optics';
 import { rowNames } from './lib/tree';
 import { toUsda } from './lib/usda';
 import { faceAreas, fmtNum, roundNum, unionRange, unitFor, vertexAreas } from './lib/result';
+import { rowAreas } from './lib/topology';
 import { NONE, active, describe, fromStage, toStage, type Section } from './lib/section';
 import { link, type SavedView } from './lib/views';
 import { exclusive, settled } from './mcp/bridge';
@@ -61,7 +62,7 @@ const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_
 const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' ? 'views' : 'daylight' }; } catch { return UI; } };
 
 // A row's mesh, built on demand (lib/extract.ts), with its model's slot; once a run has hashed it, its content id
-type Conv = Hashed & Pick<Extracted, 'make'> & { slot: number };
+type Conv = Hashed & Pick<Extracted, 'make' | 'topology' | 'receiver'> & { slot: number };
 /** A mesh's server id or core name (C1: content ids, twins id_2, ...) in a server or core message. */
 const CORE = /[0-9a-f]{64}(?:_\d+)?/g;
 /** A view's model as the app holds it: the viewer's object per row id, the model's own names by prim path (glb / gltf /
@@ -210,7 +211,7 @@ export default function App() {
   // mesh is the receiver.
   const readStage = async (slot: number, roles?: ReadonlyMap<string, Role>) => {
     const { el: usd } = viewer(slot), { mpu, own } = model.current[slot];
-    const found = extract(usd.three.items(), usd.three.root, mpu, roles && ((p) => roles.has(p)));
+    const found = extract(usd.three.items(), usd.three.root, mpu, roles && ((p) => roles.has(p)), (rid) => usd.usd.meshMap(rid));
     // An instanced mesh's own path is Hydra's. A point instancer's prototype is re-rooted as <prototype>/ForInstancer<hash>:
     // without that segment it is the prototype prim the tree shows; its row also answers to the instancer, which is what
     // the viewer selects for a click on a copy. Native instances are prims of their own: every copy's path is kept.
@@ -231,7 +232,7 @@ export default function App() {
     found.forEach((e, i) => {
       const id = crypto.randomUUID(), name = labels[i], kept = roles ? roles.get(paths[i]) ?? 'none' : lone;
       // The row id is the app's; the server and the core name the mesh by its content, per job (jobMeshes).
-      conv.current.set(id, { slot, make: e.make, dmesh: e.dmesh, stamp: e.stamp });
+      conv.current.set(id, { slot, make: e.make, dmesh: e.dmesh, stamp: e.stamp, topology: e.topology, receiver: e.receiver });
       map.set(id, e.item.object!);
       objects.push({ id, name, path: paths[i], tris: e.tris, verts: e.verts, role: kept === 'receiver' && e.instances ? 'none' : kept, materials: e.materials, ...(e.instances ? { instances: e.instances } : {}), ...(copies[i] ? { paths: copies[i] } : {}) });
     });
@@ -396,7 +397,12 @@ export default function App() {
     void viewer(slot).el.close().catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- dropConv reads a ref only
 
-  const meshOf = useCallback((id: string) => conv.current.get(id)?.make(), []); // a row's mesh as run (model metres, Z up), built per call
+  // A row's mesh (model metres, Z up), built per call: as drawn, or with a result the mesh its rows name (a receiver sent
+  // as the file's own faces and points: lib/extract RowMesh)
+  const meshOf = useCallback((id: string, r?: RunResult | null): RowMesh | undefined => {
+    const cv = conv.current.get(id), form = r?.forms?.[r.receivers.indexOf(id)];
+    return form && cv?.receiver ? cv.receiver(form).mesh() : cv?.make();
+  }, []);
 
   const s = state.settings, v = s.viewSim, views = ui.tab === 'views';
   // The view analysis' own actions (ROLE, SHADE, RUN, COLUMN, COLOUR_BY, ERRORS) tagged for its slice of the store; the
@@ -409,7 +415,7 @@ export default function App() {
   const epw = epwRef(s), base = buildArgs(s), weather = epw instanceof File ? [epw.name, epw.size, epw.lastModified] : epw?.url ?? null;
   const shared = { conv, texStats, setTexStats, reading, auto: ui.auto, viz: s.viz };
   const D = useAnalysis({
-    ...shared, models: state.models, column: state.column, visible: !views, dispatch, reflect, live: physical && (s.sim.transmission || reflect), on: s.sim.on, epw, weather,
+    ...shared, models: state.models, column: state.column, visible: !views, dispatch, reflect, live: physical && (s.sim.transmission || reflect), on: s.sim.on, epw, weather, ladybug: !physical,
     argsOf: (receivers, _shades, o, elements) => { const sim = simFor(s.sim, elements); return { args: [...base, ...opticsArgs(o.meshes, o.fallback, sim), ...noOccludeArgs(receivers, s.sim)], switches: runSwitches(sim) }; },
     check: (per, ready) => validate(s, per.some((p) => p.receivers.length > 0), ready, Math.max(0, ...per.map((p) => p.elements))),
     focus: (f) => (f === 'weather' ? `weather-${s.weather.source}` : FOCUS[f] ?? f),
@@ -614,6 +620,7 @@ interface AnalysisCfg {
   conv: RefObject<Map<string, Conv>>; reading: RefObject<boolean>; texStats: TexStats; setTexStats: Dispatch<SetStateAction<TexStats>>;
   reflect: boolean; live: boolean; // the diffuse textures count (Reflections); textures count at all (glass, screens)
   on: 'faces' | 'vertices'; epw?: File | { url: string }; weather: unknown; tool?: 'views';
+  ladybug?: boolean; // the core takes faces of 3 or 4 corners only: a receiver with a bigger one is sent as drawn
   argsOf: (receivers: ObjectRow[], shades: ObjectRow[], optics: Optics, elements: number) => { args: string[]; switches: string };
   check: (per: Per[], materialsReady: boolean) => Record<string, string>; // validate(): field id -> message
   focus: (field: string) => string; // the control that gets focus for a field's error
@@ -700,7 +707,13 @@ function useAnalysis(c: AnalysisCfg) {
               // names (the run key keeps the row ids)
               const rows = [...p.receivers, ...p.shades], n = p.receivers.length, cs = rows.map((o) => conv.current.get(o.id));
               if (!cs.every(Boolean)) throw new Error('changed');
-              const { meshes, ids, stems, stamps, hashed } = await jobMeshes(cs as Conv[], n, own.signal);
+              // A receiver goes as the file's own faces and points (its topology, read from the viewer once per geometry):
+              // a quad is one row, parts that only share a position keep their own vertices. As drawn when it has none,
+              // or in Ladybug mode with a face of more than 4 corners (the core takes triangles and quads there).
+              const forms = (await Promise.all(cs.slice(0, n).map((cv) => cv!.topology?.() ?? null))).map((t) => (t && !(c.ladybug && t.corners > 4) ? t : null));
+              if (!mine()) throw new Error('changed');
+              const sent: Hashed[] = cs.map((cv, k) => (k < n && forms[k] ? cv!.receiver!(forms[k]) : cv!));
+              const { meshes, ids, stems, stamps, hashed } = await jobMeshes(sent, n, own.signal);
               if (!mine()) throw new Error('changed'); // its model or roles changed during a long hash: no job
               const core = new Map(rows.map((o, k) => [o.id, stems[k]]));
               names.clear();
@@ -718,22 +731,23 @@ function useAnalysis(c: AnalysisCfg) {
                 onStatus: (job) => { if (mine()) dispatch({ type: 'RUN', slot, run: job.state === 'queued' ? { status: 'queued', position: job.position ?? 0 } : { status: 'running', progress: job.progress, eta_s: job.eta_s } }); },
               });
               res.manifest.meshes.forEach((g, i) => {
-                const o = p.receivers[i], want = o && (c.on === 'faces' ? o.tris : o.verts);
+                const o = p.receivers[i], t = forms[i], want = o && (c.on === 'faces' ? t?.faces ?? o.tris : t?.points ?? o.verts);
                 if (!o || g.count !== want) throw new Error(`${o?.name ?? g.name}: the server returned ${g.count} rows, expected ${want}. Reload the model and run again.`);
               });
               if (!mine()) throw new Error('changed'); // its model changed during the job: runBatch ends it idle, never a new model's result
               // Every element's area, aligned with the rows: the weight of every statistic, chart, tool and export, written
               // once here instead of per mesh on each use; the last result's when its receivers are these rows, unchanged
               // (row ids change with any re-read).
-              const was = p.m.result, keep = was?.on === c.on && was.receivers.length === n && p.receivers.every((o, i) => o.id === was.receivers[i]) && !hashed.some((k) => k < n);
+              const was = p.m.result, keep = was?.on === c.on && was.receivers.length === n && p.receivers.every((o, i) => o.id === was.receivers[i]) && !hashed.some((k) => k < n)
+                && forms.every((t, i) => t === (was.forms?.[i] ?? null)); // the same rows: a form's id may be hashed already (Ladybug and back)
               const weights = keep ? was.weights : new Float32Array(res.manifest.meshes.reduce((a, g) => a + g.count, 0));
               if (!keep) res.manifest.meshes.forEach((g, i) => {
-                const cv = conv.current.get(p.receivers[i].id);
-                if (!cv || !same(stamps[i], cv.stamp())) throw new Error('changed'); // re-read, or changed since sent: ended idle as above
-                const { positions, indices } = cv.make(); // one receiver at a time
-                weights.set((c.on === 'faces' ? faceAreas : vertexAreas)(positions, indices), g.first);
+                const cv = conv.current.get(p.receivers[i].id), t = forms[i];
+                if (!cv || !same(stamps[i], sent[i].stamp())) throw new Error('changed'); // re-read, or changed since sent: ended idle as above
+                const { positions, indices } = t ? cv.receiver!(t).mesh() : cv.make(); // one receiver at a time
+                weights.set(t ? rowAreas(faceAreas(positions, indices), t, c.on) : (c.on === 'faces' ? faceAreas : vertexAreas)(positions, indices), g.first);
               });
-              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, receivers: p.receivers.map((o) => o.id), on: c.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: p.switches } } });
+              dispatch({ type: 'RUN', slot, run: { status: 'done', result: { ...res, weights, forms, receivers: p.receivers.map((o) => o.id), on: c.on, key: p.key, elapsed: (performance.now() - t0) / 1000, switches: p.switches } } });
             } finally {
               own.abort(); // the run is over: a PUT still on its way after another failed stops (and reports no progress)
               signal.removeEventListener('abort', off);

@@ -179,6 +179,10 @@ describe('results by facing', () => {
     expect(sides(bySide(values, [one], 'faces', 90, false)).map((g) => g.split(' ').slice(0, 2).join(' '))).toEqual(['N 0,1', 'E 6,7', 'S 2,3', 'W 4,5', 'up 8,9']); // north 90: model -X
     expect(sides(bySide(values, [one], 'faces', 0, true)).map((g) => g.split(' ').slice(0, 2).join(' '))).toEqual(['N 4,5', 'E 0,1', 'S 6,7', 'W 2,3', 'down 8,9']);
   });
+  it('face rows of several triangles (faceStart: a quad is one face) face as their triangles do', () => {
+    const faces = { ...one, count: 5, faceStart: [0, 2, 4, 6, 8, 10], w: [10, 20, 30, 40, 50] };
+    expect(sides(bySide([0, 1, 2, 3, 4], [faces], 'faces', 0, false))).toEqual(['N 3 40', 'E 1 20', 'S 2 30', 'W 0 10', 'up 4 50']);
+  });
   it('vertices along their faces\' normals, rows from each mesh\'s first; a degenerate element is left out', () => {
     const wall = { first: 0, count: 4, positions: quads[1].flat(), indices: [0, 1, 2, 0, 2, 3], w: [1, 1, 1, 1] };
     const roof = { first: 4, count: 5, positions: [...quads[4].flat(), 5, 5, 6], indices: [0, 1, 2, 0, 2, 3], w: [2, 2, 2, 2, 2] }; // vertex 4: on no face

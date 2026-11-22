@@ -150,9 +150,10 @@ export function describeView(v: ViewState, north: number, mpu: number): string {
   return `${from}; ${lens}; aimed at (${toModel(v.target, mpu).map((t) => (Math.round(10 * t) / 10 + 0).toFixed(1)).join(', ')}) m`; // + 0: no -0.0
 }
 
-/** A receiver as findCritical reads it: its rows [first, first + count) of the result, its ObjMesh (model metres) and
- *  its elements' areas `w` (m²: faces, or vertices' shares of them). */
-export interface CriticalMesh { id: string; name: string; path: string; first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }
+/** A receiver as findCritical reads it: its rows [first, first + count) of the result, its mesh in those rows (model
+ *  metres; `faceStart`: the triangles of each face row, absent: a row per triangle) and its elements' areas `w` (m²:
+ *  faces, or vertices' shares of them). */
+export interface CriticalMesh { id: string; name: string; path: string; first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; faceStart?: ArrayLike<number>; w: ArrayLike<number> }
 export interface Cluster {
   mesh: string; name: string; path: string; facing: Facing; side: 'below' | 'above'; // the mesh, the way it faces, the bound missed
   elements: number; area: number; share: number; mean: number; worst: number; // area m²; share of the mesh's area facing that way
@@ -160,10 +161,13 @@ export interface Cluster {
   view: ViewState; near: number; // a 16:10 shot of it from where it faces (world, as the views); near: its cutaway
 }
 const SHOT: Lens = { fov: 45, aspect: 16 / 10, projection: 'perspective' }; // the viewer's lens, the default 1280 × 800 shot
-/** An element's points (model metres): a face's corners; a vertex stands for its patch, ± half its side on each axis. */
+/** The triangles [from, to) of face row i. */
+const trisOf = (m: CriticalMesh, i: number): [number, number] => (m.faceStart ? [m.faceStart[i], m.faceStart[i + 1]] : [i, i + 1]);
+/** An element's points (model metres): a face's corners (its triangles'); a vertex stands for its patch, ± half its
+ *  side on each axis. */
 function pointsOf(m: CriticalMesh, i: number, vertex: boolean): Vec3[] {
   const P = m.positions, at = (v: number): Vec3 => [P[3 * v], P[3 * v + 1], P[3 * v + 2]];
-  if (!vertex) return [at(m.indices[3 * i]), at(m.indices[3 * i + 1]), at(m.indices[3 * i + 2])];
+  if (!vertex) { const [from, to] = trisOf(m, i), out: Vec3[] = []; for (let c = 3 * from; c < 3 * to; c++) out.push(at(m.indices[c])); return out; }
   const p = at(i), r = Math.sqrt(m.w[i]) / 2;
   return [0, 1, 2].flatMap((j) => [-r, r].map((s) => p.map((t, k) => (k === j ? t + s : t)) as Vec3));
 }
@@ -171,8 +175,8 @@ function pointsOf(m: CriticalMesh, i: number, vertex: boolean): Vec3[] {
 /**
  * Where a result is out of range: the elements of one column under `below` or over `above`, grouped by mesh × the way
  * they face × the bound they miss, largest area first (at most `limit`; groups under 0.5 % of the problem area dropped).
- * Elements are faces (normal (b - a) × (c - a)) or vertices (the area-weighted normal of their faces, the core's sensor
- * normal); a back-side column (`*_back`) faces the other way. The problem share is of the area with a value.
+ * Elements are faces (normal: the sum of their triangles' (b - a) × (c - a)) or vertices (the area-weighted normal of
+ * their faces, the core's sensor normal); a back-side column (`*_back`) faces the other way. The problem share is of the area with a value.
  * ponytail: one group per mesh × facing even when its elements lie apart (two wings of one mesh frame together); split
  * by connectivity if the shots get too wide.
  */
@@ -197,7 +201,10 @@ export function findCritical(o: {
       }
     }
     for (let i = 0; i < m.count; i++) {
-      const v = o.values[m.first + i], a = m.w[i], raw: Vec3 = vn ? [vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]] : faceCross(P, I, i), l = Math.hypot(...raw);
+      let raw: Vec3;
+      if (vn) raw = [vn[3 * i], vn[3 * i + 1], vn[3 * i + 2]];
+      else { const [from, to] = trisOf(m, i); raw = [0, 0, 0]; for (let f = from; f < to; f++) { const x = faceCross(P, I, f); raw = [raw[0] + x[0], raw[1] + x[1], raw[2] + x[2]]; } }
+      const v = o.values[m.first + i], a = m.w[i], l = Math.hypot(...raw);
       if (!Number.isFinite(v) || !(a > 0) || !(l > 0)) continue;
       const n: Vec3 = [(flip * raw[0]) / l, (flip * raw[1]) / l, (flip * raw[2]) / l], facing = facingOf(n, o.north), key = `${k} ${facing}`;
       all.set(key, (all.get(key) ?? 0) + a);

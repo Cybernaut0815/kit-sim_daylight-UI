@@ -8,7 +8,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { flushSync } from 'react-dom';
 import { Matrix4, Vector3, type InstancedMesh, type Mesh, type Object3D } from 'three';
-import type { ObjMesh } from 'daylight-mesh';
+import type { RowMesh } from '../lib/extract';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
 import type { Pane, UiPrefs } from '../App';
 import { validate, weatherLeap } from '../lib/args';
@@ -58,7 +58,9 @@ export interface Ctl {
   onVariant: (slot: number, path: string, set: string, variant: string) => void; onSubdiv: (level: number) => void;
   onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRun: () => Promise<void>; onDownload: (format: Format, mode: ExportMode) => Promise<void>;
-  meshOf: (id: string) => ObjMesh | undefined; // a row's ObjMesh (model metres, Z up), built per call: take it once per mesh where it is read, never keep it
+  // a row's mesh (model metres, Z up), built per call: take it once per mesh where it is read, never keep it. As drawn,
+  // or with a result the mesh its rows name (a receiver sent as the file's own faces and points: lib/extract RowMesh)
+  meshOf: (id: string, r?: RunResult | null) => RowMesh | undefined;
   busy: () => boolean; held: () => boolean; cancel: () => void; // a batch on its way; a click waiting for the materials; Cancel
   viewer: (slot: number) => Slot;
   variants: (slot: number) => AppModel['choices']; // the variant choices made in the app since the slot's file opened
@@ -246,19 +248,21 @@ const SIDES: readonly Facing[] = ['N', 'E', 'S', 'W', 'up', 'down'];
 /**
  * results by 'facing': a result's elements by the side they face (frame.ts facingOf), N, E, S, W, up, down, each side with
  * its elements' values in one column (`col`: the column's value per result row) and their areas. `meshes`: the
- * receivers' rows [first, first + count), ObjMeshes (model metres) and element areas `w`. An element faces along its
- * face's (b - a) × (c - a), or a vertex along the sum of its faces' (the core's sensor normal); a back column's turned
- * round. Elements with no normal (degenerate) are left out.
+ * receivers' rows [first, first + count), meshes in those rows (model metres; `faceStart`: the triangles of each face
+ * row, absent: a row per triangle) and element areas `w`. An element faces along the sum of its triangles'
+ * (b - a) × (c - a): a face's own, or a vertex's faces' (the core's sensor normal); a back column's turned round.
+ * Elements with no normal (degenerate) are left out.
  */
-export function bySide(col: ArrayLike<number>, meshes: Iterable<{ first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; w: ArrayLike<number> }>, on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
+export function bySide(col: ArrayLike<number>, meshes: Iterable<{ first: number; count: number; positions: ArrayLike<number>; indices: ArrayLike<number>; faceStart?: ArrayLike<number>; w: ArrayLike<number> }>, on: 'faces' | 'vertices', north: number, back: boolean): { facing: Facing; values: number[]; w: number[] }[] {
   const out = new Map<Facing, { values: number[]; w: number[] }>(), s = back ? -1 : 1;
-  for (const { first, count, positions: P, indices: I, w } of meshes) {
+  for (const { first, count, positions: P, indices: I, faceStart, w } of meshes) {
     const n = new Float64Array(3 * count);
-    for (let f = 0; f < I.length / 3; f++) {
+    for (let f = 0, row = 0; f < I.length / 3; f++) {
       const a = 3 * I[3 * f], b = 3 * I[3 * f + 1], c = 3 * I[3 * f + 2];
       const u = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]], v = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
       const x = u[1] * v[2] - u[2] * v[1], y = u[2] * v[0] - u[0] * v[2], z = u[0] * v[1] - u[1] * v[0];
-      for (const e of on === 'faces' ? [f] : [I[3 * f], I[3 * f + 1], I[3 * f + 2]]) if (e < count) { n[3 * e] += x; n[3 * e + 1] += y; n[3 * e + 2] += z; }
+      while (faceStart && faceStart[row + 1] <= f) row++; // the face row triangle f belongs to
+      for (const e of on === 'faces' ? [faceStart ? row : f] : [I[3 * f], I[3 * f + 1], I[3 * f + 2]]) if (e < count) { n[3 * e] += x; n[3 * e + 1] += y; n[3 * e + 2] += z; }
     }
     for (let e = 0; e < count; e++) {
       const v: Vec3 = [s * n[3 * e], s * n[3 * e + 1], s * n[3 * e + 2]];
@@ -283,7 +287,7 @@ export function summaries(x: Pick<Ctl, 'meshOf'>, m: Pick<Model, 'objects' | 're
   const ks = paths ? under(paths) : r.receivers.map((_, k) => k), pathOf = new Map(m.objects.map((o) => [o.id, o.path])); // mesh and facing rows: the receivers under paths
   const rows: { key: string; head: object; u: Summary }[] = by === 'parts' ? paths!.map((p) => ({ key: p, head: { path: p }, u: sum(under([p])) }))
     : by === 'mesh' ? ks.map((k) => { const p = pathOf.get(r.receivers[k]) ?? g[k].name; return { key: p, head: { mesh: p }, u: sum([k]) }; }).sort((p, o) => o.u.area - p.u.area)
-      : bySide(col, (function* () { for (const k of ks) { const o = x.meshOf(r.receivers[k]); if (o) yield { first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, w: w[k] }; } })(), r.on, northOf(r), column.endsWith('_back'))
+      : bySide(col, (function* () { for (const k of ks) { const o = x.meshOf(r.receivers[k], r); if (o) yield { first: g[k].first, count: g[k].count, positions: o.positions, indices: o.indices, faceStart: o.faceStart, w: w[k] }; } })(), r.on, northOf(r), column.endsWith('_back'))
         .map((f) => ({ key: f.facing, head: { facing: f.facing }, u: summarize(f.values, [{ first: 0, count: f.values.length }], [f.w], lo, hi, th) }));
   return { whole: sum(r.receivers.map((_, k) => k)), rows };
 }
@@ -903,8 +907,8 @@ export const HANDLERS: Record<string, Handler> = {
       const mpu = x.viewer(m.slot).el.stage?.metersPerUnit ?? 1, w = weightsOf(r), rows = new Map(m.objects.map((o) => [o.id, o]));
       const meshes = (function* () { // one built at a time (meshOf builds per call)
         for (const [k, id] of r.receivers.entries()) {
-          const o = x.meshOf(id), row = rows.get(id), g = r.manifest.meshes[k];
-          if (o && row) yield { id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, w: w[k] };
+          const o = x.meshOf(id, r), row = rows.get(id), g = r.manifest.meshes[k];
+          if (o && row) yield { id, name: row.name, path: row.path, first: g.first, count: g.count, positions: o.positions, indices: o.indices, faceStart: o.faceStart, w: w[k] };
         }
       })();
       const out = findCritical({ values: r.data[col], column, on: r.on, meshes, north: x.state.settings.sim.north, mpu, below, above, limit: a.limit ?? 8 }), xyz = (v: Vec3) => v.map(cm);

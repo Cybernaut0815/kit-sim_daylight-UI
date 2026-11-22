@@ -5,7 +5,7 @@
 // escapes every text the agent wrote, and useId keeps the legends' gradients apart. No script.
 import { Fragment, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ObjMesh } from 'daylight-mesh';
+import type { RowMesh } from '../lib/extract';
 import { DASH } from '../charts/axes';
 import { Chart } from '../charts/Chart';
 import { Legend } from '../charts/Legend';
@@ -28,7 +28,7 @@ import { chartSpec, imageSize, type Metric, type Report } from './spec';
  *  ran with; the meshes; per block the view images (one per model, data: URLs; [] for other blocks). */
 export interface ReportInput {
   report: Report; models: { slot: number; name: string; file?: string; objects: ObjectRow[]; result: RunResult }[]; settings: Settings;
-  meshOf: (id: string) => ObjMesh | undefined; images: string[][];
+  meshOf: (id: string, r?: RunResult | null) => RowMesh | undefined; images: string[][];
   versions: { app: string; kitUi: string; core: string; viewer: string }; date: Date;
 }
 type Model = ReportInput['models'][number];

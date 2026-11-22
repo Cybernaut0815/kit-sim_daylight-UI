@@ -6,6 +6,7 @@ import type { EpwMonthly } from './lib/epw';
 import { nearestStations } from './lib/geo';
 import { DEFAULT_ABOVE, DEFAULT_BELOW } from './lib/gradients';
 import type { OpticsEdit } from './lib/optics';
+import type { Topology } from './lib/topology';
 import { idsUnder } from './lib/tree';
 
 export type Role = 'receiver' | 'shade' | 'none';
@@ -76,6 +77,9 @@ export interface RunResult {
   // the job's JSON, with the server's run timing in ms (C4; totalMs = run_s) when it reports one
   manifest: RemoteManifest & { timing?: { prepMs: number; skyMs: number; buildMs: number; traceMs: number; reduceMs: number; bounceMs: number; totalMs: number } };
   receivers: string[]; // object ids in sensor order: manifest.meshes[i] <-> receivers[i]
+  /** Per receiver, what its rows are: the file's own faces and points behind the drawn triangles (lib/topology.ts), or
+   *  null / absent: the drawn triangles and vertices themselves. */
+  forms?: (Topology | null)[];
   on: 'faces' | 'vertices'; // element kind the rows describe (weights: face areas or vertex areas)
   key: string; // the run key (args, weather, mesh ids) it was computed for: differs from the current one = stale
   elapsed: number; // s, click to result (the round trip the user waits for)

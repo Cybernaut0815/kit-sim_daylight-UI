@@ -13,6 +13,7 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
 import { paintStyleOf, type Scale } from '../lib/gradients';
+import { drawnValues, faceRow } from '../lib/topology';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
@@ -60,7 +61,7 @@ interface Ctx {
   dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
 }
 
-/** The scene info at the top right of the view: meshes by role, faces and vertices, units, the section, and the frame
+/** The scene info at the top right of the view: meshes by role, drawn triangles and vertices, units, the section, and the frame
  *  line. */
 function SceneInfo({ objects, unit, section, stats, analysis }: { objects: ObjectRow[]; unit: number; section: string | null; stats: RefObject<HTMLSpanElement | null>; analysis?: Tab }) {
   const n = (role: ObjectRow['role']) => objects.reduce((k, o) => k + (o.role === role ? 1 : 0), 0), f = (x: number) => x.toLocaleString('en-GB');
@@ -68,7 +69,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   return (
     <div className="viewport__info" aria-hidden="true">
       <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {analysis === 'views' ? `${f(n('shade') - targets)} blocking, ${f(targets)} targets` : `${f(n('shade'))} shading`}{ignored ? `, ${f(ignored)} ignored` : ''}</span>
-      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} faces, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
+      <span>{f(objects.reduce((k, o) => k + o.tris, 0))} triangles, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
       {section && <span>Section: {section}</span>}
       <span ref={stats} />
     </div>
@@ -148,7 +149,8 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.addEventListener('selectionchange', onSel);
 
     // Hover and probe: pointermove raycasts the rows' objects (not their children: the overlays) once per frame; the
-    // element is the face, or the nearest vertex of the hit face. What the section cuts away is passed through.
+    // element is the face the hit triangle belongs to, or the point at the nearest corner of that triangle (the
+    // receiver's own faces and points: lib/topology.ts). What the section cuts away is passed through.
     // ponytail: linear raycast over every mesh; three-mesh-bvh past ~1M triangles
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3();
     const hitAt = (e: PointerEvent) => {
@@ -165,14 +167,15 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       let element: number | null = null, value = NaN;
       const k = recv.get(id) ?? -1;
       if (result && k >= 0 && hit.faceIndex != null) {
-        if (result.on === 'faces') element = hit.faceIndex;
-        else if (hit.face) { // per-vertex results keep the geometry indexed, so the face corners are the row indices
+        const form = result.forms?.[k] ?? null;
+        if (result.on === 'faces') element = faceRow(form, hit.faceIndex);
+        else if (hit.face) { // the geometry stays indexed: the hit face's corners are index[3 faceIndex + j]
           const mesh = hit.object as THREE.Mesh, pos = mesh.geometry.attributes.position;
           let best = Infinity;
-          for (const vi of [hit.face.a, hit.face.b, hit.face.c]) {
+          [hit.face.a, hit.face.b, hit.face.c].forEach((vi, j) => {
             const d = p.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld).distanceToSquared(hit.point);
-            if (d < best) { best = d; element = vi; }
-          }
+            if (d < best) { best = d; element = form ? form.cornerRow[3 * hit.faceIndex! + j] : vi; }
+          });
         }
         const g = result.manifest.meshes[k];
         if (element !== null && element < g.count) value = result.data[column][g.first + element]; else element = null;
@@ -331,25 +334,27 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.highlight = selectionFill(!!byValue);
   }, [!!byValue, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
-  // Paint: the viewer draws the receivers from their values (views into the result column, no copies: one value per
-  // drawn triangle, or vertex, in its geometry's order, as the run was sent), the colours from the scale and the hovered
-  // bin as a style of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new
-  // scale, range or bin) only restyle.
+  // Paint: the viewer draws the receivers from their values, the colours from the scale and the hovered bin as a style
+  // of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new scale, range or
+  // bin) only restyle. A receiver's rows are its own faces or points (lib/topology.ts): a face's value goes to each of
+  // its drawn triangles, a point's to the drawn corners that name it (so two parts meeting at one drawn vertex keep
+  // their own values). A receiver sent as drawn has a row per triangle or vertex: views into the column, no copies.
   useEffect(() => {
     if (scale) usd.paintStyle = paintStyleOf(scale, bin);
   }, [scale, bin]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
   useEffect(() => {
     const items: { rid: number; values: Float32Array }[] = [];
+    const perVertex = byValue?.on === 'vertices', corners = perVertex && !!byValue.forms?.some(Boolean); // one mode per paint
     if (byValue && scale) {
       const role = new Map(objects.map((o) => [o.id, o.role])), col = byValue.data[column];
       for (const [id, obj] of meshes) {
         const k = role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1;
         if (k < 0) continue;
-        const g = byValue.manifest.meshes[k];
-        items.push({ rid: obj.userData.rid as number, values: col.subarray(g.first, g.first + g.count) });
+        const g = byValue.manifest.meshes[k], rows = col.subarray(g.first, g.first + g.count), index = (obj as THREE.Mesh).geometry?.index?.array;
+        items.push({ rid: obj.userData.rid as number, values: perVertex && !(corners && index) ? rows : drawnValues(rows, byValue.forms?.[k] ?? null, byValue.on, index ?? []) });
       }
     }
-    void usd.paint(items, byValue?.on === 'vertices' ? 'vertex' : 'face'); // the viewer warns about what it skips (its log)
+    void usd.paint(items, !perVertex ? 'face' : corners ? 'corner' : 'vertex'); // the viewer warns about what it skips (its log)
   }, [meshes, objects, byValue, recv, column, !!scale]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above
 
   // Hover: a light accent tint over the mesh, fainter over results.
