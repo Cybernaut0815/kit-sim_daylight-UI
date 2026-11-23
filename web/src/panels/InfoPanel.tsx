@@ -90,7 +90,7 @@ export function InfoButton() {
           </p>
           <ul>
             <li><em>Model</em>: <em>Receiver</em> (analysed and painted), <em>Obstruction</em> (blocks the view), <em>Ignore</em>, and <em>Targets</em>: obstructions whose rays count for a named group (water, park, a tower). Select meshes, name a group and press <em>Add target</em>; <em>Assign</em> puts the selection into a group of the list, × removes a group. Every group is measured in the same run, each as a result of its own. Untick <em>Blocks rays</em> for a grid of eye points.</li>
-            <li><em>Field of view</em>: <em>Window</em> (about each face's normal, 120° wide by default), <em>All around</em> (360°, an eye turning on the spot: lift it with the <em>Eye offset</em>), or <em>Horizontal</em> (the 2D isovist, the area in view).</li>
+            <li><em>Field of view</em>: <em>Window</em> (about each face's normal, 120° wide by default), <em>All around</em> (360°, an eye turning on the spot: lift it with the <em>Eye offset</em>; at offset 0 a receiver that blocks rays sees its own surface behind it, untick <em>Blocks rays</em> to see the ground through it), or <em>Horizontal</em> (the 2D isovist, the area in view).</li>
             <li><em>Distances</em>: <em>Far</em> is what an open ray counts as; <em>Reach</em> adds the share that sees at least 6, 20 and 50 m (EN 17037) or your distances.</li>
             <li><em>See through glass</em>: rays pass the glass of the Materials table and count what lies behind; off, windows block.</li>
             <li><em>Total obstruction</em> is everything that is not open sky: the ground, the obstructions and the targets together (1 minus the sky share).</li>

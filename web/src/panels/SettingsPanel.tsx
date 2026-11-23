@@ -18,7 +18,7 @@ export const SettingsPanel = memo(function SettingsPanel({ sim, errors, dispatch
   const set = (patch: Partial<Settings['sim']>) => dispatch({ type: 'SIM', patch });
   const valid = quantitiesFor(sim.mode), ladybug = sim.mode === 'ladybug';
   return (
-    <Section id="sim" title="Simulation">
+    <Section id="sim" title="Simulation" reset={{ onReset: () => dispatch({ type: 'RESET', what: 'sim' }), label: 'Reset Simulation to default (north stays: it is the Location\'s)' }}>
       <div className="field">
         <span className="field__label">Sky model</span>
         <Segmented name="mode" label="Sky model" value={sim.mode} options={[['physical', 'Physical'], ['ladybug', 'Ladybug']] as const} onChange={(mode) => set({ mode })} />

@@ -154,6 +154,7 @@ export type Action =
   | { type: 'SIM'; patch: Partial<Settings['sim']> }
   | { type: 'STATIONS'; stations: Station[] }
   | { type: 'VIEW_SIM'; patch: Partial<ViewSim> }
+  | { type: 'RESET'; what: SettingsSection } // a settings section's fields back to their defaults
   | ({ type: 'RUN'; slot: number; run: Run } & OfTab)
   | ({ type: 'COLUMN'; column: string } & OfTab)
   | ({ type: 'COLOUR_BY'; colourBy: 'plain' | 'value' } & OfTab)
@@ -180,6 +181,14 @@ export const defaultSettings = (): Settings => ({
   charts: BUILT_IN.map((c) => ({ ...c })),
   viewSim: { fov: [120, -70, 50], cell: 2, sides: 'front', on: 'faces', offset: 0, far: 1000, virtualGround: true, groundZ: null, reach: '', transmission: false, cullBackfaces: false, selfOcclude: true },
 });
+
+/** The View settings sections' fields: what each section's reset puts back. */
+const VIEW_SECTIONS = {
+  'view-field': ['fov', 'cell'], 'view-eye': ['sides', 'on', 'offset'], 'view-distance': ['far', 'reach'],
+  'view-ground': ['virtualGround', 'groundZ', 'transmission', 'cullBackfaces', 'selfOcclude'],
+} as const satisfies Record<string, readonly (keyof ViewSim)[]>;
+/** The settings sections a reset acts on: Simulation (all but north, the Location's), Time, and each View settings one. */
+export type SettingsSection = 'sim' | 'time' | keyof typeof VIEW_SECTIONS;
 
 const IDLE: Run = { status: 'idle' };
 const model = (slot: number): Model => ({ slot, name: '', objects: [], selection: NO_SELECTION, selected: new Set(), run: IDLE, result: null, error: null, optics: {}, viewAnalysis: { objects: [], run: IDLE, result: null, error: null } });
@@ -357,6 +366,13 @@ function analysis(s: State, a: Action): State {
     }
     case 'VIEW_SIM':
       return { ...s, settings: { ...s.settings, viewSim: { ...s.settings.viewSim, ...a.patch } } };
+    case 'RESET': { // the defaults as a whole, not through SIM: its mode switch would keep custom quantities
+      const d = defaultSettings();
+      if (a.what === 'sim') return { ...s, settings: { ...s.settings, sim: { ...d.sim, north: s.settings.sim.north } } };
+      if (a.what === 'time') return { ...s, settings: { ...s.settings, time: d.time } };
+      const patch: Partial<ViewSim> = Object.fromEntries(VIEW_SECTIONS[a.what].map((k) => [k, d.viewSim[k]]));
+      return { ...s, settings: { ...s.settings, viewSim: { ...s.settings.viewSim, ...patch } } };
+    }
     case 'STATIONS': {
       const { lat, lon } = s.settings.site;
       const station = s.settings.weather.station ?? nearestStations(a.stations, lat, lon, 1)[0] ?? null;

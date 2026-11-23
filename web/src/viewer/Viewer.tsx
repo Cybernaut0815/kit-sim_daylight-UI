@@ -18,6 +18,7 @@ import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
+import type { Display } from './Views';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
 /** The viewers' selection fill (one material for all of them): the accent, fainter over result colours. */
@@ -55,6 +56,7 @@ interface Props {
   around?: readonly string[] | null; // the prim paths of the meshes the sun path is fitted to (null: the whole model)
   section: string | null; // the section shown, in words (null: none)
   analysis?: Tab; // whose roles `objects` carry (the scene info's words)
+  display: Display; // the viewer's display mode (the Display menu), with results or without
 }
 
 interface Ctx {
@@ -78,7 +80,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis, display }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -331,13 +333,14 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.three.invalidate();
   }, [meshes, theme, !!byValue]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
-  // The look: the stage's materials in the Plain view; plain grey with tone mapping off (exact legend colours) in the
-  // Value view; the selection fill in the accent colour, fainter over results.
+  // The look: the stage in the display mode of the Display menu, results shown or not (the painted receivers draw their
+  // colours alone in every mode); tone mapping off in the Value view (exact legend colours; the stage's materials draw
+  // untoned there); the selection fill in the accent colour, fainter over results.
   useEffect(() => {
-    usd.displayMode = byValue ? 'plain' : 'shaded';
+    usd.displayMode = display;
     usd.toneMapping = byValue ? 'none' : 'neutral';
     usd.highlight = selectionFill(!!byValue);
-  }, [!!byValue, theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
+  }, [!!byValue, theme, display]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
   // Paint: the viewer draws the receivers from their values, the colours from the scale and the hovered bin as a style
   // of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new scale, range or

@@ -195,7 +195,7 @@ export function unitFor(column: string): { value: string; total: string } {
 const VIEW_HELP: Record<string, string> = {
   sky: 'Share of the field of view that is open sky, 0 to 1 by solid angle: 1 sees only sky. The shares of sky, ground, obstruction and the target groups sum to 1.',
   ground: 'Share of the field that ends on the virtual ground below (the street seen from a facade when no terrain is modelled), 0 to 1.',
-  obstruction: "Share of the field that ends on a mesh that is no target, 0 to 1: buildings, the receivers themselves, a modelled terrain (all around at eye offset 0, also the element's own surface).",
+  obstruction: "Share of the field that ends on a mesh that is no target, 0 to 1: buildings, the receivers themselves, a modelled terrain (all around at eye offset 0, also the own surface behind an element that blocks rays).",
   obstruction_total: 'Total view obstruction, 0 to 1: everything in the field that is not open sky, whether it ends on the virtual ground, on an obstruction or on a target (1 minus the sky share). It repeats those shares, so it is not another part of the sum to 1.',
   glazing: 'Share of the field seen through glass, 0 to 1 (See through glass on). It counts beside the class behind the pane, outside the shares that sum to 1.',
   volume: 'The 3D isovist: the volume in view within the field, m³, every ray capped at Far. Telling indoors or with a small Far; in the open it grows with Far.',

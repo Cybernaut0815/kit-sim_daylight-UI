@@ -1,9 +1,10 @@
 // View settings: the view analysis' own inputs, as the core's views flags (docs/views.md): the field of view (out of a
 // window about each face's normal, all around, or the horizontal ring of the 2D isovist), its cell size, where the eye
 // sits, how far the distances reach, the virtual ground and glass. The roles are the Model panel's (its own set here);
-// the materials (glass) are the same as daylight's; north is the site's.
+// the materials (glass) are the same as daylight's; north is the site's. Each section's reset button puts its own fields
+// back to their defaults.
 import { memo, type Dispatch } from 'react';
-import type { Action, ViewSim } from '../store';
+import type { Action, SettingsSection, ViewSim } from '../store';
 import { NumberField, Section, Segmented, knob } from '../ui';
 
 interface Props { v: ViewSim; north: number; errors: Record<string, string>; dispatch: Dispatch<Action> }
@@ -22,13 +23,14 @@ const GLASS = 'Rays pass the faces whose material is glass (the Materials table)
 
 export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, errors, dispatch }: Props) {
   const set = (patch: Partial<ViewSim>) => dispatch({ type: 'VIEW_SIM', patch });
+  const reset = (what: SettingsSection) => ({ onReset: () => dispatch({ type: 'RESET', what }) });
   const field = fieldOf(v.fov), [h, lo, hi] = v.fov;
   const cols = Math.max(1, Math.round(h / v.cell)), rows = Math.max(1, Math.round((hi - lo) / v.cell));
   const reach = v.reach === '' || v.reach === 'en17037' ? v.reach : 'own';
   const fov = (k: 0 | 1 | 2, x: number) => { if (Number.isFinite(x)) set({ fov: v.fov.map((y, i) => (i === k ? x : y)) as ViewSim['fov'] }); };
   return (
     <>
-      <Section id="view-field" title="Field of view">
+      <Section id="view-field" title="Field of view" reset={reset('view-field')}>
         <div className="field">
           <span className="field__label">Field</span>
           <Segmented name="view-field" label="Field of view" title={FIELD_HELP[field]} value={field} options={[['view', 'Window'], ['all', 'All around'], ['flat', 'Horizontal']] as const} onChange={(f) => set({ fov: FIELDS[f] })} />
@@ -51,7 +53,7 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
             : <span className="field__help line">{`${cols} × ${rows} = ${(cols * rows).toLocaleString('en-GB')} rays per element; 1° for thin or far targets`}</span>}
         </div>
       </Section>
-      <Section id="view-eye" title="Eye">
+      <Section id="view-eye" title="Eye" reset={reset('view-eye')}>
         <div className="field">
           <span className="field__label">Looking side</span>
           <Segmented name="view-sides" label="Looking side" value={v.sides} options={[['front', 'Front'], ['back', 'Back'], ['both', 'Both']] as const} onChange={(sides) => set({ sides })} />
@@ -60,9 +62,9 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
           <span className="field__label">Eyes on</span>
           <Segmented name="view-on" label="Eyes on" value={v.on} options={[['faces', 'Faces'], ['vertices', 'Vertices']] as const} onChange={(on) => set({ on })} />
         </div>
-        <NumberField id="view-offset" label="Eye offset (m)" value={v.offset} step={0.1} help="Along the normal: 1.2 seated or 1.6 standing above a floor grid; all around, a lifted eye also sees behind its plane." onCommit={(x) => { if (Number.isFinite(x)) set({ offset: x }); }} />
+        <NumberField id="view-offset" label="Eye offset (m)" value={v.offset} step={0.1} help="Along the normal: 1.2 seated or 1.6 standing above a floor grid. All around at 0, a receiver that blocks rays sees its own surface behind its plane (obstruction): lift the eye, or untick Blocks rays (Model) to see the ground through it." onCommit={(x) => { if (Number.isFinite(x)) set({ offset: x }); }} />
       </Section>
-      <Section id="view-distance" title="Distances">
+      <Section id="view-distance" title="Distances" reset={reset('view-distance')}>
         <NumberField id="view-far" label="Far (m)" value={v.far} min={0.2} step={10} error={errors.far} help="What an open ray counts as, and the cap of every distance and isovist (interiors: 20 to 50 m)." onCommit={(x) => { if (Number.isFinite(x)) set({ far: x }); }} />
         <div className="field">
           <label className="field__label" htmlFor="view-reach">Reach</label>
@@ -75,7 +77,7 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
             : <span className="field__help">The share of the field that sees at least each distance before it meets anything.</span>}
         </div>
       </Section>
-      <Section id="view-ground" title="Ground and glass">
+      <Section id="view-ground" title="Ground and glass" reset={reset('view-ground')}>
         <label title="A plane at the model's lowest point (or the height below) ends downward rays as ground: the street seen from a facade when no terrain is modelled">
           <input type="checkbox" checked={v.virtualGround} onChange={(e) => set({ virtualGround: e.target.checked })} /> Virtual ground
         </label>

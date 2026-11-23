@@ -1,7 +1,8 @@
 // Shell: app bar, inputs panel, the models' views with the run bar, results panel; owns the models (up to four, each in
 // its own USD viewer, its meshes built on demand), the per-mesh builders and content ids, the runs (one batch per click or Auto,
 // the models one after another), the comparison (one colour scale over every model), the theme mode, the view
-// preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras) and the section every view shows.
+// preferences (sidebar widths, Auto, the views side by side or stacked, linked cameras, the display mode) and the section
+// every view shows.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { flushSync } from 'react-dom';
 import type { Object3D } from 'three';
@@ -39,7 +40,7 @@ import { TAGGED, inFlight, initialState, parseSettings, reducer, runBatch, seria
 import { Icon, LETTERS, Segmented, Tag, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
-import { DownloadMenu, ReportsMenu, SectionMenu, ViewsMenu } from './viewer/Views';
+import { DISPLAYS, DisplayMenu, DownloadMenu, ReportsMenu, SectionMenu, ViewsMenu, type Display } from './viewer/Views';
 import type { SunView } from './viewer/sunpath';
 import { readTexture, viewer } from './viewer/usd';
 
@@ -52,14 +53,14 @@ const FOCUS: Record<string, string> = { model: 'model-files', lat: 'lat', lon: '
 const VIEW_FOCUS: Record<string, string> = { model: 'model-files', groups: 'target-group', fov: 'view-fov-lo', cell: 'view-cell', far: 'view-far', reach: 'view-reach', materials: 'materials-status' };
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3; every model alike), two or three views
-// side by side or stacked, linked cameras, the analysis shown (its tab).
-const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab }, MIN_W = 240, MAX_W = 640;
+// side by side or stacked, linked cameras, the analysis shown (its tab), the views' display mode (the Display menu).
+const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab, display: 'shaded' as Display }, MIN_W = 240, MAX_W = 640;
 export type UiPrefs = typeof UI;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
 const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_KEY); return m === 'light' || m === 'dark' ? m : 'auto'; } catch { return 'auto'; } };
-const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' ? 'views' : 'daylight' }; } catch { return UI; } };
+const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' ? 'views' : 'daylight', display: DISPLAYS.some(([d]) => d === p.display) ? p.display : UI.display }; } catch { return UI; } };
 
 // A row's mesh, built on demand (lib/extract.ts), with its model's slot; once a run has hashed it, its content id
 type Conv = Hashed & Pick<Extracted, 'make' | 'topology' | 'receiver'> & { slot: number };
@@ -562,7 +563,7 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
-                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} around={sunAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab}
+                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={views ? null : sunView} around={sunAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
@@ -573,7 +574,7 @@ export default function App() {
                   );
                 })}
               </div>
-              {/* left: the Views, Section and Download menus (the active view's); middle: how the views share the space and the
+              {/* left: the Views, Section, Display and Download menus (the active view's; Display: every view's); middle: how the views share the space and the
                   camera; right-aligned, the button's label never changes and Cancel appears on its left: the tickbox stays
                   put; progress shows in the Results run lines */}
               <div className="viewport__bar">
@@ -581,6 +582,7 @@ export default function App() {
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={savedViews} reports={reports} onSave={(sv) => setSavedViews((l) => [...l, sv])} onRemove={(id) => setSavedViews((l) => l.filter((sv) => sv.id !== id))} onReportView={onReportView} onSection={(sc) => onSection(sc, null)} />
                     <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
+                    <DisplayMenu value={ui.display} onChange={(display) => setUi((u) => ({ ...u, display }))} />
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && A.cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports (daylight's); a generation's failure shows as its lastError */}
                     {!views && reports?.length && reportApp ? <ReportsMenu reports={reports} app={reportApp} error={reportError} onOpen={refreshReports} onDelete={(id) => void onReportDelete(id)} onGenerate={(id) => { setReportError(null); ctl.current.generate(id).catch(() => {}); }} /> : null}

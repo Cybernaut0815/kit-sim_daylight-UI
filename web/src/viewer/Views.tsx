@@ -5,6 +5,7 @@
 //   takes the current view and section with Update. Saved views (cameras only) serve every view, last this session and
 //   never go into a file.
 // - Section: every view's clipping planes and boxes (view only), added and edited in the active view.
+// - Display: how every view draws the stage (the viewer's display modes); the result colours draw alone in each.
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
 // - Reports (only while there are any): a report's PDF generated from the current results, opened, or the report deleted.
 import { Fragment, memo, useEffect, useState } from 'react';
@@ -220,6 +221,27 @@ export const SectionMenu = memo(function SectionMenu({ usd, section, selected, d
     </MenuButton>
   );
 });
+
+/** The viewer's display modes, as its own toolbar names them. */
+export type Display = UsdViewerElement['displayMode'];
+export const DISPLAYS: readonly (readonly [Display, string])[] = [
+  ['shaded', 'Shaded'], ['shaded-wire', 'Shaded + wire'], ['shaded-selwire', 'Shaded + selection wire'],
+  ['plain', 'Plain'], ['plain-wire', 'Plain + wire'], ['plain-selwire', 'Plain + selection wire'], ['wire', 'Wireframe'],
+];
+
+/** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw alone in each. */
+export function DisplayMenu({ value, onChange }: { value: Display; onChange: (d: Display) => void }) {
+  return (
+    <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges. Result colours always show as they are">
+      {() => DISPLAYS.map(([d, label]) => (
+        <label key={d} className="menu__item">
+          <input className="menu__check" type="radio" name="display-mode" value={d} checked={value === d} onChange={() => onChange(d)} />
+          <span>{label}</span>
+        </label>
+      ))}
+    </MenuButton>
+  );
+}
 
 const FORMAT_LABEL: Record<Format, string> = {
   usdz: '.usdz: USD package', usda: '.usda: USD text', usdc: '.usdc: USD binary', usd: '.usd: USD binary',

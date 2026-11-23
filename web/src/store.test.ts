@@ -170,6 +170,35 @@ describe('site and weather', () => {
   });
 });
 
+describe('reset to defaults', () => {
+  const d = defaultSettings();
+  it('Simulation: every field back, all quantities after Ladybug with a pick of them; north (Location) stays', () => {
+    let s = reducer(initialState(), { type: 'SIM', patch: { mode: 'ladybug', quantities: ['radiation'], skyDensity: 2, bounces: 3, offset: 0.5, selfOcclude: false, north: 30 } });
+    s = reducer(s, { type: 'TIME', patch: { mode: 'instant', hour: 600 } });
+    s = reducer(s, { type: 'RESET', what: 'sim' });
+    expect(s.settings.sim).toEqual({ ...d.sim, north: 30 });
+    expect(s.settings.sim.quantities).toHaveLength(6);
+    expect(s.settings.time.mode).toBe('instant'); // another section
+  });
+  it('Time: every field back, Simulation untouched', () => {
+    let s = reducer(initialState(), { type: 'TIME', patch: { mode: 'range', date: '2020-01-01', from: { date: '2020-01-01', hour: 60 }, stepMin: 15 } });
+    s = reducer(s, { type: 'SIM', patch: { bounces: 2 } });
+    s = reducer(s, { type: 'RESET', what: 'time' });
+    expect(s.settings.time).toEqual(d.time);
+    expect(s.settings.sim.bounces).toBe(2);
+  });
+  it('each View settings section puts back its own fields only', () => {
+    const changed = { fov: [360, 0, 0], cell: 5, sides: 'both', on: 'vertices', offset: 1.6, far: 50, reach: 'en17037', virtualGround: false, groundZ: 3, transmission: true, cullBackfaces: true, selfOcclude: false } as const;
+    const s = reducer(initialState(), { type: 'VIEW_SIM', patch: { ...changed, fov: [...changed.fov] } });
+    const sections = { 'view-field': ['fov', 'cell'], 'view-eye': ['sides', 'on', 'offset'], 'view-distance': ['far', 'reach'], 'view-ground': ['virtualGround', 'groundZ', 'transmission', 'cullBackfaces', 'selfOcclude'] } as const;
+    for (const [what, fields] of Object.entries(sections) as [keyof typeof sections, readonly (keyof typeof changed)[]][]) {
+      const v = reducer(s, { type: 'RESET', what }).settings.viewSim;
+      for (const k of Object.keys(changed) as (keyof typeof changed)[]) expect(v[k], `${what}: ${k}`).toEqual(fields.includes(k) ? d.viewSim[k] : changed[k]);
+    }
+    expect(Object.values(sections).flat().sort()).toEqual(Object.keys(d.viewSim).sort()); // every field in one section
+  });
+});
+
 describe('persistence', () => {
   it('round-trips without the File and survives garbage', () => {
     const d = defaultSettings();

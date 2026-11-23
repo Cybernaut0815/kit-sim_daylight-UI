@@ -172,12 +172,19 @@ export const pct = (x: number): string => `${(100 * x).toFixed(x > 0 && x < 0.1 
 const OPEN_KEY = 'daylight.open';
 const readOpen = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}') ?? {}; } catch { return {}; } };
 
-/** A panel section whose heading folds it away (kit-ui .accordion); open unless the user closed it before. */
-export function Section({ id, title, children, busy }: { id: string; title: string; children: ReactNode; busy?: boolean }) {
+/**
+ * A panel section whose heading folds it away (kit-ui .accordion); open unless the user closed it before. `reset`: a
+ * reset button at the top of its body puts its settings back to their defaults (`label` when "Reset <title> to default"
+ * is not all it does); not in the summary, which must hold no other control.
+ */
+export function Section({ id, title, children, busy, reset }: { id: string; title: string; children: ReactNode; busy?: boolean; reset?: { onReset: () => void; label?: string } }) {
   return (
     <details className="accordion" open={readOpen()[id] ?? true} onToggle={(e) => { const open = e.currentTarget.open; try { localStorage.setItem(OPEN_KEY, JSON.stringify({ ...readOpen(), [id]: open })); } catch { /* not remembered */ } }}>
       <summary><h2 id={`h-${id}`}>{title}</h2></summary>
-      <section className="accordion__body stack" aria-labelledby={`h-${id}`} aria-busy={busy}>{children}</section>
+      <section className="accordion__body stack" aria-labelledby={`h-${id}`} aria-busy={busy}>
+        {reset && <div className="cluster cluster--end"><ResetButton what={title} label={reset.label} onClick={reset.onReset} /></div>}
+        {children}
+      </section>
     </details>
   );
 }
