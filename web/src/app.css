@@ -64,6 +64,7 @@
 @container (max-width: 16rem) { .model-tabs__item:not(:has([aria-current])) > .icon-btn { display: none; } }
 .map { block-size: 14rem; border: 1px solid var(--border-subtle); overflow: hidden; }
 .strip { display: block; inline-size: 100%; touch-action: none; }
+.diagram { display: block; inline-size: 100%; block-size: auto; max-block-size: 15rem; } /* static settings charts, centred */
 /* fixed-size regions: text and data that load or change never move what is below them */
 .line { block-size: 1lh; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* exactly one line, spinner or text */
 .line > .spinner { vertical-align: text-bottom; }

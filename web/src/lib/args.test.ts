@@ -183,9 +183,14 @@ describe('validate', () => {
 describe('the view analysis', () => {
   const v = () => defaultSettings().viewSim;
   it('viewArgs: every option explicit at the defaults; the optional ones only when set', () => {
-    expect(viewArgs(v(), 0)).toEqual(['--fov', '120,-70,50', '--cell', '2', '--sides', 'front', '--on', 'faces', '--offset', '0', '--far', '1000', '--virtual-ground', 'on', '--north', '0']);
+    expect(viewArgs(v(), 0)).toEqual(['--fov', '120,-70,50', '--cell', '2', '--sides', 'front', '--on', 'faces', '--offset', '0', '--far', '1000', '--virtual-ground', 'on', '--north', '0', '--gaze', 'level']);
     const p = pairs(viewArgs({ ...v(), fov: [360, 0, 0], groundZ: 1.5, reach: ' 6, 20 ', cullBackfaces: true, selfOcclude: false }, 90));
     expect([p['--fov'], p['--ground-z'], p['--reach'], p['--north']]).toEqual(['360,0,0', '1.5', '6,20', '90']);
+    // the gaze about the normal only: all around it does nothing, and its runs keep their keys
+    expect(pairs(viewArgs({ ...v(), gaze: 'normal' }, 0))['--gaze']).toBe('normal');
+    expect(viewArgs({ ...v(), fov: [360, -70, 50] }, 0)).not.toContain('--gaze');
+    expect(viewArgs({ ...v(), fov: [360, 0, 0], gaze: 'normal' }, 0)).not.toContain('--gaze');
+    expect(pairs(viewArgs({ ...v(), fov: [180, 0, 0] }, 0))['--gaze']).toBe('level'); // a flat window: about the level gaze
     expect(viewArgs({ ...v(), cullBackfaces: true, selfOcclude: false }, 0)).toEqual(expect.arrayContaining(['--cull-backfaces', '--no-self-occlude']));
     expect(viewArgs({ ...v(), virtualGround: false, groundZ: 2 }, 0)).not.toContain('--ground-z');
   });

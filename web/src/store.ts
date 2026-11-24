@@ -61,12 +61,13 @@ export interface Settings {
 
 /**
  * The view analysis' settings, as the core's views flags (docs/views.md): the field `fov` [H, LO, HI] (H 360: all
- * around; LO = HI = 0: horizontal rays, the 2D isovist), `cell` degrees per ray, the eye `offset` along the normal (m),
+ * around; LO = HI = 0: horizontal rays, the 2D isovist) and, H < 360, its `gaze` (level: about the normal turned level,
+ * as a person looks; normal: about the normal itself), `cell` degrees per ray, the eye `offset` along the normal (m),
  * `far` (what open counts as, m), the virtual ground (at `groundZ`, null: the lowest point), `reach` ('' none,
  * 'en17037', or metres 'D,D,...'), whether rays pass glass (`transmission`), and the receivers' blocking.
  */
 export interface ViewSim {
-  fov: [number, number, number]; cell: number; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices'; offset: number; far: number;
+  fov: [number, number, number]; gaze: 'level' | 'normal'; cell: number; sides: 'front' | 'back' | 'both'; on: 'faces' | 'vertices'; offset: number; far: number;
   virtualGround: boolean; groundZ: number | null; reach: string; transmission: boolean; cullBackfaces: boolean; selfOcclude: boolean;
 }
 
@@ -190,12 +191,12 @@ export const defaultSettings = (): Settings => ({
   sim: { mode: 'physical', quantities: QUANTITIES, sides: 'front', on: 'faces', cullBackfaces: false, selfOcclude: true, skyDensity: 1, patchSamples: 1, ground: 0.2, north: 0, offset: 0, transmission: false, fresnel: true, bounces: 0, bounceSamples: 1024 },
   viz: { gradients: {}, scales: {}, ranges: {}, colors: { below: DEFAULT_BELOW, above: DEFAULT_ABOVE }, scalings: {}, library: {} },
   charts: BUILT_IN.map((c) => ({ ...c })),
-  viewSim: { fov: [120, -70, 50], cell: 2, sides: 'front', on: 'faces', offset: 0, far: 1000, virtualGround: true, groundZ: null, reach: '', transmission: false, cullBackfaces: false, selfOcclude: true },
+  viewSim: { fov: [120, -70, 50], gaze: 'level', cell: 2, sides: 'front', on: 'faces', offset: 0, far: 1000, virtualGround: true, groundZ: null, reach: '', transmission: false, cullBackfaces: false, selfOcclude: true },
 });
 
 /** The View settings sections' fields: what each section's reset puts back. */
 const VIEW_SECTIONS = {
-  'view-field': ['fov', 'cell'], 'view-eye': ['sides', 'on', 'offset'], 'view-distance': ['far', 'reach'],
+  'view-field': ['fov', 'gaze', 'cell'], 'view-eye': ['sides', 'on', 'offset'], 'view-distance': ['far', 'reach'],
   'view-ground': ['virtualGround', 'groundZ', 'transmission', 'cullBackfaces', 'selfOcclude'],
 } as const satisfies Record<string, readonly (keyof ViewSim)[]>;
 /** The settings sections a reset acts on: Simulation (all but north, the Location's), Time, and each View settings one. */
@@ -498,6 +499,7 @@ function viewSimOf(raw: unknown, d: ViewSim): ViewSim {
     const v = p[k], want = d[k];
     if (k === 'fov') { if (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x))) out.fov = v; }
     else if (k === 'groundZ') { if (v === null || (typeof v === 'number' && Number.isFinite(v))) out.groundZ = v; }
+    else if (k === 'gaze') { if (v === 'level' || v === 'normal') out.gaze = v; }
     else if (typeof v === typeof want && (typeof v !== 'number' || Number.isFinite(v))) out[k] = v;
   }
   return out as unknown as ViewSim;

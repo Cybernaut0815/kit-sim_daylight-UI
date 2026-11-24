@@ -1,31 +1,42 @@
 // View settings: the view analysis' own inputs, as the core's views flags (docs/views.md): the field of view (out of a
-// window about each face's normal, all around, or the horizontal ring of the 2D isovist), its cell size, where the eye
+// window about each face's normal, turned level or not, all around, or the horizontal ring of the 2D isovist), its cell size, where the eye
 // sits, how far the distances reach, the virtual ground and glass. The roles are the Model panel's (its own set here);
 // the materials (glass) are the same as daylight's; north is the site's. Each section's reset button puts its own fields
 // back to their defaults.
 import { memo, type Dispatch } from 'react';
+import { FieldDiagram } from '../charts/FieldDiagram';
+import { rayGrid } from '../lib/viewfield';
 import type { Action, SettingsSection, ViewSim } from '../store';
-import { NumberField, Section, Segmented, knob } from '../ui';
+import { NumberField, ResetButton, Section, Segmented, knob } from '../ui';
+import { DENSITY, type Density } from '../viewer/viewfield';
 
-interface Props { v: ViewSim; north: number; errors: Record<string, string>; dispatch: Dispatch<Action> }
+interface Props {
+  v: ViewSim; north: number; errors: Record<string, string>; dispatch: Dispatch<Action>;
+  // the 3D preview of the field: shown, size x the default, density, on how many selected receivers (0: all of them)
+  field: boolean; fieldScale: number; fieldDensity: Density; fieldFit: number; canFieldFit: boolean;
+  onField: (on: boolean) => void; onFieldScale: (scale: number) => void; onFieldDensity: (d: Density) => void; onFieldFit: (on: boolean) => void;
+}
 
 type Field = 'view' | 'all' | 'flat';
 // each field preset's default [H, LO, HI]: the core's defaults about the normal and all around, the 2D isovist's ring
 const FIELDS: Record<Field, ViewSim['fov']> = { view: [120, -70, 50], all: [360, -70, 50], flat: [360, 0, 0] };
 const fieldOf = ([h, lo, hi]: ViewSim['fov']): Field => (h !== 360 ? 'view' : lo === 0 && hi === 0 ? 'flat' : 'all');
 const FIELD_HELP: Record<Field, string> = {
-  view: 'Out of a window: a field about each face\'s normal (the gaze is the normal; on a vertical face 50° up and 70° down by default). Distances: log mean and nearest.',
+  view: 'Out of a window: a field about each face\'s normal, turned level as a person looks (50° up and 70° down from the horizon by default). Distances: log mean and nearest.',
   all: 'All around from each element, azimuth from north: an eye turning on the spot (lift it with the eye offset). Default measure: the isovist volume in view.',
   flat: 'One ring of horizontal rays all around: the 2D isovist, the area in view (space syntax), and the shares along the horizon.',
+};
+const GAZE_HELP: Record<ViewSim['gaze'], string> = {
+  level: 'Centred on the normal turned level, elevations about the horizon, on a tilted face too. Faces looking straight up or down keep their normal.',
+  normal: 'Centred on the face\'s normal: on a tilted face the field tilts with it (up is uphill). Faces looking straight up or down keep their normal.',
 };
 const REACH: [string, string][] = [['', 'None'], ['en17037', 'EN 17037: 6, 20 and 50 m'], ['own', 'Own distances…']];
 const GLASS = 'Rays pass the faces whose material is glass (the Materials table) and count what lies behind; "Seen through glass" gives the share. Off: windows block like walls.';
 
-export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, errors, dispatch }: Props) {
+export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, errors, dispatch, field: preview, fieldScale, fieldDensity, fieldFit, canFieldFit, onField, onFieldScale, onFieldDensity, onFieldFit }: Props) {
   const set = (patch: Partial<ViewSim>) => dispatch({ type: 'VIEW_SIM', patch });
   const reset = (what: SettingsSection) => ({ onReset: () => dispatch({ type: 'RESET', what }) });
-  const field = fieldOf(v.fov), [h, lo, hi] = v.fov;
-  const cols = Math.max(1, Math.round(h / v.cell)), rows = Math.max(1, Math.round((hi - lo) / v.cell));
+  const field = fieldOf(v.fov), [h, lo, hi] = v.fov, { cols, rows } = rayGrid(v.fov, v.cell);
   const reach = v.reach === '' || v.reach === 'en17037' ? v.reach : 'own';
   const fov = (k: 0 | 1 | 2, x: number) => { if (Number.isFinite(x)) set({ fov: v.fov.map((y, i) => (i === k ? x : y)) as ViewSim['fov'] }); };
   return (
@@ -36,6 +47,12 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
           <Segmented name="view-field" label="Field of view" title={FIELD_HELP[field]} value={field} options={[['view', 'Window'], ['all', 'All around'], ['flat', 'Horizontal']] as const} onChange={(f) => set({ fov: FIELDS[f] })} />
           {errors.fov ? <span className="field__error">{errors.fov}</span> : <span className="field__help lines-3">{FIELD_HELP[field]}</span>}
         </div>
+        {field === 'view' && (
+          <div className="field">
+            <label><input type="checkbox" checked={v.gaze === 'level'} onChange={(e) => set({ gaze: e.target.checked ? 'level' : 'normal' })} /> Level gaze, as a person looks</label>
+            <span className="field__help lines-3">{GAZE_HELP[v.gaze]}</span>
+          </div>
+        )}
         {field === 'view' && <NumberField id="view-fov-h" label="Width (°)" value={h} min={1} max={180} step={1} onCommit={(x) => fov(0, x)} />}
         {field !== 'flat' && (
           <div className="grid" style={knob('--grid-min', '8rem')}>
@@ -52,6 +69,25 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
             ? <span className="field__error">{errors.cell}</span>
             : <span className="field__help line">{`${cols} × ${rows} = ${(cols * rows).toLocaleString('en-GB')} rays per element; 1° for thin or far targets`}</span>}
         </div>
+        <FieldDiagram fov={v.fov} cell={v.cell} gaze={v.gaze} />
+        <fieldset className="field" aria-labelledby="lg-viewfield">
+          <div className="cluster cluster--between"><legend id="lg-viewfield">Preview in the 3D view</legend><ResetButton what="the preview size" onClick={() => onFieldScale(1)} /></div>
+          <label><input type="checkbox" id="viewfield-show" checked={preview} onChange={(e) => onField(e.target.checked)} /> Show on the receivers</label>
+          <label className="slider-row">
+            <span>Size</span>
+            <input id="viewfield-size" type="range" min={-2} max={2} step={0.1} value={Math.log2(fieldScale)} aria-valuetext={`${Math.round(fieldScale * 100)} %`} disabled={!preview} onChange={(e) => onFieldScale(2 ** e.target.valueAsNumber)} />
+            <span className="slider-row__value">{Math.round(fieldScale * 100)} %</span>
+          </label>
+          <div className="field">
+            <span className="field__label">Density</span>
+            <Segmented name="viewfield-density" label="Preview density" value={fieldDensity} options={[['few', 'Few'], ['some', 'Some'], ['many', 'Many']] as const} onChange={onFieldDensity} />
+          </div>
+          <div className="cluster">
+            <button className="btn btn--secondary" id="viewfield-fit" type="button" disabled={!preview || !canFieldFit} title={canFieldFit ? 'Show the glyphs on the selected receivers only' : 'Select one or several receivers first'} onClick={() => onFieldFit(true)}>On selection</button>
+            <button className="btn btn--secondary" id="viewfield-all" type="button" disabled={!fieldFit} title="Show the glyphs on every receiver again" onClick={() => onFieldFit(false)}>All receivers</button>
+          </div>
+          <p className="text-muted lines-3">{`${fieldFit ? `On ${fieldFit} selected receiver${fieldFit === 1 ? '' : 's'}` : 'On every receiver'}, at most ${DENSITY[fieldDensity]} glyphs: the field each eye traces, drawn at a display size; the rays reach Far (${v.far} m).`}</p>
+        </fieldset>
       </Section>
       <Section id="view-eye" title="Eye" reset={reset('view-eye')}>
         <div className="field">
@@ -62,7 +98,7 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
           <span className="field__label">Eyes on</span>
           <Segmented name="view-on" label="Eyes on" value={v.on} options={[['faces', 'Faces'], ['vertices', 'Vertices']] as const} onChange={(on) => set({ on })} />
         </div>
-        <NumberField id="view-offset" label="Eye offset (m)" value={v.offset} step={0.1} help="Along the normal: 1.2 seated or 1.6 standing above a floor grid. All around at 0, a receiver that blocks rays sees its own surface behind its plane (obstruction): lift the eye, or untick Blocks rays (Model) to see the ground through it." onCommit={(x) => { if (Number.isFinite(x)) set({ offset: x }); }} />
+        <NumberField id="view-offset" label="Eye offset (m)" value={v.offset} step={0.1} help="Along the normal: 1.2 seated or 1.6 standing above a floor grid. All around at 0 (or with a level gaze on a tilted face), a receiver that blocks rays sees its own surface behind its plane (obstruction): lift the eye, or untick Blocks rays (Model) to see the ground through it." onCommit={(x) => { if (Number.isFinite(x)) set({ offset: x }); }} />
       </Section>
       <Section id="view-distance" title="Distances" reset={reset('view-distance')}>
         <NumberField id="view-far" label="Far (m)" value={v.far} min={0.2} step={10} error={errors.far} help="What an open ray counts as, and the cap of every distance and isovist (interiors: 20 to 50 m)." onCommit={(x) => { if (Number.isFinite(x)) set({ far: x }); }} />

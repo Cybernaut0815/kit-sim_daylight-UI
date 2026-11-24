@@ -49,6 +49,7 @@ import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
 import { DISPLAYS, DisplayMenu, DownloadMenu, ReportsMenu, SectionMenu, ViewsMenu, type Display } from './viewer/Views';
 import type { SunView } from './viewer/sunpath';
+import { DENSITY, type Density, type FieldView } from './viewer/viewfield';
 import { viewer } from './viewer/usd';
 
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
@@ -95,6 +96,13 @@ export default function App() {
   // Per model (slot), the prim paths of the meshes its sun path is fitted to instead of the whole model: picked in the
   // Time panel from the selection, for this session; gone when the slot opens another model.
   const [sunAround, setSunAround] = useState<Readonly<Record<number, readonly string[]>>>({});
+  // The view field's preview, this session: shown (off on every load), its glyphs' size over the default, how many at
+  // most, and per model (slot) the prim paths of the receivers it sits on instead of all of them (picked from the
+  // selection, gone with the model).
+  const [fieldShown, setFieldShown] = useState(false);
+  const [fieldScale, setFieldScale] = useState(1);
+  const [fieldDensity, setFieldDensity] = useState<Density>('some');
+  const [fieldAround, setFieldAround] = useState<Readonly<Record<number, readonly string[]>>>({});
   // the section every view shows (lib/section.ts, model metres): view only, this session; never a setting, a run input or
   // a key, and never cleared by a new model, a variant switch or a re-read
   const [section, setSection] = useState<Section>(NONE);
@@ -143,6 +151,7 @@ export default function App() {
   const sets = useSaved(); // the saved sets and combined views (every client's)
   const [openSets, setOpenSets] = useState<Readonly<Record<Tool, string | null>>>({ daylight: null, views: null }); // per tab, the set opened or saved last
   const [setNote, setSetNote] = useState<{ tool: Tool; lines: string[] } | null>(null); // what the last open did per model, or the last save
+  const [cvPreview, setCvPreview] = useState<CombinedView | null>(null); // the combined view being edited, shown until Save or Cancel
   // whether this tab may use the agent routes (GET /health: --mcp, and this machine): only then the bridge and the reports
   // (a server without them would log a 404 for each request, on every load and window focus)
   const [agents, setAgents] = useState(false);
@@ -291,6 +300,7 @@ export default function App() {
       pane(slot, { meshes: map, names: own });
       setSunScale(1);
       setSunAround(({ [slot]: _gone, ...rest }) => rest);
+      setFieldAround(({ [slot]: _gone, ...rest }) => rest);
       dispatch({ type: 'LOAD', slot, objects, name: info.url.replace(/^.*\//, '').replace(/\.\w+$/, '') });
       if (problems.length) pane(slot, { loadError: problems.slice(0, 3).join(' ') });
     } catch (e) {
@@ -401,6 +411,7 @@ export default function App() {
     delete choices.current[slot];
     setPanes(({ [slot]: _gone, ...rest }) => rest);
     setSunAround(({ [slot]: _gone, ...rest }) => rest);
+    setFieldAround(({ [slot]: _gone, ...rest }) => rest);
     dispatch({ type: 'REMOVE', slot });
     void viewer(slot).el.close().catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- dropConv reads a ref only
@@ -428,7 +439,7 @@ export default function App() {
   const V = useAnalysis({ ...shared, ...cfgFor('views', s), models: vModels, column: state.viewAnalysis.column, visible: views, dispatch: dispatchViews });
   analyses.current = [D, V];
   // the Combined tab: the combined view shown, from the saved sets' results (sets/useCombined.ts), last
-  const C = useCombined({ state, saved: sets.saved, runs, visible: combined, viz: s.viz });
+  const C = useCombined({ state, saved: sets.saved, runs, visible: combined, viz: s.viz, preview: cvPreview });
   // T: the tab's analysis that runs (daylight's on the Combined tab, whose inputs panels hide); A: what the screen shows
   const T = views ? V : D, A = combined ? C : T, viz = combined ? C.viz : s.viz;
   const colourBy = combined ? state.combined.colourBy : views ? state.viewAnalysis.colourBy : state.colourBy;
@@ -455,6 +466,14 @@ export default function App() {
     const m = activeModel.current, paths = on ? m.objects.filter((o) => m.selected.has(o.id)).map((o) => o.path) : [];
     setSunAround(({ [m.slot]: _was, ...rest }) => (paths.length ? { ...rest, [m.slot]: paths } : rest));
   }, []);
+  // The view field's preview on the selected receivers of the active model, or on all of them again (stable, as above)
+  const onFieldFit = useCallback((on: boolean) => {
+    const m = activeModel.current, paths = on ? m.objects.filter((o) => m.selected.has(o.id) && o.role === 'receiver').map((o) => o.path) : [];
+    setFieldAround(({ [m.slot]: _was, ...rest }) => (paths.length ? { ...rest, [m.slot]: paths } : rest));
+  }, []);
+  const fieldView = useMemo<FieldView | null>(() => (!fieldShown ? null : {
+    fov: v.fov, cell: v.cell, gaze: v.gaze, sides: v.sides, on: v.on, offset: v.offset, north: s.sim.north, scale: fieldScale, max: DENSITY[fieldDensity],
+  }), [fieldShown, v.fov, v.cell, v.gaze, v.sides, v.on, v.offset, s.sim.north, fieldScale, fieldDensity]);
   const charts = useMemo(() => (ui.tab !== 'daylight' ? s.charts.filter((c) => BUILT_IN.some((b) => b.id === c.id)) : s.charts), [ui.tab, s.charts]); // the views and Combined tabs: the built-ins, their look shared
   const groups = useMemo(() => [...new Set(vModels.flatMap((m) => m.objects.flatMap((o) => (o.role === 'shade' && o.group ? [o.group] : []))))], [vModels]); // the target groups in use
   // one download at a time; its error is its result's, by run key (holding the result itself would keep a replaced one's
@@ -574,7 +593,7 @@ export default function App() {
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
                 {combined && <SetsPanel sets={C.sets} statusOf={runs.statusOf} error={sets.error} saving={sets.saving} models={openModels} open={openSets} onOpen={onOpenSet} onRun={onRunSet} onDelete={onDeleteSet} onCopy={onCopySet} onSave={(of, name) => onSaveSet(name, of)} onUpdate={(x) => onSaveSet(x.name, x.tool, x)} onRename={onRenameSet} />}
-                {combined && <CombinedPanel views={C.views} sets={C.sets} shown={C.view} notes={C.notes} error={sets.error} saving={sets.saving} statusOf={runs.statusOf} onShow={onShowCombined} onSave={onSaveCombined} onDelete={onDeleteCombined} />}
+                {combined && <CombinedPanel views={C.views} sets={C.sets} shown={C.view} notes={C.notes} error={sets.error} saving={sets.saving} statusOf={runs.statusOf} onShow={onShowCombined} onSave={onSaveCombined} onDelete={onDeleteCombined} onPreview={setCvPreview} />}
                 {/* the tab's model and materials (daylight's on the Combined tab), mounted there too, hidden */}
                 <div className="panel-group" hidden={combined}>
                 <ModelPanel models={T.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={views ? state.viewAnalysis.errors : state.errors} stage={ap.stage} subdiv={ui.subdiv} selfOcclude={views ? v.selfOcclude : s.sim.selfOcclude} analysis={tool} groups={groups} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={views ? dispatchViews : dispatch} />
@@ -587,7 +606,13 @@ export default function App() {
                   <SettingsPanel sim={s.sim} errors={state.errors} dispatch={dispatch} />
                   <WeatherPanel weather={s.weather} site={s.site} epwMeta={s.epwMeta} viz={s.viz} stations={state.stations} errors={state.errors} dispatch={dispatch} />
                 </div>
-                {views && <ViewSettingsPanel v={v} north={s.sim.north} errors={state.viewAnalysis.errors} dispatch={dispatch} />}
+                {views && (
+                  <ViewSettingsPanel
+                    v={v} north={s.sim.north} errors={state.viewAnalysis.errors} dispatch={dispatch}
+                    field={fieldShown} fieldScale={fieldScale} fieldDensity={fieldDensity} fieldFit={fieldAround[am.slot]?.length ?? 0} canFieldFit={am.objects.some((o) => o.role === 'receiver' && am.selected.has(o.id))}
+                    onField={setFieldShown} onFieldScale={setFieldScale} onFieldDensity={setFieldDensity} onFieldFit={onFieldFit}
+                  />
+                )}
               </aside>
               <Splitter side="left" value={ui.widths.left} min={MIN_W} max={MAX_W} defaultValue={UI.widths.left} label="Inputs panel width" onChange={(left) => setUi((u) => ({ ...u, widths: { ...u.widths, left } }))} />
             </div>
@@ -602,7 +627,7 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
-                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={ui.tab === 'daylight' ? sunView : null} around={sunAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display} labels={ui.labels}
+                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={ui.tab === 'daylight' ? sunView : null} around={sunAround[m.slot] ?? null} field={views ? fieldView : null} fieldAround={fieldAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display} labels={ui.labels}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>

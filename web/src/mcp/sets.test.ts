@@ -70,6 +70,10 @@ describe('save_set', () => {
     expect([set.tool, set.column, set.models[0].roles, 'viewSim' in set.settings && set.settings.viewSim.far]).toEqual(['views', 'park_front', [{ path: '/Site/Wall', role: 'receiver' }, { path: '/Site/Tree', role: 'shade', group: 'park' }], 80]);
     expect(c().state.models[0].viewAnalysis.objects.map((o) => o.role)).toEqual(['none', 'none', 'none']);
     expect(await call(c, 'save_set', { name: 'X', analysis: 'views', settings: { view: { fov: [200, 0, 10] } } })).toMatch(/^settings\.view\.fov: The field is up to 180°/);
+    expect('viewSim' in set.settings && set.settings.viewSim.gaze).toBe('level');
+    await call(c, 'save_set', { name: 'Tilted', analysis: 'views', settings: { view: { gaze: 'normal' } } }); // the gaze: about the normal itself
+    expect(saved().map((x) => 'settings' in x && 'viewSim' in x.settings && x.settings.viewSim.gaze)).toEqual(['level', 'normal']);
+    expect(await call(c, 'save_set', { name: 'X', analysis: 'views', settings: { view: { gaze: 'up' } } })).toMatch(/^settings\.view\.gaze/);
     expect(await call(c, 'save_set', { name: 'X', analysis: 'views', roles: [{ paths: ['/Site/Tree'], role: 'shade' }] })).toMatch(/^roles\[0\]\.role: the View analysis' roles are receiver, obstruction, target and none/);
     expect(await call(c, 'save_set', { name: 'X', analysis: 'views', roles: [{ paths: ['/Site/Tree'], role: 'target' }] })).toMatch(/^roles\[0\]\.group: a target takes its group/);
     expect(await call(c, 'save_set', { id: set.id, name: 'X', analysis: 'daylight' })).toMatch(/^analysis: set park-view-\w{4} is a views set/);

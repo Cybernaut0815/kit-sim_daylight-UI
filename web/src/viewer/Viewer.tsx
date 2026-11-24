@@ -1,11 +1,11 @@
 // A 3D view, one per model. Its USD viewer (./usd.ts, the USD_WebViewer submodule) draws the stage and owns navigation
 // and selection (kept in step with the store), and paints the result colours from the receivers' values; on top of it:
-// the hover tint, the sun path and the ground grid in the viewer's overlay group, the probe readout, the scene info and, with
-// several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
+// the hover tint, the sun path, the view field's glyphs and the ground grid in the viewer's overlay group, the probe readout,
+// the scene info and, with several models, the model's name. Dragging the sun path's suns, handles, arcs and compass ring edits the time settings
 // and north. A click or a key pressed in the view makes its model the active one (focus alone does not: Tab passes
 // the views without changing the model the panels and the run bar act on). The viewer's section cuts the model, its
-// result colours and the hover tint alike (never the sun path, the grid or the labels: diagrams, not the model), and its
-// gizmo takes the pointer before the sun path.
+// result colours and the hover tint alike (never the sun path, the glyphs, the grid or the labels: diagrams, not the
+// model; it leaves out the glyphs of the eyes it cuts away), and its gizmo takes the pointer before the sun path.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -18,7 +18,9 @@ import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
 import { cancelLabels, elementOf, enqueue, sampler, type LabelScene } from './labels';
+import { candidatesOf, sampleEyes } from '../lib/viewfield';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
+import { createViewField, type FieldView, type ViewField } from './viewfield';
 import type { Display } from './Views';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
@@ -55,6 +57,8 @@ interface Props {
   probeLabel: string | null; theme: string; dispatch: Dispatch<Action>; children?: ReactNode; // children: the model's name chip (several models)
   sun: SunView | null; // the sun path to draw (null: hidden)
   around?: readonly string[] | null; // the prim paths of the meshes the sun path is fitted to (null: the whole model)
+  field?: FieldView | null; // the view field's glyphs on the receivers (null: hidden)
+  fieldAround?: readonly string[] | null; // the prim paths of the receivers the glyphs sit on (null: every receiver)
   section: string | null; // the section shown, in words (null: none)
   analysis?: Tab; // whose roles `objects` carry (the scene info's words)
   display: Display; // the viewer's display mode (the Display menu), with results or without
@@ -68,6 +72,7 @@ interface Ctx {
   canvas: HTMLCanvasElement; sun: SunPath; gridSpec: { size: number; x: number; y: number; z: number };
   grid: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>; // one object and material for good, a new geometry per size or theme
   dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
+  field: ViewField; // the view field's glyphs
 }
 
 /** The scene info at the top right of the view: meshes by role, drawn triangles and vertices, units, the section, and the frame
@@ -87,7 +92,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis, display, labels = false }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, fieldAround = null, section, analysis, display, labels = false }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -129,7 +134,9 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     grid.userData.frame = false; // F and frame() fit the model and the dome, not the floor (the clip planes still see it)
     grid.visible = false;
     usd.three.overlay.add(grid);
-    const c: Ctx = { canvas, sun: sunPath, grid, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 } };
+    const viewField = createViewField();
+    usd.three.overlay.add(viewField.group);
+    const c: Ctx = { canvas, sun: sunPath, grid, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 }, field: viewField };
     ctx.current = c;
 
     // Every frame, with that frame's camera: the sun-path labels (the sun path only, never the stage), and the scene
@@ -257,8 +264,9 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       el.removeEventListener('pointerup', onDrop, true);
       el.removeEventListener('pointercancel', onDrop, true);
       canvas.removeEventListener('pointerleave', onOut);
-      usd.three.overlay.remove(sunPath.group, grid);
+      usd.three.overlay.remove(sunPath.group, grid, viewField.group);
       sunPath.dispose();
+      viewField.dispose();
       grid.geometry.dispose();
       grid.material.dispose();
       labelsEl.current?.replaceChildren();
@@ -281,6 +289,47 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     c.dome = part.isEmpty() ? whole : domeOf(part);
     c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * whole.r), x: whole.x, y: whole.y, z: whole.z };
   }, [meshes, around]); // eslint-disable-line react-hooks/exhaustive-deps -- the rows' paths change with the meshes
+
+  // The view field's glyphs (./viewfield.ts) while the preview shows: the candidates (a bounded sample of the shown
+  // receivers' triangles, lib/viewfield.ts) per model, rows and `fieldAround`; the eyes and glyphs per setting, section
+  // and size; the colour per theme. Nothing runs per frame.
+  const fieldOn = !!field, [shownTick, setShownTick] = useState(0); // shownTick: receivers shown or hidden (the tree's eyes, H, isolate)
+  useEffect(() => {
+    if (!fieldOn) return;
+    let armed = false; // the edit reaches the drawn objects by the next frame the viewer draws: read them after it
+    const onPrims = (e: Event) => { if ((e as UsdSessionEventMap['primschange']).detail.visibility) { armed = true; usd.three.invalidate(); } };
+    const onFrame = () => { if (armed) { armed = false; setTimeout(() => setShownTick((n) => n + 1)); } };
+    usd.addEventListener('primschange', onPrims);
+    usd.three.beforeRender.add(onFrame);
+    return () => { usd.removeEventListener('primschange', onPrims); usd.three.beforeRender.delete(onFrame); };
+  }, [fieldOn, usd]);
+  const candidates = useMemo(() => {
+    if (!fieldOn) return null;
+    const want = fieldAround?.length ? new Set(fieldAround) : null, list = [];
+    for (const o of objects) {
+      const m = o.role === 'receiver' && (!want || want.has(o.path)) ? (meshes.get(o.id) as THREE.Mesh | undefined) : undefined;
+      const pos = m?.geometry?.attributes.position;
+      if (!m || !m.visible || (m as unknown as THREE.InstancedMesh).isInstancedMesh || !pos) continue;
+      m.updateWorldMatrix(true, false);
+      list.push({ positions: pos.array, indices: m.geometry.index?.array ?? null, matrix: m.matrixWorld.elements });
+    }
+    return candidatesOf(list);
+  }, [meshes, objects, fieldOn, fieldAround, shownTick]); // eslint-disable-line react-hooks/exhaustive-deps -- shownTick: the meshes' visible flags
+  useEffect(() => {
+    const c = ctx.current;
+    if (!c) return;
+    if (!field || !candidates?.count) c.field.hide();
+    else {
+      const mpu = usd.stage?.metersPerUnit ?? 1, radius = 0.04 * candidates.span * field.scale, p = new THREE.Vector3(); // by the receivers shown, not a site's context
+      const eyes = sampleEyes(candidates, { spacing: 2.5 * radius, max: field.max, on: field.on, sides: field.sides, offset: field.offset / mpu, keep: (x, y, z) => usd.three.keeps(p.set(x, y, z)) });
+      c.field.build(eyes, field, radius);
+    }
+    usd.three.invalidate();
+  }, [field, candidates, section]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
+  useEffect(() => {
+    ctx.current?.field.colour();
+    usd.three.invalidate();
+  }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps -- the view's viewer, for its life
 
   // Sun path: the scaffold follows the site and the theme, the frame the model, north and size, the active layer the time.
   useEffect(() => {
@@ -327,7 +376,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   }, [meshes, theme, !!byValue]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
   // The look: the stage in the display mode of the Display menu, results shown or not (the painted receivers draw their
-  // colours alone in every mode); tone mapping off in the Value view (exact legend colours; the stage's materials draw
+  // colours in every mode, with their edges over them in the wire modes); tone mapping off in the Value view (exact legend colours; the stage's materials draw
   // untoned there); the selection fill in the accent colour, fainter over results.
   useEffect(() => {
     usd.displayMode = display;
