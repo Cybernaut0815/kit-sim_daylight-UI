@@ -69,7 +69,11 @@ describe('sets', () => {
     expect(setSummary({ ...older, models: [{ ...older.models[0], optics: undefined }] }).filter((l) => /older/.test(l.value)).map((l) => l.label)).toEqual(['Location', 'Weather', 'Subdivision']);
     const views = setSummary(captureSet(s, 'views', 'Views', { shown: 'sky_front' }));
     expect(views.map((l) => l.label)).toEqual(['Model A', 'North', 'View settings', 'Subdivision', 'Result', 'Colours', 'Problem range']);
-    expect(views[2].value).toBe('field 120°, -70° to 50°; a ray every 2°; far 1,000 m; front sides on faces');
+    expect(views[2].value).toBe('field 120°, -70° to 50°, level gaze; a ray every 2°; far 1,000 m; front sides on faces');
+    s = reducer(s, { type: 'VIEW_SIM', patch: { gaze: 'normal' } });
+    expect(setSummary(captureSet(s, 'views', 'Views', { shown: 'sky_front' }))[2].value).toMatch(/^field 120°, -70° to 50° about the normal; /);
+    s = reducer(s, { type: 'VIEW_SIM', patch: { fov: [360, -70, 50] } });
+    expect(setSummary(captureSet(s, 'views', 'Views', { shown: 'sky_front' }))[2].value).toMatch(/^field 360°, -70° to 50°; /); // all around: no gaze
   });
 
   it('APPLY_SET brings back north, the site and weather, the Materials edits, every colour and the charts', () => {
@@ -280,5 +284,12 @@ describe('parseSets', () => {
     const old = { ...set, settings: { sim: { mode: 'ladybug' }, time: { mode: 'instant' } } };
     const [x] = parseSets([entry(old)]) as AnalysisSet[];
     expect('sim' in x.settings && [x.settings.sim.mode, x.settings.sim.bounces, x.settings.time.mode, x.settings.time.stepMin]).toEqual(['ladybug', 0, 'instant', 60]);
+  });
+
+  it('a view analysis set saved before the gaze reads with the one it ran with: about the normal', () => {
+    const views = captureSet(s, 'views', 'Views', { shown: 'sky_front' }), viewSim = 'viewSim' in views.settings ? views.settings.viewSim : null;
+    const { gaze: _g, ...before } = viewSim!;
+    const [old, now] = parseSets([entry({ ...views, settings: { viewSim: before } }), entry({ ...views, id: 'views-new1' })]) as AnalysisSet[];
+    expect(['viewSim' in old.settings && old.settings.viewSim.gaze, 'viewSim' in now.settings && now.settings.viewSim.gaze]).toEqual(['normal', 'level']);
   });
 });

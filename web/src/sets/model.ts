@@ -157,7 +157,7 @@ export function setSummary(set: AnalysisSet): { label: string; value: string }[]
   } else {
     const v = set.settings.viewSim;
     if (north) line('North', north);
-    line('View settings', `field ${v.fov[0]}°, ${v.fov[1]}° to ${v.fov[2]}°; a ray every ${fmtNum(v.cell)}°; far ${fmtNum(v.far)} m; ${SIDE_WORDS[v.sides]} on ${v.on}${v.reach ? `; reach ${v.reach}` : ''}${v.transmission ? '; through glass' : ''}`);
+    line('View settings', `field ${v.fov[0]}°, ${v.fov[1]}° to ${v.fov[2]}°${v.fov[0] < 360 ? (v.gaze === 'level' ? ', level gaze' : ' about the normal') : ''}; a ray every ${fmtNum(v.cell)}°; far ${fmtNum(v.far)} m; ${SIDE_WORDS[v.sides]} on ${v.on}${v.reach ? `; reach ${v.reach}` : ''}${v.transmission ? '; through glass' : ''}`);
   }
   line('Subdivision', set.subdiv !== undefined ? levelText(set.subdiv) : NOT_KEPT);
   const q = splitColumn(set.column)[0], look = set.looks?.quantities[q] ?? set.look ?? {}, unit = unitFor(set.column).value;
@@ -196,11 +196,13 @@ const readableExtras = (s: Obj) => (s.north === undefined || finite(s.north)) &&
   && (s.looks === undefined || readableLooks(s.looks)) && (s.charts === undefined || Array.isArray(s.charts)) && (s.subdiv === undefined || (Number.isInteger(s.subdiv) && (s.subdiv as number) >= -1 && (s.subdiv as number) <= 3));
 
 /** A stored set the app can read, its settings spread over the defaults (a set of an older version opens with today's
- *  fields) and its charts as the app keeps them (junk dropped); null when it cannot. */
+ *  fields, but a view analysis saved before the gaze with the one it ran with: about the normal) and its charts as the
+ *  app keeps them (junk dropped); null when it cannot. */
 function readSet(id: string, s: Obj): AnalysisSet | null {
   if (!stamps(s, id) || (s.tool !== 'daylight' && s.tool !== 'views') || !Array.isArray(s.models) || s.models.length > 4 || !s.models.every(readableModel)) return null;
   if (typeof s.column !== 'string' || (s.colourBy !== 'plain' && s.colourBy !== 'value') || (s.look !== undefined && !readableLook(s.look)) || !isObj(s.settings) || !readableExtras(s)) return null;
-  const st = s.settings, parsed = parseSettings(JSON.stringify({ ...st, charts: s.charts })), { north: _north, ...sim } = parsed.sim;
+  const st = s.settings, viewSim = isObj(st.viewSim) ? { gaze: 'normal', ...st.viewSim } : st.viewSim;
+  const parsed = parseSettings(JSON.stringify({ ...st, viewSim, charts: s.charts })), { north: _north, ...sim } = parsed.sim;
   if (s.tool === 'views' ? !isObj(st.viewSim) : !isObj(st.sim) || !isObj(st.time)) return null;
   return { ...(s as unknown as AnalysisSet), settings: s.tool === 'views' ? { viewSim: parsed.viewSim } : { sim, time: parsed.time }, ...(s.charts ? { charts: parsed.charts } : {}) };
 }

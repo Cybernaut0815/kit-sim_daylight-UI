@@ -1,5 +1,5 @@
 // View settings: the view analysis' own inputs, as the core's views flags (docs/views.md): the field of view (out of a
-// window about each face's normal, all around, or the horizontal ring of the 2D isovist), its cell size, where the eye
+// window about each face's normal, turned level or not, all around, or the horizontal ring of the 2D isovist), its cell size, where the eye
 // sits, how far the distances reach, the virtual ground and glass. The roles are the Model panel's (its own set here);
 // the materials (glass) are the same as daylight's; north is the site's. Each section's reset button puts its own fields
 // back to their defaults.
@@ -14,9 +14,13 @@ type Field = 'view' | 'all' | 'flat';
 const FIELDS: Record<Field, ViewSim['fov']> = { view: [120, -70, 50], all: [360, -70, 50], flat: [360, 0, 0] };
 const fieldOf = ([h, lo, hi]: ViewSim['fov']): Field => (h !== 360 ? 'view' : lo === 0 && hi === 0 ? 'flat' : 'all');
 const FIELD_HELP: Record<Field, string> = {
-  view: 'Out of a window: a field about each face\'s normal (the gaze is the normal; on a vertical face 50° up and 70° down by default). Distances: log mean and nearest.',
+  view: 'Out of a window: a field about each face\'s normal, turned level as a person looks (50° up and 70° down from the horizon by default). Distances: log mean and nearest.',
   all: 'All around from each element, azimuth from north: an eye turning on the spot (lift it with the eye offset). Default measure: the isovist volume in view.',
   flat: 'One ring of horizontal rays all around: the 2D isovist, the area in view (space syntax), and the shares along the horizon.',
+};
+const GAZE_HELP: Record<ViewSim['gaze'], string> = {
+  level: 'Centred on the normal turned level, elevations about the horizon, on a tilted face too. Faces looking straight up or down keep their normal.',
+  normal: 'Centred on the face\'s normal: on a tilted face the field tilts with it (up is uphill). Faces looking straight up or down keep their normal.',
 };
 const REACH: [string, string][] = [['', 'None'], ['en17037', 'EN 17037: 6, 20 and 50 m'], ['own', 'Own distances…']];
 const GLASS = 'Rays pass the faces whose material is glass (the Materials table) and count what lies behind; "Seen through glass" gives the share. Off: windows block like walls.';
@@ -36,6 +40,12 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
           <Segmented name="view-field" label="Field of view" title={FIELD_HELP[field]} value={field} options={[['view', 'Window'], ['all', 'All around'], ['flat', 'Horizontal']] as const} onChange={(f) => set({ fov: FIELDS[f] })} />
           {errors.fov ? <span className="field__error">{errors.fov}</span> : <span className="field__help lines-3">{FIELD_HELP[field]}</span>}
         </div>
+        {field === 'view' && (
+          <div className="field">
+            <label><input type="checkbox" checked={v.gaze === 'level'} onChange={(e) => set({ gaze: e.target.checked ? 'level' : 'normal' })} /> Level gaze, as a person looks</label>
+            <span className="field__help lines-3">{GAZE_HELP[v.gaze]}</span>
+          </div>
+        )}
         {field === 'view' && <NumberField id="view-fov-h" label="Width (°)" value={h} min={1} max={180} step={1} onCommit={(x) => fov(0, x)} />}
         {field !== 'flat' && (
           <div className="grid" style={knob('--grid-min', '8rem')}>
@@ -62,7 +72,7 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
           <span className="field__label">Eyes on</span>
           <Segmented name="view-on" label="Eyes on" value={v.on} options={[['faces', 'Faces'], ['vertices', 'Vertices']] as const} onChange={(on) => set({ on })} />
         </div>
-        <NumberField id="view-offset" label="Eye offset (m)" value={v.offset} step={0.1} help="Along the normal: 1.2 seated or 1.6 standing above a floor grid. All around at 0, a receiver that blocks rays sees its own surface behind its plane (obstruction): lift the eye, or untick Blocks rays (Model) to see the ground through it." onCommit={(x) => { if (Number.isFinite(x)) set({ offset: x }); }} />
+        <NumberField id="view-offset" label="Eye offset (m)" value={v.offset} step={0.1} help="Along the normal: 1.2 seated or 1.6 standing above a floor grid. All around at 0 (or with a level gaze on a tilted face), a receiver that blocks rays sees its own surface behind its plane (obstruction): lift the eye, or untick Blocks rays (Model) to see the ground through it." onCommit={(x) => { if (Number.isFinite(x)) set({ offset: x }); }} />
       </Section>
       <Section id="view-distance" title="Distances" reset={reset('view-distance')}>
         <NumberField id="view-far" label="Far (m)" value={v.far} min={0.2} step={10} error={errors.far} help="What an open ray counts as, and the cap of every distance and isovist (interiors: 20 to 50 m)." onCommit={(x) => { if (Number.isFinite(x)) set({ far: x }); }} />

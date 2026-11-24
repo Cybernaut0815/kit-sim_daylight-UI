@@ -58,6 +58,7 @@ depends on the field:
 | field | default | meaning |
 | --- | --- | --- |
 | fov | [120, -70, 50] | [H, LO, HI] degrees: H wide about the normal (0 < H <= 180), or 360 all around; elevation LO to HI (-90 to 90), or 0 to 0 for one row of horizontal rays (the 2D isovist) |
+| gaze | level | H <= 180 only: level centres the field on the normal turned level (elevation about the horizon, as a person looks); normal centres it on the normal itself |
 | cell | 2 | degrees per ray; at most 2^20 (1,048,576) rays per element; 1 degree is 4x the rays |
 | sides | front | front, back or both viewing sides |
 | on | faces | faces (eye at the centroid) or vertices (area-weighted vertex normal) |
@@ -70,10 +71,13 @@ depends on the field:
 | cullBackfaces | false | meshes block only from their front side |
 | selfOcclude | true | receivers block rays; off: only obstructions and targets do |
 
-- About the normal (H <= 180) the field is centred on the element's normal: on a vertical face a level gaze, by
-  default 60 degrees to either side, 50 up and 70 down; on a tilted face it tilts with it. A face looking straight up
-  or down takes the model's east as its right. Two nearly horizontal faces sloping different ways see differently
-  turned fields: fov 360 (one world frame, e.g. [360, 0, 90] for the hemisphere an upward face sees) avoids that.
+- About the normal (H <= 180) the field is centred on the element's normal turned level (gaze level, the default):
+  by default 60 degrees to either side, 50 up and 70 down from the horizon, on a vertical face and a tilted one alike;
+  at offset 0 a tilted face whose mesh blocks rays sees its own surface behind its plane (obstruction). With gaze
+  normal it is centred on the normal itself, so on a tilted face it tilts with it. A face looking straight up or down
+  keeps its normal either way and takes the model's east as its right. Two nearly horizontal faces sloping different
+  ways see differently turned fields: fov 360 (one world frame, e.g. [360, 0, 90] for the hemisphere an upward face
+  sees) avoids that.
 - All around (H = 360) the azimuth runs clockwise from the site's north; at offset 0 the directions behind the
   element's own plane are not traced and count as obstruction (own surface). A non-zero offset, or a receiver that
   blocks no rays, traces them.

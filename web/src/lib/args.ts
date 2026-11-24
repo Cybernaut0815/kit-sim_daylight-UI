@@ -92,10 +92,12 @@ export function validate(s: Settings, hasReceiver: boolean, materialsReady = tru
   return e;
 }
 
-/** The view analysis' flags (the core's views; every option explicit, as buildArgs), north the site's. */
+/** The view analysis' flags (the core's views; every option explicit, as buildArgs, but the gaze all around, where it
+ *  does nothing: its runs keep their keys), north the site's. */
 export function viewArgs(v: ViewSim, north: number): string[] {
   const a = ['--fov', v.fov.join(','), '--cell', String(v.cell), '--sides', v.sides, '--on', v.on, '--offset', String(v.offset), '--far', String(v.far),
     '--virtual-ground', v.virtualGround ? 'on' : 'off', '--north', String(north)];
+  if (v.fov[0] < 360) a.push('--gaze', v.gaze);
   if (v.virtualGround && v.groundZ !== null) a.push('--ground-z', String(v.groundZ));
   if (v.reach.trim()) a.push('--reach', v.reach.replace(/\s+/g, ''));
   if (v.cullBackfaces) a.push('--cull-backfaces');

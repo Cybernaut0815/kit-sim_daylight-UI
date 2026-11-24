@@ -110,6 +110,7 @@
             "description": "View settings panel: the View analysis' own run inputs (its roles: set_roles with analysis 'views'; north and the materials are daylight's).",
             "properties": {
               "fov": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Field of view [width, down to, up to] in degrees: width 1 to 180 about each face's normal (a window; default [120, -70, 50]) or 360 all around (an eye turning on the spot, azimuth from north); down to below up to, -90 to 90; [360, 0, 0]: one ring of horizontal rays (the 2D isovist)." },
+              "gaze": { "type": "string", "enum": ["level", "normal"], "description": "Window fields (width up to 180) only: level (default) centres the field on the normal turned level, elevations about the horizon, as a person looks; normal centres it on the face's normal, so on a tilted face it tilts with the face. Faces looking straight up or down keep their normal either way." },
               "cell": { "type": "number", "minimum": 0.1, "maximum": 30, "description": "Degrees per ray cell (the panel offers 0.5, 1, 2, 3, 5; 1 for thin or far targets); at most 2^20 rays per element." },
               "sides": { "type": "string", "enum": ["front", "back", "both"], "description": "Looking side: front = where the face normal points; both adds the _back columns." },
               "on": { "type": "string", "enum": ["faces", "vertices"], "description": "Eyes on each face (centroid) or each vertex." },

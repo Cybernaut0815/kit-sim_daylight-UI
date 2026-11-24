@@ -188,9 +188,10 @@ describe('reset to defaults', () => {
     expect(s.settings.sim.bounces).toBe(2);
   });
   it('each View settings section puts back its own fields only', () => {
-    const changed = { fov: [360, 0, 0], cell: 5, sides: 'both', on: 'vertices', offset: 1.6, far: 50, reach: 'en17037', virtualGround: false, groundZ: 3, transmission: true, cullBackfaces: true, selfOcclude: false } as const;
+    const changed = { fov: [360, 0, 0], gaze: 'normal', cell: 5, sides: 'both', on: 'vertices', offset: 1.6, far: 50, reach: 'en17037', virtualGround: false, groundZ: 3, transmission: true, cullBackfaces: true, selfOcclude: false } as const;
     const s = reducer(initialState(), { type: 'VIEW_SIM', patch: { ...changed, fov: [...changed.fov] } });
-    const sections = { 'view-field': ['fov', 'cell'], 'view-eye': ['sides', 'on', 'offset'], 'view-distance': ['far', 'reach'], 'view-ground': ['virtualGround', 'groundZ', 'transmission', 'cullBackfaces', 'selfOcclude'] } as const;
+    expect(d.viewSim.gaze).toBe('level'); // as a person looks, by default
+    const sections = { 'view-field': ['fov', 'gaze', 'cell'], 'view-eye': ['sides', 'on', 'offset'], 'view-distance': ['far', 'reach'], 'view-ground': ['virtualGround', 'groundZ', 'transmission', 'cullBackfaces', 'selfOcclude'] } as const;
     for (const [what, fields] of Object.entries(sections) as [keyof typeof sections, readonly (keyof typeof changed)[]][]) {
       const v = reducer(s, { type: 'RESET', what }).settings.viewSim;
       for (const k of Object.keys(changed) as (keyof typeof changed)[]) expect(v[k], `${what}: ${k}`).toEqual(fields.includes(k) ? d.viewSim[k] : changed[k]);
@@ -453,5 +454,9 @@ describe('the view analysis', () => {
     const p = parseSettings(JSON.stringify({ viewSim: { fov: [360, 0, 0], cell: 'x', reach: 'en17037', groundZ: 2 } }));
     expect([p.viewSim.fov, p.viewSim.cell, p.viewSim.reach, p.viewSim.groundZ, p.viewSim.far]).toEqual([[360, 0, 0], 2, 'en17037', 2, 1000]);
     expect(parseSettings('{"site":{}}').viewSim).toEqual(defaultSettings().viewSim);
+    // the gaze: one of the two, else the default (stored settings of before it: level)
+    expect(parseSettings(JSON.stringify({ viewSim: { gaze: 'normal' } })).viewSim.gaze).toBe('normal');
+    expect(parseSettings(JSON.stringify({ viewSim: { gaze: 'up' } })).viewSim.gaze).toBe('level');
+    expect(parseSettings(JSON.stringify({ viewSim: { far: 50 } })).viewSim.gaze).toBe('level');
   });
 });
