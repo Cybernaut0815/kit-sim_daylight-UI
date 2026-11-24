@@ -183,9 +183,9 @@ export function sampleEyes(c: Candidates, o: EyeOptions): Eyes {
   };
   let s = o.spacing > 0 ? o.spacing : 1, kept = live;
   for (let round = 0; round === 0 || (kept.length > cap && round < 40); round++) {
-    const seen = new Set<string>(), next: number[] = [];
-    for (const i of live) {
-      const key = `${Math.floor(C[3 * i] / s)} ${Math.floor(C[3 * i + 1] / s)} ${Math.floor(C[3 * i + 2] / s)} ${axis(i)}`;
+    const seen = new Set<number>(), next: number[] = [];
+    for (const i of live) { // a hashed voxel (two that collide share an eye) x the axis
+      const key = 8 * (Math.imul(Math.floor(C[3 * i] / s), 73856093) ^ Math.imul(Math.floor(C[3 * i + 1] / s), 19349663) ^ Math.imul(Math.floor(C[3 * i + 2] / s), 83492791)) + axis(i);
       if (!seen.has(key)) { seen.add(key); next.push(i); }
     }
     kept = next;

@@ -11,12 +11,14 @@ import { toModel, toWorld, type Vec3 } from '../lib/frame';
 import { frameOf, glyphOf, rayGrid, type Eyes, type Fov, type Gaze } from '../lib/viewfield';
 import type { ViewSim } from '../store';
 
-/** What the preview draws: the view settings it shows, its size and how many glyphs at most, where. */
+/** What the preview draws: the view settings it shows, its size and how many glyphs at most. */
 export interface FieldView {
   fov: Fov; cell: number; gaze: Gaze; sides: ViewSim['sides']; on: ViewSim['on']; offset: number; north: number; // offset: metres
   scale: number; max: number; // scale: x the default glyph size (a few % of the model); max: the most glyphs drawn
-  around: readonly string[] | null; // the receivers' prim paths the glyphs sit on (null: every receiver)
 }
+/** The preview's densities: the most glyphs each draws. */
+export const DENSITY = { few: 30, some: 120, many: 400 } as const;
+export type Density = keyof typeof DENSITY;
 
 export function createViewField() {
   const group = new THREE.Group();

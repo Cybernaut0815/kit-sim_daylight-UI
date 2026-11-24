@@ -7,9 +7,15 @@ import { memo, type Dispatch } from 'react';
 import { FieldDiagram } from '../charts/FieldDiagram';
 import { rayGrid } from '../lib/viewfield';
 import type { Action, SettingsSection, ViewSim } from '../store';
-import { NumberField, Section, Segmented, knob } from '../ui';
+import { NumberField, ResetButton, Section, Segmented, knob } from '../ui';
+import { DENSITY, type Density } from '../viewer/viewfield';
 
-interface Props { v: ViewSim; north: number; errors: Record<string, string>; dispatch: Dispatch<Action> }
+interface Props {
+  v: ViewSim; north: number; errors: Record<string, string>; dispatch: Dispatch<Action>;
+  // the 3D preview of the field: shown, size x the default, density, on how many selected receivers (0: all of them)
+  field: boolean; fieldScale: number; fieldDensity: Density; fieldFit: number; canFieldFit: boolean;
+  onField: (on: boolean) => void; onFieldScale: (scale: number) => void; onFieldDensity: (d: Density) => void; onFieldFit: (on: boolean) => void;
+}
 
 type Field = 'view' | 'all' | 'flat';
 // each field preset's default [H, LO, HI]: the core's defaults about the normal and all around, the 2D isovist's ring
@@ -27,7 +33,7 @@ const GAZE_HELP: Record<ViewSim['gaze'], string> = {
 const REACH: [string, string][] = [['', 'None'], ['en17037', 'EN 17037: 6, 20 and 50 m'], ['own', 'Own distances…']];
 const GLASS = 'Rays pass the faces whose material is glass (the Materials table) and count what lies behind; "Seen through glass" gives the share. Off: windows block like walls.';
 
-export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, errors, dispatch }: Props) {
+export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, errors, dispatch, field: preview, fieldScale, fieldDensity, fieldFit, canFieldFit, onField, onFieldScale, onFieldDensity, onFieldFit }: Props) {
   const set = (patch: Partial<ViewSim>) => dispatch({ type: 'VIEW_SIM', patch });
   const reset = (what: SettingsSection) => ({ onReset: () => dispatch({ type: 'RESET', what }) });
   const field = fieldOf(v.fov), [h, lo, hi] = v.fov, { cols, rows } = rayGrid(v.fov, v.cell);
@@ -64,6 +70,24 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
             : <span className="field__help line">{`${cols} × ${rows} = ${(cols * rows).toLocaleString('en-GB')} rays per element; 1° for thin or far targets`}</span>}
         </div>
         <FieldDiagram fov={v.fov} cell={v.cell} gaze={v.gaze} />
+        <fieldset className="field" aria-labelledby="lg-viewfield">
+          <div className="cluster cluster--between"><legend id="lg-viewfield">Preview in the 3D view</legend><ResetButton what="the preview size" onClick={() => onFieldScale(1)} /></div>
+          <label><input type="checkbox" id="viewfield-show" checked={preview} onChange={(e) => onField(e.target.checked)} /> Show on the receivers</label>
+          <label className="slider-row">
+            <span>Size</span>
+            <input id="viewfield-size" type="range" min={-2} max={2} step={0.1} value={Math.log2(fieldScale)} aria-valuetext={`${Math.round(fieldScale * 100)} %`} disabled={!preview} onChange={(e) => onFieldScale(2 ** e.target.valueAsNumber)} />
+            <span className="slider-row__value">{Math.round(fieldScale * 100)} %</span>
+          </label>
+          <div className="field">
+            <span className="field__label">Density</span>
+            <Segmented name="viewfield-density" label="Preview density" value={fieldDensity} options={[['few', 'Few'], ['some', 'Some'], ['many', 'Many']] as const} onChange={onFieldDensity} />
+          </div>
+          <div className="cluster">
+            <button className="btn btn--secondary" id="viewfield-fit" type="button" disabled={!preview || !canFieldFit} title={canFieldFit ? 'Show the glyphs on the selected receivers only' : 'Select one or several receivers first'} onClick={() => onFieldFit(true)}>On selection</button>
+            <button className="btn btn--secondary" id="viewfield-all" type="button" disabled={!fieldFit} title="Show the glyphs on every receiver again" onClick={() => onFieldFit(false)}>All receivers</button>
+          </div>
+          <p className="text-muted lines-3">{`${fieldFit ? `On ${fieldFit} selected receiver${fieldFit === 1 ? '' : 's'}` : 'On every receiver'}, at most ${DENSITY[fieldDensity]} glyphs: the field each eye traces, drawn at a display size; the rays reach Far (${v.far} m).`}</p>
+        </fieldset>
       </Section>
       <Section id="view-eye" title="Eye" reset={reset('view-eye')}>
         <div className="field">

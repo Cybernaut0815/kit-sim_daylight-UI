@@ -58,6 +58,7 @@ interface Props {
   sun: SunView | null; // the sun path to draw (null: hidden)
   around?: readonly string[] | null; // the prim paths of the meshes the sun path is fitted to (null: the whole model)
   field?: FieldView | null; // the view field's glyphs on the receivers (null: hidden)
+  fieldAround?: readonly string[] | null; // the prim paths of the receivers the glyphs sit on (null: every receiver)
   section: string | null; // the section shown, in words (null: none)
   analysis?: Tab; // whose roles `objects` carry (the scene info's words)
   display: Display; // the viewer's display mode (the Display menu), with results or without
@@ -91,7 +92,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, section, analysis, display, labels = false }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, fieldAround = null, section, analysis, display, labels = false }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -291,9 +292,18 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   }, [meshes, around]); // eslint-disable-line react-hooks/exhaustive-deps -- the rows' paths change with the meshes
 
   // The view field's glyphs (./viewfield.ts) while the preview shows: the candidates (a bounded sample of the shown
-  // receivers' triangles, lib/viewfield.ts) per model, rows and `around`; the eyes and glyphs per setting, section and
-  // size; the colour per theme. Nothing runs per frame.
-  const fieldOn = !!field, fieldAround = field?.around;
+  // receivers' triangles, lib/viewfield.ts) per model, rows and `fieldAround`; the eyes and glyphs per setting, section
+  // and size; the colour per theme. Nothing runs per frame.
+  const fieldOn = !!field, [shownTick, setShownTick] = useState(0); // shownTick: receivers shown or hidden (the tree's eyes, H, isolate)
+  useEffect(() => {
+    if (!fieldOn) return;
+    let armed = false; // the edit reaches the drawn objects by the next frame the viewer draws: read them after it
+    const onPrims = (e: Event) => { if ((e as UsdSessionEventMap['primschange']).detail.visibility) { armed = true; usd.three.invalidate(); } };
+    const onFrame = () => { if (armed) { armed = false; setTimeout(() => setShownTick((n) => n + 1)); } };
+    usd.addEventListener('primschange', onPrims);
+    usd.three.beforeRender.add(onFrame);
+    return () => { usd.removeEventListener('primschange', onPrims); usd.three.beforeRender.delete(onFrame); };
+  }, [fieldOn, usd]);
   const candidates = useMemo(() => {
     if (!fieldOn) return null;
     const want = fieldAround?.length ? new Set(fieldAround) : null, list = [];
@@ -305,7 +315,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       list.push({ positions: pos.array, indices: m.geometry.index?.array ?? null, matrix: m.matrixWorld.elements });
     }
     return candidatesOf(list);
-  }, [meshes, objects, fieldOn, fieldAround]);
+  }, [meshes, objects, fieldOn, fieldAround, shownTick]); // eslint-disable-line react-hooks/exhaustive-deps -- shownTick: the meshes' visible flags
   useEffect(() => {
     const c = ctx.current;
     if (!c) return;
