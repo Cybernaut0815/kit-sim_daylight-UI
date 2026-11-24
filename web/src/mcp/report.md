@@ -19,12 +19,19 @@ generates the PDF (generate_report). Read guide 'daylight' first: its writing ru
   weather reference, versions). Do not repeat them.
 - save_report also stores each report model's run: its file (and the paths open_model opened it from), the variant
   choices made in the app, its receivers (and which of them cast no shade) and shades, and the run's settings; and the
-  problem range of each quantity the report shows (its shares and range colours depend on it). generate_report
-  refuses when a model or a range no longer matches and says what to restore: open_model (another file or none in the
-  slot), set_geometry (other variant choices), set_roles (other roles, or a receiver's shade), the settings it names
-  (another date, step, weather ...) and run, run (no result, a stale one), update_settings viz (another problem range),
-  or wait (a run on its way). After a run with other settings or a new range, check that your text still holds, then
-  save the report again: that stores them.
+  problem range of each quantity the report shows (its shares and range colours depend on it). It also records the
+  current Daylight setup as an analysis set keeps it (guide 'daylight', section 11): each report model's roles, the
+  simulation and time settings, the column shown and its look. generate_report (and Generate PDF in the app's Reports
+  menu) first opens that setup on the Daylight tab, as the Sets menu opens a set, sets the problem ranges and runs the
+  models without a result (a result run before in this session shows at once); the setup stays open afterwards, and
+  the open models the report is not on keep their roles (the settings are shared: their results may go stale). So
+  roles, settings or ranges changed in the app since the save do not stop it. It refuses when what a setup does not
+  hold no longer matches, and says what to restore: open_model (another file or none in the slot), set_geometry (other
+  variant choices), or the site, north or weather it names; then the run's inputs must equal the save's (a material
+  edited since, say: set it back or save again). After a run with other settings or a new range, check that your text
+  still holds, then save the report again: that stores them. A report saved before setups were kept has none, and
+  generate_report refuses as before until its roles, settings and ranges are restored (set_roles, update_settings,
+  run).
 - The user edits the report in the app: report charts with the settings button of the Results panel's
   "Report: TITLE" group, report cameras in the Views menu (Report: TITLE, Update), and generates again from the Reports
   menu. Each edit saves the report with a new `updated`. So call get_report before you change a report, edit what it

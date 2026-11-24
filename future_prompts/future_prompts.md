@@ -75,6 +75,8 @@ Also concerning the UI, it can happen, that large numbers are not shown correctl
 
 Please plan this accordingly
 
+*implemented*
+
 ## Prompt 6
 
 ___
@@ -104,3 +106,5 @@ In this one I want to be able to create custom views, which either just take spe
 So I could for example try to apply several results on a facade surface, so evaluate a cumulative result on the "performance" of it and visualize that also accordingly
 Also in this view, but also int he other result view it should be possible to sample values on the 3d mesh - so show values directly in the 3d view over the gradient (only of not covered by other meshes and also should make sure, that it is not too dense/to many values previews on each vertex if zoomed out and it should not compromise the performance of the viewer and should be toggle-able - by default off)
 Please make sure, that this visualization tab and the according visualization also has full MCP access
+
+*implemented*

@@ -1,4 +1,6 @@
 // Shared chart scaffolding: nice tick positions (1-2-5 steps), tick formatting, the common text and line colours.
+import { SCI, sci } from '../lib/result';
+
 export function niceStep(span: number, n: number): number {
   const raw = span / Math.max(1, n), p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
@@ -13,8 +15,8 @@ export function niceTicks(min: number, max: number, n = 5): number[] {
   return out;
 }
 
-/** Tick label: thousands grouped, else 3 significant digits. */
-export const fmtTick = (v: number): string => (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-GB') : Number(v.toPrecision(3)).toString());
+/** Tick label: 3 significant digits, thousands grouped, exponent form from SCI. */
+export const fmtTick = (v: number): string => (Math.abs(v) >= SCI ? sci(v) : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-GB') : Number(v.toPrecision(3)).toString());
 
 export const FONT = 9, TITLE_FONT = 10;
 export const TEXT = 'var(--chart-text)', STRONG = 'var(--chart-text-strong)', GRID = 'var(--chart-grid)', AXIS = 'var(--chart-axis)';

@@ -4,11 +4,32 @@
 // for an animation frame. Tone mapping and sRGB are the screen's (three's output target), so value colours equal the
 // legend's; the transparent background becomes white. Near and far follow the viewer's rule for the shot's eye
 // (USD_WebViewer viewport.ts fitClipPlanes); `near` overrides near: a cutaway that clips what stands in front.
+// `labels`: value labels for the shot's camera (labels.ts), drawn over the image as the views' tooltips look.
 // No import of ./usd.ts: the node tests import this module.
 import { Box3, OrthographicCamera, PerspectiveCamera, RenderTarget, Sphere } from 'three';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
+import { cssVar } from '../lib/cssVar';
+import type { Label } from './labels';
 
-export interface Shot { width: number; height: number; view?: ViewState; near?: number; type?: 'image/png' | 'image/jpeg'; quality?: number }
+export interface Shot {
+  width: number; height: number; view?: ViewState; near?: number; type?: 'image/png' | 'image/jpeg'; quality?: number;
+  labels?: (camera: PerspectiveCamera | OrthographicCamera) => readonly Label[];
+}
+/** Labels as the views' kit-ui tooltips draw them: small text on the inverse surface, centred on their cells. */
+function drawLabels(g: OffscreenCanvasRenderingContext2D, labels: readonly Label[]) {
+  const font = getComputedStyle(document.documentElement).getPropertyValue('--font-primary').trim() || 'sans-serif';
+  g.font = `12px ${font}`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const back = cssVar('--text-strong', '#111'), text = cssVar('--bg-surface-1', '#fff');
+  for (const l of labels) {
+    const w = g.measureText(l.text).width + 12, h = 20;
+    g.fillStyle = back;
+    g.fillRect(l.x - w / 2, l.y - h / 2, w, h);
+    g.fillStyle = text;
+    g.fillText(l.text, l.x, l.y);
+  }
+}
 /** The largest shot: 8192 px a side (WebGPU's default texture limit: the viewer asks for no more) and 4096 × 4096 px in
  *  all (a shot holds about 64 B of GPU memory per pixel while it renders: 4× MSAA half-float colour, depth, output). */
 export const MAX_SIDE = 8192, MAX_PIXELS = 4096 * 4096;
@@ -114,8 +135,9 @@ export async function capture(el: UsdViewerElement, s: Shot): Promise<Blob> {
     }
     const [px, error] = await Promise.all([read, oom]);
     if (error) throw new Error(`${W} × ${H} px needs more GPU memory than is free: take a smaller shot`);
-    const canvas = new OffscreenCanvas(W, H);
-    canvas.getContext('2d')!.putImageData(new ImageData(unpack(px, W, H, el.backend === 'webgl2'), W, H), 0, 0);
+    const canvas = new OffscreenCanvas(W, H), g = canvas.getContext('2d')!;
+    g.putImageData(new ImageData(unpack(px, W, H, el.backend === 'webgl2'), W, H), 0, 0);
+    if (s.labels) drawLabels(g, s.labels(cam));
     return await canvas.convertToBlob({ type: s.type ?? 'image/png', quality: s.quality });
   } finally {
     rt.dispose();

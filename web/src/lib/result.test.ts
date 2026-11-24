@@ -98,9 +98,14 @@ describe('units and formatting', () => {
     expect(fmtNum(1234.5)).toBe('1,235');
     expect(fmtNum(0.123456)).toBe('0.123');
     expect(fmtNum(NaN)).toBe('–');
+    expect(fmtNum(999_999.4)).toBe('999,999');
+    expect(fmtNum(4_188_790_204)).toBe('4.19e9'); // a big isovist volume: exponent form, never 13 grouped digits
+    expect(fmtNum(1e6)).toBe('1e6');
+    expect(fmtNum(-2.345e7)).toBe('-2.35e7');
+    expect(fmtNum(1.5e21)).toBe('1.5e21');
   });
   it('roundNum is the number fmtNum shows', () => {
-    for (const v of [0.123456, 0.000123456, 1.23456e-7, 5, -12.345, 999.6, 1234.5, -1500.4, 1e7 / 3]) expect(roundNum(v)).toBe(Number(fmtNum(v).replace(/,/g, '')));
+    for (const v of [0.123456, 0.000123456, 1.23456e-7, 5, -12.345, 999.6, 1234.5, -1500.4, 1e7 / 3, 4_188_790_204, -2.345e7]) expect(roundNum(v)).toBe(Number(fmtNum(v).replace(/,/g, '')));
     expect(roundNum(NaN)).toBeNaN();
   });
 });

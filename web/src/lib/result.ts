@@ -185,9 +185,20 @@ export const splitColumn = (column: string): [string, string] => { const m = /^(
 // target group, reach_<D>) is a share of the field, 0 to 1, summed over the area as m².
 const VIEW_UNITS: [RegExp, [string, string]][] = [[/^volume$/, ['m³', '']], [/^area$/, ['m²', '']], [/distance(_min)?$/, ['m', '']]];
 
-/** Column name 'radiation_front' -> per-element and area-integrated units. */
+// The combined views (sets/model.ts) by their column 'combined_<id>': its name, unit and the words under the selector.
+const COMBINED = new Map<string, { name: string; unit: string; help: string }>();
+/** The combined views there are now (the app's list, each with its help in words): their columns' names and units. */
+export function registerCombined(views: readonly { id: string; name: string; unit: string; help: string }[]): void {
+  COMBINED.clear();
+  for (const v of views) COMBINED.set(`combined_${v.id}`, { name: v.name, unit: v.unit, help: v.help });
+}
+
+/** Column name 'radiation_front' -> per-element and area-integrated units (a combined view without a unit: a score,
+ *  its total over the area in m²). */
 export function unitFor(column: string): { value: string; total: string } {
-  const q = splitColumn(column)[0], [value, total] = UNITS[q] ?? VIEW_UNITS.find(([re]) => re.test(q))?.[1] ?? ['', 'm²'];
+  const q = splitColumn(column)[0], c = COMBINED.get(q);
+  if (c) return { value: c.unit, total: c.unit ? `${c.unit}·m²` : 'm²' };
+  const [value, total] = UNITS[q] ?? VIEW_UNITS.find(([re]) => re.test(q))?.[1] ?? ['', 'm²'];
   return { value, total };
 }
 
@@ -206,6 +217,9 @@ const VIEW_HELP: Record<string, string> = {
 /** The words under the column selector for a quantity of either analysis. */
 export function helpFor(q: string): string {
   if (QUANTITY_HELP[q] || VIEW_HELP[q]) return QUANTITY_HELP[q] ?? VIEW_HELP[q];
+  const c = COMBINED.get(q);
+  if (c) return c.help;
+  if (q.startsWith('combined_')) return 'A combined view that is no longer saved.';
   const reach = /^reach_(.+)$/.exec(q), g = /^(.+)_distance(_min)?$/.exec(q);
   if (reach) return `Share of the field that sees at least ${reach[1]} m before it meets anything, 0 to 1 (EN 17037 view distance levels: 6, 20 and 50 m; the ground below counts at its distance).`;
   if (g) return g[2] ? `The nearest ${g[1]} in view, m; none where it is not in view.` : `The log mean distance to ${g[1]} over the rays that end on it, m; none where it is not in view.`;
@@ -222,7 +236,8 @@ export const columnIndex = (columns: readonly string[], name: string): number =>
 /** 'radiation_front' -> 'Radiation, front', 'sunhours_back' -> 'Sun hours, back', 'distance_min_front' -> 'Nearest
  *  distance, front', 'reach_6_front' -> 'Reach 6 m, front'; a quantity alone -> 'Sun hours'. */
 export const columnLabel = (column: string): string => {
-  const [q, side] = splitColumn(column), cap = (t: string) => `${t[0].toUpperCase()}${t.slice(1)}`;
+  const [q, side] = splitColumn(column), cap = (t: string) => `${t[0].toUpperCase()}${t.slice(1)}`, c = COMBINED.get(q);
+  if (c) return c.name;
   const name = q === 'sunhours' ? 'Sun hours' : q === 'distance_min' ? 'Nearest distance' : q === 'obstruction_total' ? 'Total obstruction' : q.startsWith('reach_') ? `Reach ${q.slice(6)} m`
     : cap(q.replace(/_distance_min$/, ', nearest distance').replace(/_distance$/, ', distance').replace(/_/g, ' '));
   return `${name}${side ? `, ${side}` : ''}`;
@@ -244,15 +259,21 @@ export function areaMean(r: { columns: readonly string[]; data: readonly ArrayLi
   return m;
 }
 
-/** The number fmtNum shows: 3 significant digits below 1000, whole above (the tools quote what the app and the PDF show). */
-export const roundNum = (v: number): number => (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toPrecision(3)));
+/** From here on a number shows in exponent form: grouped digits that long overrun the readouts, tables and ticks. */
+export const SCI = 1e6;
+/** `v` (|v| >= SCI) in exponent form, 3 significant digits at most: 4.19e9, 2e6. */
+export const sci = (v: number): string => Number(v.toPrecision(3)).toExponential().replace('e+', 'e');
+/** The number fmtNum shows: 3 significant digits below 1000, whole up to SCI, 3 significant digits again from there (the
+ *  tools quote what the app and the PDF show). */
+export const roundNum = (v: number): number => (Math.abs(v) >= 1000 && Math.abs(v) < SCI ? Math.round(v) : Number(v.toPrecision(3)));
 /** A share (0..1) as the percent ui.tsx pct shows: whole, one decimal under 10 %. */
 export const roundPct = (x: number): number => Number((100 * x).toFixed(x > 0 && x < 0.1 ? 1 : 0));
 
-/** Compact tabular number: 3 significant digits below 1000, thousands grouped above. */
+/** Compact tabular number: 3 significant digits below 1000, thousands grouped above, exponent form from SCI. */
 export function fmtNum(v: number): string {
   if (!Number.isFinite(v)) return '–';
-  return Math.abs(v) >= 1000 ? roundNum(v).toLocaleString('en-GB') : roundNum(v).toString();
+  const a = Math.abs(v);
+  return a >= SCI ? sci(v) : a >= 1000 ? roundNum(v).toLocaleString('en-GB') : roundNum(v).toString();
 }
 
 /** A difference to the reference model, signed, in the value's format; '' when either side has none. */

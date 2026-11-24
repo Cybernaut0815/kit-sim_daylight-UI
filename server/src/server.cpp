@@ -136,6 +136,7 @@ struct Server {
   std::string appUrl;                             // what the hidden instance opens: --app-url, else this server's --web app
 
   std::mutex repMu;                               // reports: spec writes, the list, deletes
+  std::mutex setMu;                               // analysis sets: writes, the list, deletes
   std::mutex pdfMu;                               // one PDF print at a time (one browser profile)
 };
 
@@ -1031,6 +1032,60 @@ int main(int argc, char** argv) {
     S.jobsCv.wait(lock, [&] { return finished(j->state); });
     if (j->state == State::Done) return json(res, 200, "{" + result_fields(*j, true) + "\n}\n");
     text(res, j->status, j->error + "\n");
+  });
+
+  // ---- analysis sets: the web app's saved setups (roles, settings, result choices) and its combined views, one JSON
+  // object each in <cache>/sets/<id>.json, for every client of this server: no --mcp and no local-only gate, so the
+  // browsers on other machines share them. At most 256 KB each and 500 in all; the app checks what it reads.
+  // ponytail: no owner and no version check, the last PUT wins; add an updated stamp check if users overwrite each other
+  constexpr size_t kSetBytes = size_t(256) << 10, kMaxSets = 500;
+  std::error_code setsEc;
+  const fs::path sets = fs::absolute(S.dir, setsEc) / "sets";
+  const auto setId = [](const fs::path& p) {   // a stored set's id: <id>.json with an id the routes take, else ""
+    const std::string id = p.stem().u8string();
+    const bool ok = p.extension() == ".json" && !id.empty() && id.size() <= 64 &&
+                    std::all_of(id.begin(), id.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
+    return ok ? id : std::string();
+  };
+  svr.Get("/sets", [&](const httplib::Request&, httplib::Response& res) {
+    std::string list;
+    std::error_code fe;
+    std::lock_guard<std::mutex> lock(S.setMu);
+    for (fs::directory_iterator it(sets, fe), end; !fe && it != end; it.increment(fe)) {
+      const std::string id = setId(it->path());
+      std::error_code ee;
+      if (id.empty() || !fs::is_regular_file(it->path(), ee)) continue;
+      // as a JSON string: one damaged file cannot break the list (the app parses each set by itself)
+      list += std::string(list.empty() ? "" : ", ") + "{\"id\": " + json_str(id) + ", \"spec\": " + json_str(read_file(it->path())) + "}";
+    }
+    json(res, 200, "[" + list + "]");
+  });
+  svr.Put(R"(/sets/([a-z0-9-]{1,64}))", [&](const httplib::Request& req, httplib::Response& res) {
+    if (req.body.size() > kSetBytes) return text(res, 413, "error: a set is at most 256 KB\n");
+    if (!is_object(req.body)) return text(res, 400, "error: the body is one JSON object (the set)\n");
+    const std::string id = req.matches[1];
+    const fs::path file = sets / (id + ".json"), part = sets / (id + ".json.part");
+    std::lock_guard<std::mutex> lock(S.setMu);
+    std::error_code de, se, re;
+    fs::create_directories(sets, de);
+    if (!fs::is_regular_file(file, se)) {   // a new set: within the count
+      size_t n = 0;
+      std::error_code fe;
+      for (fs::directory_iterator it(sets, fe), end; !fe && it != end; it.increment(fe)) n += !setId(it->path()).empty();
+      if (n >= kMaxSets) return text(res, 409, "error: the server keeps at most " + std::to_string(kMaxSets) + " sets: delete some first\n");
+    }
+    const bool written = write_file(part, req.body);   // then renamed: a crash mid-write leaves the old set whole
+    if (written) fs::rename(part, file, re);
+    if (!written || re) return text(res, 500, "error: cannot store " + file.u8string() + "\n");
+    res.status = 204;
+  });
+  svr.Delete(R"(/sets/([a-z0-9-]{1,64}))", [&](const httplib::Request& req, httplib::Response& res) {
+    const fs::path file = sets / (std::string(req.matches[1]) + ".json");
+    std::lock_guard<std::mutex> lock(S.setMu);
+    std::error_code se, re;
+    if (!fs::is_regular_file(file, se)) return text(res, 404, "error: no such set\n");
+    if (!fs::remove(file, re) || re) return text(res, 500, "error: cannot delete " + file.u8string() + "\n");
+    res.status = 204;
   });
 
   // ---- agents (--mcp; this machine only, see the gate above). MCP over HTTP with JSON answers (no SSE, no sessions):

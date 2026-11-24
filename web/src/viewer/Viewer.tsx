@@ -13,10 +13,11 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
 import { paintOf, type Scale } from '../lib/gradients';
-import { drawnValues, faceRow } from '../lib/topology';
+import { drawnValues } from '../lib/topology';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
+import { cancelLabels, elementOf, enqueue, sampler, type LabelScene } from './labels';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 import type { Display } from './Views';
 
@@ -57,7 +58,11 @@ interface Props {
   section: string | null; // the section shown, in words (null: none)
   analysis?: Tab; // whose roles `objects` carry (the scene info's words)
   display: Display; // the viewer's display mode (the Display menu), with results or without
+  labels?: boolean; // value labels on the painted receivers (the Display menu's "Values on the surfaces")
 }
+
+/** Per view, its label scene for a camera and size while it paints values (the agent's screenshots: labels.ts labelsOf). */
+export const labelScenes = new WeakMap<UsdViewerElement, (camera: THREE.Camera, width: number, height: number) => LabelScene | null>();
 
 interface Ctx {
   canvas: HTMLCanvasElement; sun: SunPath; gridSpec: { size: number; x: number; y: number; z: number };
@@ -72,7 +77,9 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   const ignored = n('none'), targets = objects.reduce((k, o) => k + (o.role === 'shade' && o.group ? 1 : 0), 0);
   return (
     <div className="viewport__info" aria-hidden="true">
-      <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {analysis === 'views' ? `${f(n('shade') - targets)} blocking, ${f(targets)} targets` : `${f(n('shade'))} shading`}{ignored ? `, ${f(ignored)} ignored` : ''}</span>
+      {analysis === 'combined'
+        ? <span>{f(objects.length)} meshes, {f(n('receiver'))} in the combined view</span>
+        : <span>{f(objects.length)} meshes, {f(n('receiver'))} receiving, {analysis === 'views' ? `${f(n('shade') - targets)} blocking, ${f(targets)} targets` : `${f(n('shade'))} shading`}{ignored ? `, ${f(ignored)} ignored` : ''}</span>}
       <span>{f(objects.reduce((k, o) => k + o.tris, 0))} triangles, {f(objects.reduce((k, o) => k + o.verts, 0))} vertices{unit !== 1 ? `, 1 unit = ${unit} m` : ''}</span>
       {section && <span>Section: {section}</span>}
       <span ref={stats} />
@@ -80,7 +87,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis, display }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, section, analysis, display, labels = false }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -167,23 +174,9 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       const hit = hitAt(e), r = canvas.getBoundingClientRect();
       const id = hit && latest.current.byObject.get(hit.object);
       if (!hit || !id) return null;
-      const { result, column, recv } = latest.current;
-      let element: number | null = null, value = NaN;
-      const k = recv.get(id) ?? -1;
-      if (result && k >= 0 && hit.faceIndex != null) {
-        const form = result.forms?.[k] ?? null;
-        if (result.on === 'faces') element = faceRow(form, hit.faceIndex);
-        else if (hit.face) { // the geometry stays indexed: the hit face's corners are index[3 faceIndex + j]
-          const mesh = hit.object as THREE.Mesh, pos = mesh.geometry.attributes.position;
-          let best = Infinity;
-          [hit.face.a, hit.face.b, hit.face.c].forEach((vi, j) => {
-            const d = p.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld).distanceToSquared(hit.point);
-            if (d < best) { best = d; element = form ? form.cornerRow[3 * hit.faceIndex! + j] : vi; }
-          });
-        }
-        const g = result.manifest.meshes[k];
-        if (element !== null && element < g.count) value = result.data[column][g.first + element]; else element = null;
-      }
+      const { result, column, recv } = latest.current, k = recv.get(id) ?? -1;
+      const element = result && k >= 0 ? elementOf(result, k, hit, p) : null;
+      const value = element === null ? NaN : result!.data[column][result!.manifest.meshes[k].first + element];
       return { id, element, value, x: e.clientX - r.left, y: e.clientY - r.top };
     };
     let raf = 0;
@@ -369,6 +362,63 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     void usd.paint(items, !perVertex ? 'face' : corners ? 'corner' : 'vertex'); // the viewer warns about what it skips (its log)
   }, [meshes, objects, byValue, recv, column, !!scale, paint?.key]); // eslint-disable-line react-hooks/exhaustive-deps -- a new scale restyles above, a new map paints again
 
+  // Value labels (labels.ts): the label scene for this view's camera and size while it paints values (the agent's shots
+  // take it whatever the toggle); with the toggle on, the layer hides while the camera moves (one write per move) and
+  // fills in idle slices 200 ms after it rests, again on a new result, column, section, rows or meshes.
+  const valuesEl = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const layer = valuesEl.current!, owner = layer;
+    const role = new Map(objects.map((o) => [o.id, o.role]));
+    const sceneOf = (camera: THREE.Camera, width: number, height: number): LabelScene | null => (!byValue ? null : {
+      camera, width, height, meshes: [...meshes.values()].filter((o) => o.visible), result: byValue, column, keeps: (q) => usd.three.keeps(q),
+      receiverOf: (o) => { const id = byObject.get(o); return id && role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1; },
+    });
+    labelScenes.set(usd, sceneOf);
+    layer.replaceChildren();
+    if (!labels || !byValue) return () => { cancelLabels(owner); labelScenes.delete(usd); };
+    const last = new Float64Array(32);
+    const moved = () => {
+      const c = usd.three.camera, a = c.matrixWorld.elements, b = c.projectionMatrix.elements;
+      let changed = false;
+      for (let i = 0; i < 16; i++) {
+        if (last[i] !== a[i]) { last[i] = a[i]; changed = true; }
+        if (last[16 + i] !== b[i]) { last[16 + i] = b[i]; changed = true; }
+      }
+      return changed;
+    };
+    const start = () => {
+      const canvas = usd.three.renderer.domElement, s = canvas.clientWidth && canvas.clientHeight ? sceneOf(usd.three.camera, canvas.clientWidth, canvas.clientHeight) : null;
+      if (!s) return;
+      const sm = sampler(s);
+      let drawn = 0;
+      layer.replaceChildren();
+      layer.hidden = false;
+      enqueue(owner, (until) => {
+        const done = sm.step(until);
+        for (; drawn < sm.labels.length; drawn++) {
+          const l = sm.labels[drawn], d = document.createElement('div');
+          d.className = 'tooltip';
+          d.textContent = l.text;
+          d.style.transform = `translate(${l.x}px, ${l.y}px) translate(-50%, -50%)`; // JS owns a tooltip's place
+          layer.append(d);
+        }
+        return done;
+      });
+    };
+    let timer = 0;
+    const onFrame = () => {
+      if (!moved()) return;
+      if (!layer.hidden) layer.hidden = true;
+      cancelLabels(owner);
+      clearTimeout(timer);
+      timer = window.setTimeout(start, 200);
+    };
+    moved();
+    usd.three.beforeRender.add(onFrame);
+    timer = window.setTimeout(start, 200);
+    return () => { clearTimeout(timer); cancelLabels(owner); usd.three.beforeRender.delete(onFrame); labelScenes.delete(usd); layer.replaceChildren(); };
+  }, [labels, byValue, column, objects, meshes, byObject, recv, section, usd]);
+
   // Hover: a light accent tint over the mesh, fainter over results.
   useEffect(() => {
     const o = hovered ? meshes.get(hovered) : undefined;
@@ -401,6 +451,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   return (
     <div ref={host} className="viewport" onClick={activate} onKeyDown={onKey}>
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
+      <div ref={valuesEl} className="viewport__values" data-density="compact" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
       {children && (
         <div className="viewport__name">

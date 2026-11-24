@@ -3,10 +3,11 @@
 // react-dom/server and the inlined stylesheet stay out of the app's bundle) and printed by the server. One generation per
 // report at a time; whether one is on its way and how the last one ended stay here for app_state, the menu and the call
 // after 'generating'.
-import { exclusive } from '../mcp/bridge';
-import { appView, b64, staged, storedReport, type Ctl } from '../mcp/tools';
+import { flushSync } from 'react-dom';
+import { exclusive, until } from '../mcp/bridge';
+import { appView, b64, done, staged, storedReport, type Ctl } from '../mcp/tools';
 import { fmtNum, unionRange } from '../lib/result';
-import type { Model } from '../store';
+import { inFlight, type Model } from '../store';
 import { capture } from '../viewer/capture';
 import { imageSize, readiness, type Report } from './spec';
 
@@ -49,6 +50,11 @@ async function build(id: string, c: () => Ctl): Promise<Pdf> {
     const { spec } = await storedReport(id); // under the lock: no save or edit lands between it and the shots
     const no = readiness(spec, appView(c()));
     if (no.length) throw new Error(`not ready: ${no.join('; ')}`);
+    if (spec.setup) {
+      await restore(spec, c);
+      const left = readiness({ ...spec, setup: undefined }, appView(c())); // what opening it cannot set back (the materials, say)
+      if (left.length) throw new Error(`not ready: ${left.join('; ')}`);
+    }
     const models = spec.models.map((r) => c().state.models.find((m) => m.slot === 'ABCD'.indexOf(r.model))!), images = await shots(spec, models, c);
     const x = c(), { renderReport } = await page;
     return renderReport({
@@ -61,6 +67,24 @@ async function build(id: string, c: () => Ctl): Promise<Pdf> {
   return (await r.json()) as Pdf;
 }
 
+/** Report `spec`'s setup opened on Daylight as the Sets menu opens a set (it stays open; the open models the report is
+ *  not on find no entry and keep their roles), its problem ranges set, and its models' results: the session's
+ *  (sets/kept.ts, shown at the next commit) when they ran before, else from one run. */
+async function restore(spec: Report, c: () => Ctl): Promise<void> {
+  const setup = spec.setup!;
+  flushSync(() => {
+    c().openSet(setup);
+    for (const [quantity, g] of Object.entries(spec.ranges ?? {})) c().dispatch({ type: 'VIZ', quantity, patch: { lo: g.lo, hi: g.hi } });
+  });
+  const fresh = () => { const v = appView(c()); return spec.models.every((r) => v.models.find((m) => m.model === r.model)?.result === 'fresh'); };
+  const going = () => { const x = c(); return x.busy() || x.held() || x.state.models.some((m) => inFlight(m.run)); };
+  if (await done(fresh, Date.now() + 1000, 'the results kept')) return;
+  if (!going()) flushSync(() => void c().onRun());
+  const refused = Object.entries(c().state.errors).filter(([k]) => k !== 'materials'); // materials: held until they are read
+  if (refused.length) throw new Error(`not ready: the report's setup does not run (${refused.map(([k, v]) => `${k}: ${v}`).join('; ')})`);
+  await until(() => !going(), 3600e3, "the run of the report's setup");
+}
+
 /** Each view block's images (per report model, data: URLs; [] for the other blocks) at twice their printed size: PNG over
  *  white, the block's column on the report models' range (a blank Min or Max pinned to it) or the models' own colours,
  *  its own section (none without one, never the user's), without grid, sun path, bin highlight or selection. */
@@ -70,7 +94,7 @@ async function shots(spec: Report, models: Model[], c: () => Ctl): Promise<strin
     if (b.type !== 'view') { out.push([]); continue; }
     const q = b.column?.split('_')[0], scale = q ? c().state.settings.viz.scales[q] : undefined, [lo, hi] = b.column ? unionRange(models.map((m) => m.result!), b.column) : [NaN, NaN];
     const { width, height } = imageSize(models.length, b.aspect ?? 1.6);
-    out.push(await staged(c, models.map((m) => m.slot), { column: b.column ?? undefined, colourBy: b.column ? 'value' : 'plain', sunPath: false, grid: false, clean: true, section: b.section ?? null, ...(q ? { pin: { quantity: q, min: scale?.min ?? lo, max: scale?.max ?? hi } } : {}) }, async () => {
+    out.push(await staged(c, models.map((m) => m.slot), { tab: 'daylight', column: b.column ?? undefined, colourBy: b.column ? 'value' : 'plain', sunPath: false, grid: false, clean: true, section: b.section ?? null, ...(q ? { pin: { quantity: q, min: scale?.min ?? lo, max: scale?.max ?? hi } } : {}) }, async () => {
       const urls: string[] = [];
       for (const m of models) {
         const { el } = c().viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1;

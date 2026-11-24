@@ -14,6 +14,7 @@
     { "name": "jobs", "description": "Queued simulation runs: submit, wait, read, cancel." },
     { "name": "run", "description": "The one-call blocking variant." },
     { "name": "weather", "description": "Weather files through the server's download cache." },
+    { "name": "sets", "description": "The web app's saved analysis sets (roles, settings, result choices) and combined views, shared by every client of this server: no `--mcp` needed, no local-only gate." },
     { "name": "agents", "description": "MCP for agents on this machine (`--mcp`): `mcpMessage` is the agents' endpoint; the other routes serve the web app (its side of the tool-call relay, model files opened by path, reports and their PDFs, the hidden instance's session). Without `--mcp` every route here answers `404`; a request that does not come from this machine gets `403`." },
     { "name": "meta", "description": "Health and this documentation." }
   ],
@@ -181,6 +182,45 @@
         }
       }
     },
+    "/sets": {
+      "get": {
+        "tags": ["sets"],
+        "operationId": "listSets",
+        "summary": "List the stored analysis sets (app)",
+        "description": "Every set and combined view the app stored with `saveSet`, each as a JSON string (the app parses and checks each one by itself, so a damaged file cannot break the list). Each lives in `<cache>/sets/<id>.json` (`--cache`, default `%LOCALAPPDATA%\\daylight_server`). Every client sees the same list; agents reach it through the app's `app_state`, `save_set`, `save_combined` and related tools.",
+        "responses": {
+          "200": { "description": "The sets, possibly none.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SetEntry" } }, "example": [{ "id": "facade-sun-k3f9", "spec": "{\"kind\":\"set\",\"id\":\"facade-sun-k3f9\",\"name\":\"Facade sun\",\"tool\":\"daylight\",...}" }] } } }
+        }
+      }
+    },
+    "/sets/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/SetId" }],
+      "put": {
+        "tags": ["sets"],
+        "operationId": "saveSet",
+        "summary": "Store an analysis set or combined view (app)",
+        "description": "Creates or replaces `<id>.json` with the body: one JSON object of at most 256 KB, an analysis set (`kind: set`: the roles by prim path per model, one analysis' settings, the shown column and colouring) or a combined view (`kind: combined`: its inputs, weights and functions), which the app checks; the server stores it as it comes. Written to a temporary file and renamed, so a crash never leaves half a set. The server keeps at most 500. No owner and no version check: the last write wins.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" }, "example": { "kind": "set", "id": "facade-sun-k3f9", "name": "Facade sun", "created": "2026-11-24T09:00:00.000Z", "updated": "2026-11-24T09:00:00.000Z", "tool": "daylight", "models": [{ "model": "A", "file": "building", "roles": [{ "path": "/Site/Block/Facade_S", "role": "receiver" }, { "path": "/Site/Neighbour", "role": "shade" }] }], "settings": { "sim": { "mode": "physical", "quantities": ["sunhours"] }, "time": { "mode": "annual" } }, "column": "sunhours_front", "colourBy": "value" } } } },
+        "responses": {
+          "204": { "description": "Stored." },
+          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one JSON object (the set)\n" } } },
+          "409": { "description": "A new set while 500 are stored.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the server keeps at most 500 sets: delete some first\n" } } },
+          "413": { "description": "Over 256 KB.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: a set is at most 256 KB\n" } } },
+          "500": { "description": "The file could not be written (disk full, no access).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cannot store C:\\Users\\jane\\AppData\\Local\\daylight_server\\sets\\facade-sun-k3f9.json\n" } } }
+        }
+      },
+      "delete": {
+        "tags": ["sets"],
+        "operationId": "deleteSet",
+        "summary": "Delete an analysis set or combined view (app)",
+        "description": "Removes `<id>.json`. Combined views that use a deleted set show it as missing.",
+        "responses": {
+          "204": { "description": "Deleted." },
+          "404": { "description": "No such set.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: no such set\n" } } },
+          "500": { "description": "The file could not be removed.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cannot delete C:\\Users\\jane\\AppData\\Local\\daylight_server\\sets\\facade-sun-k3f9.json\n" } } }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": ["meta"],
@@ -233,7 +273,7 @@
         "tags": ["agents"],
         "operationId": "mcpMessage",
         "summary": "MCP endpoint for agents",
-        "description": "The web app's MCP server for agents on this machine, such as Claude Code and Claude Desktop. It answers the handshake and the tool list itself and relays each tool call to the app open in a browser tab (`bridgeNext`), which carries it out with everything its UI offers and shows it live: models, roles, settings, runs, results, cameras, screenshots, charts and reports. With no app tab open, the server starts the app hidden in headless Chrome (with `--web` or `--app-url`) and the agent works there; opening the app later picks that session up.\n\n## Protocol\n\nMCP Streamable HTTP, the revisions with the `initialize` handshake: 2025-11-25, 2025-06-18 and 2025-03-26. One JSON-RPC message per POST, answered as `application/json`: no SSE stream (`mcpGet` answers 405), no `Mcp-Session-Id`, no batches, no prompts or resources.\n\n| message | answer |\n|---|---|\n| `initialize` | `protocolVersion` (the one asked for when supported, else `2025-11-25`), `capabilities: {tools: {}}`, `serverInfo`, `instructions` (how to work with the app) |\n| `ping` | `{}` |\n| `tools/list` | every tool, in one page |\n| `tools/call` | the app's `CallToolResult` (`arguments` may be left out) |\n| a notification (no `id`) | `202`, no body; `notifications/cancelled` too: hanging up cancels a call |\n| anything else (`prompts/list`, `resources/list`, `server/discover`, ...) | error `-32601` |\n\nJSON-RPC errors come with HTTP 200 and echo the request's `id` as sent; a `tools/call` of a tool `tools/list` does not name gets `-32602` (`Unknown tool`). A body that is not one JSON object gets `400` with `-32700` (`-32600` for a batch, a body without a `method`, or an `id` that is not a string or a number). A request other than `initialize` whose `MCP-Protocol-Version` header names another revision gets `400 text/plain`, so a client probing for 2026-07-28 falls back to `initialize`.\n\n**Every call answers within 55 s** (Claude Desktop ends tool calls at about 60 s, and Claude Code waits 60 s for an HTTP answer by default). Long steps (a run, a big model, a PDF) go on in the app and the reply says `running` or `generating`: call the tool again. What the agent can act on comes back as an `isError` result: no app tab open (ask the user to open the app and keep its tab open), or no answer within 55 s (the step may still be running in the app: call `app_state`).\n\n## Connect\n\nStart `daylight_server --web ..\\web\\dist --mcp` (`--web` serves the app at http://localhost:8080/ and lets the server start the hidden instance), then:\n\n- **Claude Code** (HTTP): `claude mcp add --transport http daylight http://127.0.0.1:8080/mcp`; `/mcp` in Claude Code lists the tools. If it does not connect, start Claude Code with the environment variable `MCP_PROTOCOL_NEGOTIATION=legacy` (no probe for 2026-07-28).\n- **Claude Desktop** (stdio only: its connectors run in Anthropic's cloud and cannot reach this machine): merge the entry below into `%APPDATA%\\Claude\\claude_desktop_config.json` with absolute paths (`where node` shows node.exe) and restart Claude Desktop. `server/mcp-stdio.mjs` (Node 18 or later, no packages) relays each message to `http://127.0.0.1:8080/mcp`; a URL after the script path picks another address.\n\n```json\n{ \"mcpServers\": { \"daylight\": { \"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"args\": [\"F:\\\\Github\\\\kit-sim_daylight_frontend\\\\server\\\\mcp-stdio.mjs\"] } } }\n```\n\n## Tools\n\nModels by letter A-D, building parts by USD prim path, times in local standard time; `tools/list` gives each tool's description and input schema.\n\n- **App and knowledge:** `app_state` (call it first), `guide` (`daylight`, `report`, `kit-ui`), `site_info`\n- **Models and inputs:** `open_model`, `remove_model`, `model_tree`, `set_roles` (receiver, shade, none), `set_visibility`, `set_geometry`, `get_materials`, `edit_material`, `update_settings` (site, time, simulation, weather, colour scales, charts)\n- **Runs and results:** `run`, `results`, `find_critical`, `download_result`\n- **Views and images:** `set_display`, `set_camera`, `save_view`, `screenshot` (any width and height; never moves the user's camera)\n- **Reports:** `get_report`, `save_report`, `delete_report`, `generate_report` (one option, or 2 to 4 compared; a PDF in the kit-ui kit-report layout whose charts and cameras the user can edit in the app)",
+        "description": "The web app's MCP server for agents on this machine, such as Claude Code and Claude Desktop. It answers the handshake and the tool list itself and relays each tool call to the app open in a browser tab (`bridgeNext`), which carries it out with everything its UI offers and shows it live: models, roles, settings, runs, results, cameras, screenshots, charts and reports. With no app tab open, the server starts the app hidden in headless Chrome (with `--web` or `--app-url`) and the agent works there; opening the app later picks that session up.\n\n## Protocol\n\nMCP Streamable HTTP, the revisions with the `initialize` handshake: 2025-11-25, 2025-06-18 and 2025-03-26. One JSON-RPC message per POST, answered as `application/json`: no SSE stream (`mcpGet` answers 405), no `Mcp-Session-Id`, no batches, no prompts or resources.\n\n| message | answer |\n|---|---|\n| `initialize` | `protocolVersion` (the one asked for when supported, else `2025-11-25`), `capabilities: {tools: {}}`, `serverInfo`, `instructions` (how to work with the app) |\n| `ping` | `{}` |\n| `tools/list` | every tool, in one page |\n| `tools/call` | the app's `CallToolResult` (`arguments` may be left out) |\n| a notification (no `id`) | `202`, no body; `notifications/cancelled` too: hanging up cancels a call |\n| anything else (`prompts/list`, `resources/list`, `server/discover`, ...) | error `-32601` |\n\nJSON-RPC errors come with HTTP 200 and echo the request's `id` as sent; a `tools/call` of a tool `tools/list` does not name gets `-32602` (`Unknown tool`). A body that is not one JSON object gets `400` with `-32700` (`-32600` for a batch, a body without a `method`, or an `id` that is not a string or a number). A request other than `initialize` whose `MCP-Protocol-Version` header names another revision gets `400 text/plain`, so a client probing for 2026-07-28 falls back to `initialize`.\n\n**Every call answers within 55 s** (Claude Desktop ends tool calls at about 60 s, and Claude Code waits 60 s for an HTTP answer by default). Long steps (a run, a big model, a PDF) go on in the app and the reply says `running` or `generating`: call the tool again. What the agent can act on comes back as an `isError` result: no app tab open (ask the user to open the app and keep its tab open), or no answer within 55 s (the step may still be running in the app: call `app_state`).\n\n## Connect\n\nStart `daylight_server --web ..\\web\\dist --mcp` (`--web` serves the app at http://localhost:8080/ and lets the server start the hidden instance), then:\n\n- **Claude Code** (HTTP): `claude mcp add --transport http daylight http://127.0.0.1:8080/mcp`; `/mcp` in Claude Code lists the tools. If it does not connect, start Claude Code with the environment variable `MCP_PROTOCOL_NEGOTIATION=legacy` (no probe for 2026-07-28).\n- **Claude Desktop** (stdio only: its connectors run in Anthropic's cloud and cannot reach this machine): merge the entry below into `%APPDATA%\\Claude\\claude_desktop_config.json` with absolute paths (`where node` shows node.exe) and restart Claude Desktop. `server/mcp-stdio.mjs` (Node 18 or later, no packages) relays each message to `http://127.0.0.1:8080/mcp`; a URL after the script path picks another address.\n\n```json\n{ \"mcpServers\": { \"daylight\": { \"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"args\": [\"F:\\\\Github\\\\kit-sim_daylight_frontend\\\\server\\\\mcp-stdio.mjs\"] } } }\n```\n\n## Tools\n\nModels by letter A-D, building parts by USD prim path, times in local standard time; `tools/list` gives each tool's description and input schema.\n\n- **App and knowledge:** `app_state` (call it first), `guide` (`daylight`, `views`, `report`, `kit-ui`), `site_info`\n- **Models and inputs:** `open_model`, `remove_model`, `model_tree`, `set_roles` (receiver, shade, none; the View analysis: receiver, obstruction, target with a group, none), `set_visibility`, `set_geometry`, `get_materials`, `edit_material`, `update_settings` (site, time, simulation, the View analysis, weather, colour scales, charts)\n- **Runs and results:** `run`, `results`, `find_critical`, `download_result` (Daylight, or the View analysis with `analysis: views`, as `set_roles`, `set_display` and `screenshot` take it)\n- **Views and images:** `set_display`, `set_camera`, `save_view`, `screenshot` (any width and height; never moves the user's camera)\n- **Reports:** `get_report`, `save_report`, `delete_report`, `generate_report` (one option, or 2 to 4 compared; a PDF in the kit-ui kit-report layout whose charts and cameras the user can edit in the app)\n- **Sets and combined views:** `save_set`, `open_set`, `copy_set` (a new set of one for another model, by prim path), `rename_set` (its id stays), `run_set` (in the background, without changing what the app shows), `delete_set`, `save_combined`, `delete_combined`, `combined_results` (results of sets combined per element, the Combined tab's)",
         "parameters": [
           { "name": "MCP-Protocol-Version", "in": "header", "required": false, "description": "The revision agreed in `initialize`, which clients send on every later request.", "schema": { "type": "string", "enum": ["2025-11-25", "2025-06-18", "2025-03-26"] }, "example": "2025-11-25" }
         ],
@@ -476,7 +516,8 @@
       "ClientId": { "name": "X-Client-Id", "in": "header", "required": false, "description": "Identifies one client (a browser tab, a script) for the per-client job limit and `listMyJobs`. Without it the network address is used.", "schema": { "type": "string", "maxLength": 64 }, "example": "tab-5f0e2b" },
       "TabId": { "name": "X-Client-Id", "in": "header", "required": true, "description": "This page load's id, a random UUID per load (a duplicated tab is another tab).", "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "example": "0b6f3c2a-91d4-4e57-8a2b-6c1d0e9f4a37" },
       "CallId": { "name": "id", "in": "path", "required": true, "description": "The call's id from `bridgeNext`.", "schema": { "type": "string", "format": "uuid" }, "example": "5d0c8a2e-7f13-4b6a-9c41-0e2b7d9f3a10" },
-      "ReportId": { "name": "id", "in": "path", "required": true, "description": "Report id chosen by the app: 1 to 64 of `[a-z0-9-]` (lowercase: report folders ignore case on Windows).", "schema": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" }, "example": "south-facade" }
+      "ReportId": { "name": "id", "in": "path", "required": true, "description": "Report id chosen by the app: 1 to 64 of `[a-z0-9-]` (lowercase: report folders ignore case on Windows).", "schema": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" }, "example": "south-facade" },
+      "SetId": { "name": "id", "in": "path", "required": true, "description": "Set id chosen by the app: 1 to 64 of `[a-z0-9-]` (lowercase: file names ignore case on Windows).", "schema": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" }, "example": "facade-sun-k3f9" }
     },
     "requestBodies": {
       "RunRequest": {
@@ -648,6 +689,14 @@
           "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
           "pdf": { "type": "boolean", "description": "Whether a printed PDF exists (`getReportPdf`)." },
           "spec": { "type": "string", "contentMediaType": "application/json", "description": "`report.json` as stored, as a string: parse it." }
+        }
+      },
+      "SetEntry": {
+        "type": "object",
+        "required": ["id", "spec"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+          "spec": { "type": "string", "contentMediaType": "application/json", "description": "`<id>.json` as stored, as a string: parse it." }
         }
       },
       "PrintedReport": {

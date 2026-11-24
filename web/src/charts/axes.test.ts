@@ -20,5 +20,9 @@ describe('axes', () => {
     expect(fmtTick(1004)).toBe('1,004');
     expect(fmtTick(0.4)).toBe('0.4');
     expect(fmtTick(523.456)).toBe('523');
+    expect(fmtTick(999_999)).toBe('999,999');
+    expect(fmtTick(2e6)).toBe('2e6'); // exponent form from a million: no trailing zeros on a tick
+    expect(fmtTick(2.5e9)).toBe('2.5e9');
+    expect(fmtTick(-4e7)).toBe('-4e7');
   });
 });

@@ -44,8 +44,9 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
   const target = (ids: string[], g?: string) => dispatch({ type: 'ROLE', slot: active, ids, role: 'shade', ...(g ? { group: g } : {}) }); // no group: a plain obstruction again
   const variant = useCallback((path: string, set: string, v: string) => onVariant(active, path, set, v), [onVariant, active]); // stable for the memoised tree
   const about = (m: Model) => `Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}`;
+  const reset = total ? { onReset: () => dispatch({ type: 'ROLES_RESET', slot: active }), label: `Reset the ${views ? 'view analysis' : 'daylight'} roles of model ${LETTERS[active]} to how the file opened (a single mesh receives, a scene has none)` } : undefined;
   return (
-    <Section id="model" title="Model">
+    <Section id="model" title="Model" reset={reset}>
       <div className="tabs model-tabs" role="group" aria-label="Models to compare">
         {models.map((m) => (
           <span key={m.slot} className="model-tabs__item">

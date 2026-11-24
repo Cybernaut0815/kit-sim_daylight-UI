@@ -61,7 +61,7 @@ export default defineConfig(({ command, mode }) => {
       headers: isolation,
       fs: { allow: ['..'] },
       // the agent routes too (daylight_server --mcp): the Host stays localhost:5173, which the server's local-only gate accepts
-      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt', '/mcp', '/bridge', '/files', '/reports', '/session'].map((p) => [p, proxied])),
+      proxy: MOCK ? undefined : Object.fromEntries(['/run', '/jobs', '/mesh', '/proxy', '/health', '/openapi.json', '/docs', '/redoc', '/llms.txt', '/mcp', '/bridge', '/files', '/reports', '/session', '/sets'].map((p) => [p, proxied])),
     },
     // kit-ui's stylesheets as the report inlines them (?raw): vitest blanks every other CSS import
     test: { environment: 'node', include: ['src/**/*.test.ts'], css: { include: [/kit-ui[\\/]css[\\/]/] } },

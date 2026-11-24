@@ -1,21 +1,21 @@
 {
-  "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, or in a hidden instance when no tab is open (opening the app takes that session over). Start with app_state. Read guide 'daylight' before interpreting results. Conventions: models by letter A-D (up to four design options sharing site, weather, time and settings; default the active model); building parts by USD prim path ('/' = all; find them with model_tree); times 'HH:MM' local standard time, dates YYYY-MM-DD; azimuth in degrees clockwise from true north; lengths in m and areas in m² in model coordinates (metres, Z up). Sections (set_display section: clipping planes and boxes) only cut the views: runs and results always use the whole model. Numbers come rounded as the app shows them: quote numbers only from tool output. Changed inputs make results stale: run. Long steps answer 'running' or 'generating': call again. Reports: read guide 'report', then save_report, then generate_report; the user edits report charts and cameras in the app and regenerates the PDF from its Reports menu.",
+  "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, or in a hidden instance when no tab is open (opening the app takes that session over). Start with app_state. Read guide 'daylight' before interpreting results. Conventions: models by letter A-D (up to four design options sharing site, weather, time and settings; default the active model); building parts by USD prim path ('/' = all; find them with model_tree); times 'HH:MM' local standard time, dates YYYY-MM-DD; azimuth in degrees clockwise from true north; lengths in m and areas in m² in model coordinates (metres, Z up). Sections (set_display section: clipping planes and boxes) only cut the views: runs and results always use the whole model. Numbers come rounded as the app shows them: quote numbers only from tool output. Changed inputs make results stale: run. Long steps answer 'running' or 'generating': call again. The View analysis (the app's View analysis tab: what each receiver element sees of the sky, the obstructions and target groups, and how far) has its own roles, settings, runs and results: tools act on Daylight unless given analysis 'views' (set_roles, run, results, find_critical, set_display, screenshot, download_result; its settings are update_settings' view block, its state app_state's viewAnalysis); read guide 'views' before interpreting its results. Reports: read guide 'report', then save_report, then generate_report; the user edits report charts and cameras in the app and regenerates the PDF from its Reports menu. Analysis sets keep an analysis' whole setup under a name, each entry linked to its own model (save_set; open_set applies it; copy_set makes a new set of it for another model, by prim path; rename_set renames it, its id kept); run_set runs one in the background without changing what the app shows, and combined views (save_combined, combined_results; the app's Combined tab) combine the results of sets per element: read guide 'daylight' (Analysis sets and combined views) first.",
   "tools": [
     {
       "name": "app_state",
       "title": "App state",
-      "description": "Snapshot of the app: call it first, and again whenever the user may have changed something in the UI. Returns compact JSON: the tab (the user's browser tab or the hidden instance, whether it is visible, whether the browser discarded it); per model A-D its file, loading state or load problems, meshes by role (receiver, shade, none; noShade: the receivers among them that cast no shade), faces, run status and whether its result is fresh, stale or running; the active model, the shown column and colouring; every setting (site, time, simulation, weather, colour scales, charts) and the problems that would stop a run; the saved views; and the stored reports (id, title, models, updated, PDF present, generating, last error).",
+      "description": "Snapshot of the app: call it first, and again whenever the user may have changed something in the UI. Returns compact JSON: the tab (the user's browser tab or the hidden instance, whether it is visible, whether the browser discarded it); per model A-D its file, loading state or load problems, meshes by role (receiver, shade, none; noShade: the receivers among them that cast no shade), faces, run status and whether its result is fresh, stale or running; the display (the tab shown: daylight, views or combined, with the combined view shown; the active model, the shown column and colouring, whether values are written on the surfaces); every setting (site, time, simulation, weather, colour scales, charts) and the problems that would stop a run; viewAnalysis: the View analysis' settings, its shown column and colouring, per model its meshes by role (receiver, obstruction, targets by group, none; noShade), run status and freshness, and the problems that would stop its run; the saved views; the stored reports (id, title, models, updated, PDF present, generating, last error); the saved analysis sets (id, name, analysis, column, summary: what each keeps in words, per open model its status: done, not run, queued, running, failed, no entry, no receiver, another subdivision); and the combined views (id, name, unit, op, what each shows in words, the inputs each model misses, the meshes the shown one skipped).",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "annotations": { "readOnlyHint": true }
     },
     {
       "name": "guide",
       "title": "Read a guide",
-      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions: read it before interpreting results. 'report': how reports work here and the ReportSpec reference with two examples (one option, a comparison), followed by the kit-ui kit-report skill when the app's kit-ui package ships it: read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow (from the same package, when it ships them).",
+      "description": "Reference text (markdown). 'daylight': what each result column measures, its unit and how it aggregates (annual irradiance and illuminance means include night hours), time modes, area weighting and percentiles, assumptions and limits, what the app does not compute (daylight factor, VSC, DA/sDA/UDI/ASE, glare, PV yield), how to derive common checks (EN 17037 and BRE sun hours, occupied-hour means, PV potential, shading), comparing options and critical conditions, analysis sets and combined views: read it before interpreting results. 'views': the View analysis: what each of its columns measures (sky, obstruction, target groups, distances, reach), its unit, its settings and limits: read it before interpreting View analysis results. 'report': how reports work here and the ReportSpec reference with two examples (one option, a comparison), followed by the kit-ui kit-report skill when the app's kit-ui package ships it: read it before save_report. 'kit-ui': the kit-ui design-system skill and class reference the reports follow (from the same package, when it ships them).",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "topic": { "type": "string", "enum": ["daylight", "report", "kit-ui"], "description": "Guide to read." }
+          "topic": { "type": "string", "enum": ["daylight", "views", "report", "kit-ui"], "description": "Guide to read." }
         },
         "required": ["topic"],
         "additionalProperties": false
@@ -39,7 +39,7 @@
     {
       "name": "update_settings",
       "title": "Update settings",
-      "description": "Change the inputs every model shares, as the Location, Time, Simulation and Weather panels and the Results panel's colour scale and charts do. Only the given fields change; changed inputs make results stale (call run). site.query geocodes a place name; moving the site picks the nearest weather station. time.mode: annual (every hour of the weather year), instant (one date and hour) or range (every day from from.date to to.date, from from.hour to to.hour, every step minutes). viz sets one quantity's colour scale and problem range, shared by the 3D views, charts, screenshots and PDFs; the problem range also drives the shares in results and find_critical. charts adds, changes or removes Results panel charts. Returns the new settings and the problems a run would report.",
+      "description": "Change the inputs every model shares, as the Location, Time, Simulation and Weather panels, the View settings panel (view: the View analysis' own) and the Results panel's colour scale and charts do. Only the given fields change; changed inputs make results stale (call run). site.query geocodes a place name; moving the site picks the nearest weather station. time.mode: annual (every hour of the weather year), instant (one date and hour) or range (every day from from.date to to.date, from from.hour to to.hour, every step minutes). viz sets one quantity's colour scale and problem range, shared by the 3D views, charts, screenshots and PDFs; the problem range also drives the shares in results and find_critical. charts adds, changes or removes Results panel charts. Returns the new settings and the problems a run would report.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -105,6 +105,25 @@
             },
             "additionalProperties": false
           },
+          "view": {
+            "type": "object",
+            "description": "View settings panel: the View analysis' own run inputs (its roles: set_roles with analysis 'views'; north and the materials are daylight's).",
+            "properties": {
+              "fov": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Field of view [width, down to, up to] in degrees: width 1 to 180 about each face's normal (a window; default [120, -70, 50]) or 360 all around (an eye turning on the spot, azimuth from north); down to below up to, -90 to 90; [360, 0, 0]: one ring of horizontal rays (the 2D isovist)." },
+              "cell": { "type": "number", "minimum": 0.1, "maximum": 30, "description": "Degrees per ray cell (the panel offers 0.5, 1, 2, 3, 5; 1 for thin or far targets); at most 2^20 rays per element." },
+              "sides": { "type": "string", "enum": ["front", "back", "both"], "description": "Looking side: front = where the face normal points; both adds the _back columns." },
+              "on": { "type": "string", "enum": ["faces", "vertices"], "description": "Eyes on each face (centroid) or each vertex." },
+              "offset": { "type": "number", "description": "Eye offset along the normal, m: 1.2 seated or 1.6 standing above a floor grid." },
+              "far": { "type": "number", "description": "What an open ray counts as and the cap of every distance and isovist, m, more than 0.1 (interiors: 20 to 50)." },
+              "reach": { "type": "string", "maxLength": 120, "description": "Reach distances: '' none, 'en17037' (6, 20 and 50 m), or up to 8 distances in m separated by commas: the share of the field that sees at least each before it meets anything." },
+              "virtualGround": { "type": "boolean", "description": "A plane at the model's lowest point (or groundZ) ends downward rays as ground." },
+              "groundZ": { "type": ["number", "null"], "description": "Virtual ground height, m; null: the lowest point of the meshes in the run." },
+              "transmission": { "type": "boolean", "description": "Rays pass glass (the Materials table) and count what lies behind; off: windows block like walls." },
+              "cullBackfaces": { "type": "boolean", "description": "Obstructions block only from their front side." },
+              "selfOcclude": { "type": "boolean", "description": "Receivers block rays too (default on)." }
+            },
+            "additionalProperties": false
+          },
           "weather": {
             "type": "object",
             "description": "Weather panel.",
@@ -121,7 +140,7 @@
             "type": "object",
             "description": "Colour scale and problem range of one quantity (its front and back columns share them).",
             "properties": {
-              "quantity": { "type": "string", "enum": ["radiation", "direct", "diffuse", "irradiance", "illuminance", "sunhours"], "description": "Quantity; default the shown column's." },
+              "quantity": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Quantity: a Daylight one (radiation, direct, diffuse, irradiance, illuminance, sunhours), a View analysis one (sky, ground, obstruction, obstruction_total, glazing, volume, area, distance, distance_min, reach_<D>, a target group's name) or a combined view's column (combined_<id>); default the quantity of the column the tab shown shows." },
               "gradient": { "type": "string", "description": "Colour gradient: inferno, magma, plasma, viridis, cividis, turbo, ladybug, greys, blues, greens, oranges, purples, or the key of a gradient the user made in the app (a key that is none gives the quantity's default)." },
               "scaling": { "type": "string", "enum": ["linear", "log", "sqrt", "square", "equalised"], "description": "How the values spread along the gradient between min and max: linear; log (equal ratios, equal steps: small values spread out); sqrt (stretches the low end); square (stretches the high end); equalised (every colour covers the same number of elements above the lowest value). Colours only: no number changes." },
               "min": { "type": ["number", "null"], "description": "Legend minimum in the quantity's unit; null = the data's, over every model." },
@@ -212,13 +231,15 @@
     {
       "name": "set_roles",
       "title": "Set mesh roles",
-      "description": "Set the role of every mesh at or under the given prims, as the Model panel's Receiver, Shade and Ignore buttons and its Casts shade box do. receiver: gets results and casts shade; with shade false it gets results but casts no shade and reflects nothing (e.g. a grid of measuring points inside a room, which gets the room's shade and shades neither the floor nor the walls), shade true makes it cast shade again. shade: only casts shade (e.g. neighbours, trees). none: ignored by the simulation. Instanced meshes can only shade or be ignored. A role change clears that model's result, a shade change makes it stale (call run). With sim.selfOcclude off no receiver casts shade, whatever shade says. Returns the role counts (noShade: the receivers that cast no shade), the meshes changed and the paths that matched nothing.",
+      "description": "Set the role of every mesh at or under the given prims, as the Model panel's Receiver, Shade and Ignore buttons and its Casts shade box do. receiver: gets results and casts shade; with shade false it gets results but casts no shade and reflects nothing (e.g. a grid of measuring points inside a room, which gets the room's shade and shades neither the floor nor the walls), shade true makes it cast shade again. shade: only casts shade (e.g. neighbours, trees). none: ignored by the simulation. Instanced meshes can only shade or be ignored. A role change clears that model's result, a shade change makes it stale (call run). With sim.selfOcclude off no receiver casts shade, whatever shade says. analysis 'views' sets the View analysis' own roles instead (its Model panel): receiver (gets its results), obstruction (only blocks the view), target with a group (a set of meshes whose share of the view becomes the result column <group>_front/back, e.g. 'park') or none; there view.selfOcclude governs shade false. Returns the role counts (noShade: the receivers that cast no shade; the View analysis' targets by group), the meshes changed and the paths that matched nothing.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "Whose roles: Daylight (default) or the View analysis." },
           "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Prim paths; every mesh at or under each ('/' = all)." },
-          "role": { "type": "string", "enum": ["receiver", "shade", "none"], "description": "New role." },
+          "role": { "type": "string", "enum": ["receiver", "shade", "obstruction", "target", "none"], "description": "New role: Daylight's receiver, shade or none; the View analysis' receiver, obstruction, target or none." },
+          "group": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "With role target: the target group, the result's column (e.g. 'park' gives park_front)." },
           "shade": { "type": "boolean", "description": "Only with role receiver: false = they get results but cast no shade; true = they cast shade. Left out: a new receiver casts shade, a receiver keeps its own." }
         },
         "required": ["paths", "role"],
@@ -313,10 +334,11 @@
     {
       "name": "run",
       "title": "Run the simulation",
-      "description": "Run the simulation for every model with a receiver, with the current inputs, as the Run button does: one GPU job per model, one after another. Waits up to `wait` seconds and joins a batch already running instead of starting another. Returns per model its status (done; failed, with the reason; queued or running; stale: inputs changed since; no receiver; not run), the run time, and the shown column's mean, P10 and P90 of its last result; or the problems that stopped it (fix them with update_settings, set_roles or edit_material). If it answers 'running', call run again to keep waiting. `cancel` stops the batch; models already done keep their results.",
+      "description": "Run the simulation for every model with a receiver, with the current inputs, as the Run button does: one GPU job per model, one after another. Waits up to `wait` seconds and joins a batch already running instead of starting another. Returns per model its status (done; failed, with the reason; queued or running; stale: inputs changed since; no receiver; not run), the run time, and the shown column's mean, P10 and P90 of its last result; or the problems that stopped it (fix them with update_settings, set_roles or edit_material). If it answers 'running', call run again to keep waiting. `cancel` stops the batch; models already done keep their results. analysis 'views' runs the View analysis instead (its Run button: its roles and update_settings' view block; no weather).",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "Which analysis runs: Daylight (default) or the View analysis." },
           "wait": { "type": "integer", "minimum": 1, "maximum": 40, "description": "Seconds to wait for the batch (default 40)." },
           "cancel": { "type": "boolean", "description": "true: stop the running batch instead." }
         },
@@ -326,12 +348,13 @@
     {
       "name": "results",
       "title": "Result statistics",
-      "description": "Area-weighted statistics of one result column per model, from its last run: elements, area (m²), min, P10, median, mean, P90, max, total (value x area, e.g. kWh or lm), the shares of the area (%) below, within and above the problem range, and for each threshold x the share below x and at or above x. Each model's whole-model row comes first, then rows by 'mesh' (each receiver mesh, largest first), by 'parts' (each prim in paths: the receivers at or under it) or by 'facing' (elements grouped by the side they face: N, E, S, W, up, down; useful when the building is one mesh). With several models, differences to the first. Also the unit, what the column means, whether each result is fresh, stale or running, and the run's provenance (period, hours evaluated, arguments, timing).",
+      "description": "Area-weighted statistics of one result column per model, from its last run: elements, area (m²), min, P10, median, mean, P90, max, total (value x area, e.g. kWh or lm), the shares of the area (%) below, within and above the problem range, and for each threshold x the share below x and at or above x. Each model's whole-model row comes first, then rows by 'mesh' (each receiver mesh, largest first), by 'parts' (each prim in paths: the receivers at or under it) or by 'facing' (elements grouped by the side they face: N, E, S, W, up, down; useful when the building is one mesh). With several models, differences to the first. Also the unit, what the column means, whether each result is fresh, stale or running, and the run's provenance (period, hours evaluated, arguments, timing). analysis 'views': the View analysis' results (columns such as sky_front, obstruction_total_front, distance_min_front, reach_100_front or a target group's park_front).",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "Whose results: Daylight (default) or the View analysis." },
           "models": { "type": "array", "minItems": 1, "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "description": "Models, the first is the reference; default every model with a result." },
-          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column, e.g. 'sunhours_front'; default the shown one." },
+          "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "Result column, e.g. 'sunhours_front' (View analysis: 'sky_front'); default the shown one." },
           "by": { "type": "string", "enum": ["mesh", "parts", "facing"], "description": "Rows per receiver mesh, per prim in paths, or per facing side; default parts when paths are given, else mesh." },
           "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prim paths: one row each with by parts; with mesh or facing, only the receivers under them." },
           "thresholds": { "type": "array", "items": { "type": "number" }, "maxItems": 8, "description": "Values in the column's unit, e.g. [1.5, 3, 4] h; each gives the area shares below and at or above it." },
@@ -344,12 +367,13 @@
     {
       "name": "find_critical",
       "title": "Find critical areas",
-      "description": "Where a model does worst in one column: its result elements under `below` or over `above` (default: the problem range set with update_settings viz), grouped by receiver mesh and the side they face (N, E, S, W, up, down), largest problem area first. Per group: mesh path, facing, elements, problem area (m²) and its share of that mesh side, mean and worst value, centre and box (m, model coordinates, Z up), normal, a camera `view` framing it from the side it faces, and `near`, the cutaway (m) that clears what stands in front. Also the model's whole problem area and share. Show a group with screenshot (view and near) or set_camera (view); for another image shape pass its box and normal as frame. Needs a current result: run first when it is stale.",
+      "description": "Where a model does worst in one column: its result elements under `below` or over `above` (default: the problem range set with update_settings viz), grouped by receiver mesh and the side they face (N, E, S, W, up, down), largest problem area first. Per group: mesh path, facing, elements, problem area (m²) and its share of that mesh side, mean and worst value, centre and box (m, model coordinates, Z up), normal, a camera `view` framing it from the side it faces, and `near`, the cutaway (m) that clears what stands in front. Also the model's whole problem area and share. Show a group with screenshot (view and near) or set_camera (view); for another image shape pass its box and normal as frame. Needs a current result: run first when it is stale. analysis 'views': in the View analysis' result.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
-          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column; default the shown one." },
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "Whose result: Daylight (default) or the View analysis." },
+          "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "Result column; default the shown one." },
           "below": { "type": "number", "description": "Elements under this value are problems (column's unit)." },
           "above": { "type": "number", "description": "Elements over this value are problems (column's unit)." },
           "limit": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Most groups (default 8)." }
@@ -361,13 +385,17 @@
     {
       "name": "set_display",
       "title": "Set the display",
-      "description": "Change what the views show, as the run bar, Results panel and app bar do. Only the given fields change. active: the model the Model and Materials panels, Views and Download act on. column and colourBy: the result shown and whether surfaces are coloured by value or plain. highlight: fade everything outside [lo, hi] in the column's unit (null clears it; a run clears it too). Also the theme, the sun path and its size, two or three views side by side or stacked, linked cameras, and Run on every change (auto: every input change starts a run). section: the clipping planes and boxes every view shows, as the Section menu does, replacing the whole section ({planes: [], boxes: []} clears it); a box comes as its footprint with bottom and top, as a box (e.g. a find_critical group's, turned by rotation) or round prims of the active model. View only: runs, results, find_critical, charts and downloads use the whole model, and results stay fresh. Returns the display state, its section with every box as a footprint (set_display takes it back as it is).",
+      "description": "Change what the views show, as the app bar's tabs, the run bar, Results panel and Display menu do. Only the given fields change. tab: the analysis the app shows (daylight, views or combined), each with its own results, column and colouring; combined: the combined view the Combined tab shows (by id; switches to it). active: the model the Model and Materials panels, Views and Download act on. column and colourBy: the result shown on the tab and whether surfaces are coloured by value or plain (analysis: change them for that analysis instead, shown or not). labels: write the value of each visible element on the surfaces (as the Display menu's Values on the surfaces). highlight: fade everything outside [lo, hi] in the column's unit (null clears it; a run clears it too). Also the theme, the sun path and its size, two or three views side by side or stacked, linked cameras, and Run on every change (auto: every input change starts a run). section: the clipping planes and boxes every view shows, as the Section menu does, replacing the whole section ({planes: [], boxes: []} clears it); a box comes as its footprint with bottom and top, as a box (e.g. a find_critical group's, turned by rotation) or round prims of the active model. View only: runs, results, find_critical, charts and downloads use the whole model, and results stay fresh. Returns the display state, its section with every box as a footprint (set_display takes it back as it is).",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "tab": { "type": "string", "enum": ["daylight", "views", "combined"], "description": "The tab shown: Daylight, View analysis or Combined." },
+          "combined": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Combined view id to show on the Combined tab (app_state combined)." },
           "active": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Active model." },
-          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column shown in every view." },
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "Whose column and colourBy change; default the tab's." },
+          "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "Result column shown in every view." },
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "Result colours, or the model's own look." },
+          "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces while coloured by value." },
           "highlight": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[lo, hi] to keep in colour, or null." },
           "theme": { "type": "string", "enum": ["auto", "light", "dark"], "description": "App theme; auto follows the system." },
           "sunPath": { "type": "boolean", "description": "Show the sun path around the model." },
@@ -500,7 +528,7 @@
     {
       "name": "screenshot",
       "title": "Take a screenshot",
-      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). column, colourBy, sunPath, grid and section apply to this shot only; section: clipping planes and boxes as set_display takes them, null for none, by default the views' own. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side, and comes at a lower JPEG quality, then with fewer pixels, when the reply would pass about 800 KB (shared by the models' images). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours), the size and the section.",
+      "description": "Render model views as JPEG images of any width and height, independent of the on-screen view's shape, also while the tab is hidden or in the background. Never moves the user's camera. Each model is drawn from its current camera, from `view`, or framed with `frame` (as in set_camera, fitted to width/height). `near` cuts away geometry closer than that many metres to the eye, e.g. a neighbour in front of a critical facade (find_critical gives it). tab, combined, column, colourBy, labels, sunPath, grid and section apply to this shot only: tab the analysis whose results and colours it shows (default the tab shown), combined a combined view by id (on the Combined tab), labels the values written on the surfaces (default as the Display menu has it); section: clipping planes and boxes as set_display takes them, null for none, by default the views' own. Size: 16 to 8192 px a side, at most 8 megapixels; the image returned is scaled to at most 1568 px on its long side, and comes at a lower JPEG quality, then with fewer pixels, when the reply would pass about 800 KB (shared by the models' images). Per model one image and a text: the camera (from where, how high, how far), the colour scale (gradient, min to max, problem range colours), the size and the section.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -543,8 +571,12 @@
           "elevation": { "type": "number", "minimum": -89, "maximum": 89, "description": "Frame: degrees above the horizon, as in set_camera (default 20; with direction auto above the framed surfaces' own tilt; a closed shape from the SW at 35 degrees unless given)." },
           "projection": { "type": "string", "enum": ["perspective", "orthographic"], "description": "Frame: projection; default the view's current one." },
           "near": { "type": "number", "minimum": 0, "description": "Cutaway: geometry closer to the eye than this, m, is not drawn." },
-          "column": { "type": "string", "pattern": "^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$", "description": "Result column to colour by; default the shown one." },
+          "tab": { "type": "string", "enum": ["daylight", "views", "combined"], "description": "The analysis shown: Daylight, View analysis or Combined; default the tab shown." },
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "As tab, for one of the two analyses: give tab or analysis." },
+          "combined": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Combined view id to show (the Combined tab); default the one it shows." },
+          "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "Result column to colour by; default the shown one." },
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "Result colours or the model's own look; default the current." },
+          "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces (coloured by value only); default as the Display menu has it." },
           "sunPath": { "type": "boolean", "description": "Draw the sun path; default as shown." },
           "grid": { "type": "boolean", "description": "Draw the ground grid; default as shown." },
           "section": {
@@ -606,7 +638,7 @@
     {
       "name": "get_report",
       "title": "Get a report",
-      "description": "The full spec of one stored report (app_state lists the ids), including `updated`: edit it and pass it to save_report together with that `updated`. Also whether a PDF exists, and whether the report is ready to generate or what differs (a model not open, another variant or roles, a stale result), which open_model, set_geometry, set_roles and run can restore.",
+      "description": "The full spec of one stored report (app_state lists the ids), including `updated`: edit it and pass it to save_report together with that `updated`. Also whether a PDF exists, and whether the report is ready to generate or what differs (a model not open, another variant or roles, a stale result), which open_model, set_geometry, set_roles and run can restore; and `setup`, the Daylight setup the save recorded (per model its receiver and shade counts, the simulation and time settings, the column), which generating opens first, so roles, those settings and the results need no restoring then.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -620,7 +652,7 @@
     {
       "name": "save_report",
       "title": "Save a report",
-      "description": "Create or replace a report stored in the app, from a ReportSpec: read guide 'report' first (fields, rules, two examples). One model gives a report on that option, 2 to 4 models a comparison (the first is the reference). Blocks: text that quotes numbers copied from tool output, charts (ChartSpec), views (a camera from find_critical or set_camera, with near, aspect and a section of their own, as set_display takes one) and tables. The spec is validated (each problem names its path, e.g. blocks[3].caption) and stored with each model's current run: after a run with other inputs, save it again. When replacing, pass the `updated` you got from get_report: the save is refused when the user changed the report in the app since (re-read it and merge). Returns the id, updated and whether it is ready to generate; then call generate_report.",
+      "description": "Create or replace a report stored in the app, from a ReportSpec: read guide 'report' first (fields, rules, two examples). One model gives a report on that option, 2 to 4 models a comparison (the first is the reference). Blocks: text that quotes numbers copied from tool output, charts (ChartSpec), views (a camera from find_critical or set_camera, with near, aspect and a section of their own, as set_display takes one) and tables. The spec is validated (each problem names its path, e.g. blocks[3].caption) and stored with each model's current run and the current Daylight setup (each report model's roles, the simulation and time settings, the column shown, the problem ranges): generating opens that setup first, as the Sets menu opens a set, and runs what has no result, so roles or settings changed in the app since do not stop it (the files, variants, site, north and weather must still be as at save). After a run with other inputs, save it again. When replacing, pass the `updated` you got from get_report: the save is refused when the user changed the report in the app since (re-read it and merge). Returns the id, updated and whether it is ready to generate; then call generate_report.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -648,7 +680,7 @@
     {
       "name": "generate_report",
       "title": "Generate report PDF",
-      "description": "Build a stored report as a PDF: draw its figures from the current results (charts; each view block as one image per report model, on the shared colour scale), lay it out in the kit-ui kit-report format (summary, inputs, results, method and assumptions, provenance) and print it with headless Chrome or Edge. Refused with the reason when the report is not ready (a model not open, a result stale or running, or run with other inputs than at save_report). Waits up to 40 s, then answers 'generating': call again for the result. Returns the PDF path, a link to it, pages, bytes and fonts (fallback should be empty). Then read the PDF back if you can, else ask the user to check it; the user edits report charts (settings button in Results) and cameras (Views menu) and regenerates from the Reports menu.",
+      "description": "Build a stored report as a PDF: draw its figures from the current results (charts; each view block as one image per report model, on the shared colour scale), lay it out in the kit-ui kit-report format (summary, inputs, results, method and assumptions, provenance) and print it with headless Chrome or Edge. A report saved with its setup (every save now) opens it on the Daylight tab first, sets its problem ranges and runs the models without a result (a result run before in this session shows at once); the setup stays open, and the open models the report is not on keep their roles. Refused with the reason when the report is not ready (a model not open, another file or variant; for an older report the site or weather changed, and without a setup also a result stale or running, or run with other inputs than at save_report). Waits up to 40 s, then answers 'generating': call again for the result. Returns the PDF path, a link to it, pages, bytes and fonts (fallback should be empty). Then read the PDF back if you can, else ask the user to check it; the user edits report charts (settings button in Results) and cameras (Views menu) and regenerates from the Reports menu.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -661,15 +693,217 @@
     {
       "name": "download_result",
       "title": "Download the result",
-      "description": "Save a model's result as a file in the browser's downloads folder, as the Download menu does (the model becomes the active one): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ. Receivers are coloured with the shown column's colour scale (set_display column); every format but OBJ also holds each result column as values. mode, USD only: 'replace' (default) puts the colours in place of the receivers' materials; 'variants' adds a 'daylight' variant set per receiver to a flattened stage. Returns what was saved; the browser picks the folder. A big model may answer 'running': the file is still being written and lands in the downloads folder by itself, so do not call again for it (a call while one is written is refused). Several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them: the reply says so.",
+      "description": "Save a model's result as a file in the browser's downloads folder, as the Download menu does (the model becomes the active one): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ. Receivers are coloured with the shown column's colour scale (set_display column); every format but OBJ also holds each result column as values. mode, USD only: 'replace' (default) puts the colours in place of the receivers' materials; 'variants' adds a 'daylight' variant set per receiver to a flattened stage. Returns what was saved; the browser picks the folder. A big model may answer 'running': the file is still being written and lands in the downloads folder by itself, so do not call again for it (a call while one is written is refused). Several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them: the reply says so. analysis 'views': the View analysis' result, coloured by its shown column (set_display analysis views column).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "Whose result: Daylight (default) or the View analysis." },
           "format": { "type": "string", "enum": ["usdz", "usda", "usdc", "usd", "glb", "gltf", "obj"], "description": "File format." },
           "mode": { "type": "string", "enum": ["replace", "variants"], "description": "USD only: colours replace the materials, or a variant set per result." }
         },
         "required": ["format"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "save_set",
+      "title": "Save an analysis set",
+      "description": "Save an analysis' whole setup under a name, as the Sets menu's Save does, stored in the app for every client: per open model an entry linked to it (its letter and file) with its roles (receivers and shades by prim path) and its Materials edits; the analysis' run settings (Daylight: sim and time; View analysis: view), north, the site and weather (Daylight; an uploaded EPW by its file name), the column it shows, the colours of every quantity, the charts and the subdivision level. Not kept: display switches and per-mesh refinements. The setup is the app's now, with `roles` and `settings` applied to the set only: the app itself does not change (open_set applies a set to it). With `id` the set is replaced (same analysis; its created time kept). Returns the set and its status per open model (done when a result for its inputs is in this session's cache).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "Set name, e.g. 'South facade, summer'." },
+          "analysis": { "type": "string", "enum": ["daylight", "views"], "description": "The analysis the set is of; default the set's (with id), else the tab shown (daylight on the Combined tab)." },
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "A saved set's id to replace (app_state sets); left out: a new set." },
+          "roles": {
+            "type": "array",
+            "maxItems": 64,
+            "description": "Role changes for the set only, applied in order to the app's roles now, as set_roles takes them. Daylight: receiver, shade, none. View analysis: receiver, obstruction, target (with group), none.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "Model letter; default the active model." },
+                "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Prim paths; every mesh at or under each ('/' = all)." },
+                "role": { "type": "string", "enum": ["receiver", "shade", "none", "obstruction", "target"], "description": "New role." },
+                "shade": { "type": "boolean", "description": "Only with role receiver: whether they cast shade (block rays)." },
+                "group": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "View analysis, with role target: its group, the result's column (e.g. 'park' gives park_front)." }
+              },
+              "required": ["paths", "role"],
+              "additionalProperties": false
+            }
+          },
+          "settings": {
+            "type": "object",
+            "description": "Run settings for the set only, as update_settings takes them: sim (north too) and time (a Daylight set), view (a View analysis set).",
+            "properties": {
+              "sim": { "type": "object", "description": "As update_settings sim." },
+              "time": { "type": "object", "description": "As update_settings time." },
+              "view": { "type": "object", "description": "As update_settings view." }
+            },
+            "additionalProperties": false
+          },
+          "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "The result column the set shows and run_set quotes; default the analysis' shown one." },
+          "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "Colouring when the set is opened; default the analysis' now." }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "open_set",
+      "title": "Open an analysis set",
+      "description": "Apply a saved set to the app, as the Sets menu's Open does, and show its tab: its run settings, north, site and weather (an uploaded EPW stays when it is the file the set names, else weather asks for it again), colours, charts and subdivision level (the models are re-read at it, their roles kept by path), and per open model its own entry's roles and Materials edits: the entry of its letter and file (how 'same'), else, when that letter now shows another file, the entry's file reopened in another slot (how 'file'). An entry never goes to another model: a model without one keeps its roles and edits (entry null; copy_set makes a set for it), and an entry whose file is not open waits (notOpen). Role and setting changes make results stale; a result kept this session for the same inputs comes back without a run. Returns, per open model, the entry it took, how, and how many of its paths matched.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Set id (app_state sets)." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": false }
+    },
+    {
+      "name": "copy_set",
+      "title": "Copy an analysis set to another model",
+      "description": "Make a new set from one entry of a saved set for another open model, as the Sets fold-out's Copy to model does, then save and open it (to change and save_set with its id): the new set holds that model alone (its letter and file), the entry's roles where the model has the same prim paths (every other mesh of it gets none), its Materials edits of the material paths the model has plus the default and glass rows, and everything else of the set as it is. The set copied stays as it was. Returns the new set, the roles matched of the entry's, the model's meshes left without a role and the material edits matched.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Set id to copy (app_state sets)." },
+          "to": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "The open model the new set is for." },
+          "from": { "type": "string", "enum": ["A", "B", "C", "D"], "description": "The set's entry to copy (its letter in the set); needed when the set has several." },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "The new set's name; default '<set name> for <file>'." }
+        },
+        "required": ["id", "to"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": false }
+    },
+    {
+      "name": "rename_set",
+      "title": "Rename an analysis set",
+      "description": "Give a saved set another name, as the Combined tab's Rename does, for every client: its id and everything it keeps stay as they are, so combined views that take it as an input and the tab it is open on keep it. A combined view is renamed with save_combined (its id and a new name). Returns the set's id, its old name and its new one.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Set id (app_state sets)." },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "The new name (trimmed; not blank)." }
+        },
+        "required": ["id", "name"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": false }
+    },
+    {
+      "name": "run_set",
+      "title": "Run an analysis set",
+      "description": "Run a saved set in the background without opening it, as the Combined tab's Sets panel does: per open model with its own entry, the model as it would be with the set's roles, Materials edits and settings (a set of another subdivision level runs only once opened: open_set it), one job at a time and only while neither tab runs. Results go into this session's cache (open_set, the Combined tab and combined_results find them; a run with the same inputs is not repeated). Default: the models that have no result or failed; models: these (re-quoted when done). Waits within the call's budget (wait false: answers at once), then answers 'running': call again. Returns per model its status and, when done, the set's column with its mean, P10 and P90.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Set id (app_state sets)." },
+          "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "minItems": 1, "maxItems": 4, "description": "Models to run; default those without a result for the set." },
+          "wait": { "type": "boolean", "description": "Wait for the runs within the call's budget (default true)." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_set",
+      "title": "Delete an analysis set",
+      "description": "Delete a saved set for every client (the Sets panel's Delete). This cannot be undone; results it ran stay in this session's cache. A combined view that takes it as an input then misses it (the reply names them).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Set id." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": true }
+    },
+    {
+      "name": "save_combined",
+      "title": "Save a combined view",
+      "description": "Create or replace a combined view, as the Combined tab's editor does: per element, one value from the results of up to 8 inputs, each a saved set's column, transformed by fn (raw; normalise or invert to 0 to 1 over lo..hi, default every model's range; log10; threshold: 1 at or above lo; band: 1 within lo..hi), weighted, then joined by op (mean and sum weighted, min, max, or product with weights as powers). meshes limits an input to prims (default every receiver); an element counts the inputs whose meshes cover it. Elements are matched by mesh and index: inputs must run on the same faces or vertices. Read guide 'daylight' (Analysis sets and combined views) first. Returns the view in words and what each model misses (run_set or combined_results runs it).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "A combined view's id to replace; left out: a new view." },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80, "description": "View name, e.g. 'Facade score'." },
+          "unit": { "type": "string", "maxLength": 16, "description": "The result's unit ('' or none: a score, its total over the area in m²)." },
+          "op": { "type": "string", "enum": ["mean", "sum", "min", "max", "product"], "description": "How the inputs join per element." },
+          "inputs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "description": "The inputs, each a saved set's column.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "set": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Set id (app_state sets)." },
+                "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "The set's result column." },
+                "fn": { "type": "string", "enum": ["raw", "normalise", "invert", "log", "threshold", "band"], "description": "Transform (default raw)." },
+                "lo": { "type": "number", "description": "normalise, invert, band: lower bound; threshold: the threshold (default the middle of the range)." },
+                "hi": { "type": "number", "description": "normalise, invert, band: upper bound." },
+                "weight": { "type": "number", "minimum": 0, "description": "Weight (default 1; 0: left out)." },
+                "meshes": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "maxItems": 50, "description": "Prims this input covers; default every receiver." }
+              },
+              "required": ["set", "column"],
+              "additionalProperties": false
+            }
+          },
+          "look": {
+            "type": "object",
+            "description": "Its colours until the Results panel sets its own.",
+            "properties": {
+              "gradient": { "type": "string", "description": "Colour gradient, as update_settings viz.gradient." },
+              "scaling": { "type": "string", "enum": ["linear", "log", "sqrt", "square", "equalised"], "description": "How values spread along the gradient." },
+              "min": { "type": ["number", "null"], "description": "Legend minimum; null = the data's." },
+              "max": { "type": ["number", "null"], "description": "Legend maximum; null = the data's." },
+              "lo": { "type": ["number", "null"], "description": "Problem range: values under it count as problems." },
+              "hi": { "type": ["number", "null"], "description": "Problem range: values over it count as problems." }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["name", "op", "inputs"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_combined",
+      "title": "Delete a combined view",
+      "description": "Delete a combined view for every client (the Combined views panel's Delete); its input sets stay. This cannot be undone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Combined view id." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "annotations": { "destructiveHint": true }
+    },
+    {
+      "name": "combined_results",
+      "title": "Combined view results",
+      "description": "A combined view's numbers per model, as results gives a column's (area-weighted; values as the app rounds them), without changing what the app shows: over every element it covers and per receiver mesh, per prim path or per side faced, the problem range's shares (the Results panel's for it, else its look's) and threshold shares, the differences to the first model with a result. First runs the input sets that miss a result (wait false: quote what there is). Per model also the inputs it misses and the meshes skipped (an input run on other elements). Answers 'running' while inputs still run: call again.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "Combined view id (app_state combined)." },
+          "models": { "type": "array", "items": { "type": "string", "enum": ["A", "B", "C", "D"] }, "minItems": 1, "maxItems": 4, "description": "Models; default every model with a file." },
+          "by": { "type": "string", "enum": ["mesh", "parts", "facing"], "description": "Rows: per receiver mesh (default), per prim path (parts, with paths), or per side faced." },
+          "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "minItems": 1, "description": "Prim paths: the rows (parts), or the receivers counted (mesh, facing)." },
+          "thresholds": { "type": "array", "items": { "type": "number" }, "maxItems": 8, "description": "Values in the view's unit: the area share below and at or above each." },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Most rows per model (default 50)." },
+          "wait": { "type": "boolean", "description": "Run the input sets that miss a result first (default true)." }
+        },
+        "required": ["id"],
         "additionalProperties": false
       }
     }

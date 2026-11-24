@@ -341,8 +341,54 @@ Each is an approximation: say so, and what it leaves out.
   space character). No comparison, arrow or check-mark symbols, no Greek letters or sum signs: write >=, <=, ->, "at
   least", "about", "tau" or "transmittance", "rho" or "reflectance".
 - A unit with every number: kWh/m², kWh, W/m², lx, h, m², %; differences of shares in percentage points.
-- Numbers as the tools give them (3 significant digits, whole numbers from 1000; shares in whole percent, one decimal
-  under 10 %); never more digits.
+- Numbers as the tools give them (3 significant digits, whole numbers from 1000 up to a million, 3 significant digits
+  again from there, which the app writes as 1.23e6; shares in whole percent, one decimal under 10 %); never more digits.
 - Say once what the quantity measures and its main assumption (e.g. sun hours: cloudless, geometric).
 - Keep results, interpretation and recommendation apart, and state the limits that matter for the question.
 - Reports: read guide 'report' first.
+
+## 11. Analysis sets and combined views
+
+- A set is one analysis' whole setup under a name: per open model an entry linked to it (its letter and file) with its
+  roles (receivers and shades by prim path, a receiver's casts-shade flag, a View analysis target's group) and its
+  Materials edits; the analysis' run settings (Daylight: sim and time; View analysis: view), north, the site and
+  weather (Daylight; an uploaded EPW by its file name: opened elsewhere, weather asks for that file again), the column
+  it shows, the colours of every quantity, the charts and the subdivision level. Not in it: display switches,
+  per-mesh refinements and the geometry. A set saved before these were kept leaves them as the app has them (app_state
+  summary says "not kept"). Every client of the app shares the sets.
+- save_set saves the app's setup now; its roles and settings change the set only, so several setups (a facade's
+  receivers in summer and in winter, a daylight and a view analysis of the same facade) are kept without changing what
+  the user sees. open_set applies one to the app and shows its tab; app_state's summary says what each keeps.
+- Each entry applies to its own model only: the one with its letter and file, else (its letter shows another file now)
+  its file reopened in another slot. An entry never goes to another model, not even of the same file: a model without
+  one keeps its roles and edits, and is not run (status 'no entry'). open_set says which entry each model took
+  (notOpen: entries whose file is not open).
+- copy_set makes a set for another model (another design option, the same file in another slot): a new set of one entry
+  for that model, with the roles of the prim paths it has (every other mesh none), the Materials edits of the material
+  paths it has and the default and glass rows, and the rest of the set as it is; it is saved and opened, so change it
+  and save_set it with its id. It says how many roles and edits matched: few matched means another model's paths, so
+  assign roles with set_roles.
+- rename_set gives a set another name only: its id and all it keeps stay, so combined views that take it as an input
+  keep it (save_set with its id would take the app's setup now as well). A combined view is renamed with save_combined.
+- run_set runs a set in the background: the app keeps showing what it shows, and one job runs at a time, only while
+  neither tab runs. Results stay in this session's cache (gone on reload, or when a model is opened, re-read or
+  removed), by their exact inputs: run_set, open_set and the Combined tab find them without running again. Status per
+  model: done, not run, queued, running, failed, no entry, no receiver, another subdivision (a set of another level runs
+  only once opened: open_set it).
+- A combined view takes up to 8 inputs, each a set's column, and per element transforms each (fn: raw; normalise and
+  invert to 0 to 1 over lo to hi, by default the range over every model; log10; threshold: 1 at or above lo, else 0;
+  band: 1 within lo to hi, else 0), weights it and joins them (op: weighted mean or sum, min, max, or the product with
+  the weights as powers). meshes limits an input to prims; an element takes the inputs that cover it.
+- Inputs combine element by element: each must have run on the same elements (the same receiver meshes, faces or
+  vertices, subdivision). For a mesh where an input ran on other elements, that input is skipped (combined_results
+  mismatches; the Results panel's "Skipped"): give every set the same receivers.
+- Units: raw inputs keep theirs, and mean or sum only join like with like (radiation in kWh/m² with radiation). Mixing
+  quantities takes normalise, invert, threshold or band and gives a score (unit ''), whose total is the score × area in
+  m². Say how a score is built (combined_results and app_state give it in words) whenever you quote one.
+- Typical: a daylight set and a View analysis set on the same receivers; a score as the mean of normalised sunhours and
+  inverted obstruction; or two criteria as threshold inputs with op min (1 where both hold): combined_results with
+  thresholds [0.5] gives the share of the area at or above 0.5, where both hold.
+- With several models, each combines its own input results; normalise and invert bounds span every model, so the
+  scores compare, and the differences are to the first model with a result.
+- Show one: set_display with tab 'combined' and combined (its id), or screenshot with the same; labels writes the
+  values on the surfaces.

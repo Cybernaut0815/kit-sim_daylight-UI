@@ -16,6 +16,7 @@ import { BUILT_IN, chartData, dataOf, type ChartSpec, type Data, type Row } from
 import { hexAt, type Scale } from '../lib/gradients';
 import { SIDE_HELP, areaMean, columnLabel, fmtDiff, fmtNum, helpFor, rangeShares, shareBelow, splitColumn, unitFor } from '../lib/result';
 import { chartSpec, type Stored } from '../report/spec';
+import { OP_LABEL, type Op } from '../sets/model';
 import { gpuSeconds, inFlight, type Action, type Model, type Probe, type Run, type RunResult, type Settings, type Tab } from '../store';
 import { Alert, Illustration, LETTERS, Segmented, Swatch, Tag, pct, rowKeys } from '../ui';
 
@@ -36,6 +37,11 @@ interface Props {
 const cacheLine = (c: Record<string, string> | undefined, views = false) =>
   !c ? '' : c.response === 'hit' ? 'Identical run, replayed from the server cache.'
     : `Scene ${c.scene === 'reused' ? 'reused' : 'built'}${views ? '' : `, ${c.weather === 'hit' ? 'weather cached' : c.weather === 'none' ? 'clear sky' : 'weather parsed'}`}.`;
+/** A combined view's result line: the inputs it used of those it has, and how many it misses. */
+const usedOf = (r: RunResult) => {
+  const c = r.manifest.combined;
+  return c ? `${c.used} of ${c.of} input${c.of === 1 ? '' : 's'} used${c.missing.length ? `, ${c.missing.length} missing` : ''}` : '';
+};
 /** A view analysis class's name: the core's three, or a target group's own. */
 const className = (q: string) => (q === 'sky' || q === 'ground' || q === 'obstruction' ? `${q[0].toUpperCase()}${q.slice(1)}` : q);
 /** A run's times: its GPU share of the compute (a run replayed from the server cache computed nothing), the round trip. */
@@ -153,7 +159,7 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
   ] : []), [charts, groups, runs, shown, viz]);
   // the view analysis' bars, per model, on the shown column's side: the area-weighted mean share of the field that ends on
   // each class (sky, ground, obstruction, each target group; they sum to 1) and that reaches each distance; glazing apart
-  const views = analysis === 'views', side = shown ? splitColumn(shown)[1] : '';
+  const views = analysis === 'views', combo = analysis === 'combined', side = shown ? splitColumn(shown)[1] : '';
   const viewBars = useMemo(() => {
     const res = runs.filter((m) => m.result);
     if (!views || !side || !res.length) return null;
@@ -170,9 +176,10 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
   const lineOf = (m: Compared, d: Data | null): { busy: boolean; text: string } => {
     const ahead = m.run.status === 'queued' ? m.run.position : 0;
     if (ahead) return { busy: true, text: `Waiting for the GPU, ${ahead} job${ahead > 1 ? 's' : ''} ahead` };
-    if (inFlight(m.run) && (!auto || progressOf(m.run))) return { busy: true, text: progressOf(m.run) ?? (m.run.status === 'queued' && many ? 'Waiting for its turn' : 'Running with the new inputs') };
-    if (!many) return { busy: false, text: d ? timingOf(d.r) : '' };
+    if (inFlight(m.run) && (!auto || progressOf(m.run))) return { busy: true, text: progressOf(m.run) ?? (combo ? 'Running the sets it needs' : m.run.status === 'queued' && many ? 'Waiting for its turn' : 'Running with the new inputs') };
+    if (!many) return { busy: false, text: d ? (combo ? usedOf(d.r) : timingOf(d.r)) : '' };
     if (!m.objects.length) return { busy: false, text: 'No model yet' };
+    if (combo) return { busy: false, text: d ? usedOf(d.r) : 'No input result yet: see Combined views' };
     if (!m.objects.some((o) => o.role === 'receiver')) return { busy: false, text: 'No receiver mesh: not run' };
     if (d) return { busy: false, text: `${timingOf(d.r)}. ${m.stale ? 'Inputs changed since this run.' : cacheLine(d.r.cache, views)}` };
     if (m.result) return { busy: false, text: 'No result for this column (an earlier run): run again' };
@@ -186,7 +193,9 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
         <div className="empty-state">
           <div className="empty-state__icon"><Illustration kind="results" /></div>
           <h3>No results yet</h3>
-          <p>{views
+          <p>{combo
+            ? 'Save analysis sets on the Daylight and View analysis tabs, then a combined view in the Combined views panel: it runs the sets it needs and shows one value per element here.'
+            : views
             ? 'Mark a receiver mesh (and obstructions, targets), set the field of view, then run the view analysis. The shares of sky, obstruction and targets and the view distances appear on the meshes and in the charts here.'
             : 'Mark a receiver mesh, set the site and time, then run the simulation. The values appear on the meshes and in the distribution charts here.'}</p>
         </div>
@@ -266,7 +275,10 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
           return <div key={m.slot} className="line" title={`Model ${LETTERS[m.slot]}${m.name ? `, ${m.name}` : ''}: ${t.text}`}><Tag slot={m.slot} /> {t.busy && <span className="spinner" aria-hidden="true" />} {t.text}</div>;
         };
         const vw = r.manifest.view, rest = many ? '.' : `, ${fmtNum(r.weights.length)} ${r.on} on ${ref.rows.length} ${ref.rows.length === 1 ? 'mesh' : 'meshes'}.`;
-        const status = lineOf(one, ref), what = vw
+        const cm = r.manifest.combined, switches = cm ? (cm.mismatches.length ? `Skipped: ${cm.mismatches.join('; ')}` : '') : r.switches;
+        const status = lineOf(one, ref), what = cm
+          ? `${OP_LABEL[cm.op as Op] ?? cm.op} of ${cm.of} input${cm.of === 1 ? '' : 's'}${rest}`
+          : vw
           ? `${(vw.grid[0] * vw.grid[1]).toLocaleString('en-GB')} rays per element (${vw.fov[0]}° wide, ${vw.fov[1]}° to ${vw.fov[2]}°, ${vw.cell}° cells), far ${fmtNum(vw.far)} m${rest}`
           : `${r.manifest.duration_h} h evaluated, ${(r.manifest.dirs?.sun ?? 0).toLocaleString('en-GB')} sun directions${rest}`;
         /** The view analysis' bars as a parts chart: a row per class or distance, a bar per model in its colour. */
@@ -291,16 +303,16 @@ export const ResultsPanel = memo(function ResultsPanel({ models, column, colourB
               <div className="text-muted">
                 {models.map((m, k) => runLine(m, datas[k]))}
                 <div className="line" title={what}>{what}</div>
-                <div className="line" title={r.switches || undefined}>{r.switches}</div>
+                <div className="line" title={switches || undefined}>{switches}</div>
               </div>
             ) : (
               <div className="text-muted">
                 <div className="line" title={status.busy ? undefined : status.text}>
                   {status.busy ? <><span className="spinner" aria-hidden="true" /> {status.text}</> : status.text}
                 </div>
-                <div className="line">{one.stale ? 'Inputs changed since this run.' : cacheLine(r.cache, views)}</div>
+                <div className="line" title={cm?.missing.join('; ') || undefined}>{cm ? cm.missing.join('; ') || 'Every input has its result.' : one.stale ? 'Inputs changed since this run.' : cacheLine(r.cache, views)}</div>
                 <div className="line" title={what}>{what}</div>
-                <div className="line" title={r.switches || undefined}>{r.switches}</div>
+                <div className="line" title={switches || undefined}>{switches}</div>
               </div>
             )}
             {many ? (

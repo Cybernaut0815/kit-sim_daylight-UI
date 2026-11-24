@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import mcp from '../../../server/mcp.json';
 import type { Box } from '../lib/frame';
 import guide from '../mcp/report.md?raw';
+import { captureSet, type AnalysisSet } from '../sets/model';
+import { initialState, reducer, type ObjectRow } from '../store';
 import { chartSpec, chosenOf, editChart, glyphs, imageSize, inApp, parseReports, readiness, validateSpec, type AppModel, type AppView, type Block, type Draft, type Report } from './spec';
 
 const BLOCK = ['/Site/Block/Facade_N', '/Site/Block/Facade_E', '/Site/Block/Facade_S', '/Site/Block/Facade_W', '/Site/Block/Roof'];
@@ -173,6 +175,48 @@ describe('readiness', () => {
     const { ranges: _r, ...older } = both;
     expect([...new Set(readiness(older, { ...app(model('A'), model('B', B)), ranges: {} }).map(inApp))]).toEqual(['the report shows shares of the problem range of sun hours, which has none now; set one in Results']);
     for (const t of mcp.tools.filter((x) => x.name.includes('_'))) expect(off.join('\n')).not.toContain(t.name);
+  });
+});
+
+describe('a report with its setup', () => {
+  /** The Daylight setup with four models open (A to C the building, D a tower), as save_report captures it. */
+  function setup(): AnalysisSet {
+    const rows = BLOCK.map((path, i): ObjectRow => ({ id: `r${i}`, name: path.slice(12), path, tris: 2, verts: 4, role: 'receiver' }));
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'building' });
+    for (const name of ['building', 'building', 'tower']) { s = reducer(s, { type: 'ADD' }); s = reducer(s, { type: 'LOAD', slot: s.active, objects: rows, name }); }
+    return captureSet(s, 'daylight', 'Report setup', { shown: 'sunhours_front' });
+  }
+  const both = stamp(validateSpec(examples[1], app(model('A'), model('B', B)), undefined, setup()));
+
+  it("keeps the entries of the report's models, and is read back as stored; a damaged one drops the report", () => {
+    expect(both.setup?.models.map((m) => [m.model, m.file, m.roles.length])).toEqual([['A', 'building', 5], ['B', 'building', 5]]);
+    const entry = (spec: unknown) => ({ id: both.id, pdf: false, spec: JSON.stringify(spec) });
+    expect(parseReports([entry(both)])[0].spec.setup).toEqual(both.setup);
+    expect(parseReports([entry({ ...both, setup: { ...both.setup, tool: 'views' } }), entry({ ...both, setup: { ...both.setup, models: [{ model: 'E' }] } })])).toEqual([]);
+  });
+
+  it('needs no roles, settings, results or ranges as at save (Generate opens it); the files, variants, site and weather still', () => {
+    const changed = { ...app(model('A', { result: null, shades: [] }), model('B', { ...B, result: 'stale', key: JUNE, inputs: JUNE, receivers: [] })), ranges: {} };
+    expect(readiness(both, changed)).toEqual([]);
+    expect(readiness({ ...both, setup: undefined }, changed)).toEqual([ // without it, as before
+      expect.stringMatching(/^model A: not as at save: set_roles shade for \/Site\/Neighbour; then run$/),
+      expect.stringMatching(/^model B: not as at save: set_roles receiver for .+; then run$/),
+      expect.stringMatching(/^the problem range of sunhours is none now, below 2 h at save; /),
+    ]);
+    const epw = run('2026-03-21T08:00', ['x.epw', 5, 1]), elsewhere = run('2026-03-21T08:00').replace('"--clear-sky"', '"--clear-sky","--lat","48.1"');
+    expect(readiness(both, app(model('A', { file: 'other' }), model('B', { ...B, choices: { '/Site/Block': { option: ['base', 'base'] } } })), true)).toEqual([
+      'model A: other is open, the report is on building; open_model building into A',
+      "model B: not as at save: set_geometry variant option of /Site/Block to overhang (now the file's own)",
+      'generating: a PDF of this report is being made; call generate_report for it',
+    ]);
+    const moved = app(model('A', { inputs: epw }), model('B', { ...B, inputs: elsewhere, result: null }));
+    expect(readiness(both, moved)).toEqual([]); // the setup brings its site and weather back
+    const site = readiness({ ...both, setup: { ...both.setup!, site: undefined, weather: undefined } }, moved); // an older setup
+    expect(site).toEqual([
+      'model A: the site or weather differ from save time (weather clear sky at save, x.epw now); set them back, or save the report again',
+      'model B: the site or weather differ from save time (--lat off at save, 48.1 now); set them back, or save the report again',
+    ]);
+    expect(site.map(inApp)[0]).toBe('model A: the site or weather differ from save time (weather clear sky at save, x.epw now); set them back');
   });
 });
 

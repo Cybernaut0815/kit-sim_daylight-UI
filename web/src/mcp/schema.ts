@@ -20,6 +20,7 @@ export const WORDS: Record<string, string> = {
   '^\\d{4}-\\d{2}-\\d{2}$': 'a date, YYYY-MM-DD', '^\\d{2}:\\d{2}$': "a time, 'HH:MM'", '^/': 'a prim path, starting with /', '^[a-z0-9-]{1,64}$': '1 to 64 lowercase letters, digits or -',
   '^#[0-9A-Fa-f]{6}$': "a colour, '#rrggbb'", '^[A-Za-z0-9_-]{1,64}$': '1 to 64 letters, digits, _ or -',
   '^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$': "a result column such as 'sunhours_front'",
+  '^[A-Za-z0-9_-]+_(front|back)$': "a result column, a quantity and its side, such as 'sunhours_front' or 'sky_front'",
 };
 const span = (lo?: number, hi?: number) => (lo === hi ? `${lo}` : lo !== undefined && hi !== undefined ? `${lo} to ${hi}` : lo !== undefined ? `at least ${lo}` : `at most ${hi}`);
 /** A span of a count, its noun agreeing with the last number: 'at least 1 item', '1 to 4 items'. */

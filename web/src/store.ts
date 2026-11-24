@@ -8,6 +8,7 @@ import { DEFAULT_ABOVE, DEFAULT_BELOW, SCALINGS, gradientDef, type GradientDef, 
 import type { OpticsEdit } from './lib/optics';
 import type { Topology } from './lib/topology';
 import { idsUnder } from './lib/tree';
+import { entryFor, sameOptics, settingsWith, type AnalysisSet } from './sets/apply';
 
 export type Role = 'receiver' | 'shade' | 'none';
 /**
@@ -20,7 +21,9 @@ export type Role = 'receiver' | 'shade' | 'none';
 export interface ObjectRow { id: string; name: string; path: string; tris: number; verts: number; role: Role; shade?: false; group?: string; instances?: number; paths?: string[]; materials?: number[] }
 
 /** The two analyses of the same models: daylight, and the view analysis (the core's views tool). */
-export type Tab = 'daylight' | 'views';
+export type Tool = 'daylight' | 'views';
+/** The app's tabs: the two analyses, then Combined (saved sets and the views combined from their results), always last. */
+export type Tab = Tool | 'combined';
 
 export type Quantity = 'radiation' | 'direct' | 'diffuse' | 'irradiance' | 'illuminance' | 'sunhours';
 export const QUANTITIES: Quantity[] = ['radiation', 'direct', 'diffuse', 'irradiance', 'illuminance', 'sunhours'];
@@ -78,7 +81,7 @@ export interface Probe { id: string; element: number; value: number }
 export interface RunResult {
   data: Float32Array[]; weights: Float32Array; columns: string[]; cache?: Record<string, string>;
   // the job's JSON, with the server's run timing in ms (C4; totalMs = run_s) when it reports one
-  manifest: RemoteManifest & { timing?: { prepMs: number; skyMs: number; buildMs: number; traceMs: number; reduceMs: number; bounceMs: number; totalMs: number } };
+  manifest: RemoteManifest & { timing?: { prepMs: number; skyMs: number; buildMs: number; traceMs: number; reduceMs: number; bounceMs: number; totalMs: number }; combined?: CombinedRun };
   receivers: string[]; // object ids in sensor order: manifest.meshes[i] <-> receivers[i]
   /** Per receiver, what its rows are: the file's own faces and points behind the drawn triangles (lib/topology.ts), or
    *  null / absent: the drawn triangles and vertices themselves. */
@@ -88,6 +91,9 @@ export interface RunResult {
   elapsed: number; // s, click to result (the round trip the user waits for)
   switches?: string; // the optics switches it ran with, in words (lib/optics.ts runSwitches); '' = the defaults
 }
+/** A combined view's result on a model (sets/combine.ts): its op, the inputs it used of those it has, what it misses
+ *  and the meshes it skipped, in words. */
+export interface CombinedRun { op: string; used: number; of: number; missing: string[]; mismatches: string[] }
 /** A run's seconds on the GPU (building the scene, tracing, bounces) by the server's timing; undefined without one. */
 export const gpuSeconds = (r: RunResult) => { const t = r.manifest.timing; return t && (t.buildMs + t.traceMs + t.bounceMs) / 1000; };
 // running: the share done (0..1) and the seconds to go, once the server reports them
@@ -130,16 +136,20 @@ export interface State {
   colourBy: 'plain' | 'value';
   errors: Record<string, string>; // validate() output keyed by field id
   viewAnalysis: { column: string; colourBy: 'plain' | 'value'; errors: Record<string, string> }; // the view analysis' own
+  combined: { column: string; colourBy: 'plain' | 'value' }; // the Combined tab's: the view shown (its column), its colouring
 }
 
-/** Tagged `tab: 'views'`, an action of one analysis (ROLE, SHADE, RUN, COLUMN, COLOUR_BY, ERRORS) acts on the view
- *  analysis; untagged on daylight, as always (the agent tools never tag). */
-type OfTab = { tab?: 'views' };
-export const TAGGED: ReadonlySet<string> = new Set(['ROLE', 'SHADE', 'RUN', 'COLUMN', 'COLOUR_BY', 'ERRORS']);
+/** Tagged `tab: 'views'`, an action of one analysis (ROLE, ROLES_RESET, SHADE, RUN, COLUMN, COLOUR_BY, ERRORS) acts on
+ *  the view analysis; untagged on daylight, as always. Tagged `tab: 'combined'`, COLUMN and COLOUR_BY act on the Combined tab. */
+type OfTab = { tab?: 'views' | 'combined' };
+export const TAGGED: ReadonlySet<string> = new Set(['ROLE', 'ROLES_RESET', 'SHADE', 'RUN', 'COLUMN', 'COLOUR_BY', 'ERRORS']);
+/** The role a freshly opened file gives its rows: a single mesh drawn once runs as is (receiver); a scene is assigned by hand. */
+export const loadRole = (rows: readonly { instances?: number }[]): Role => (rows.length === 1 && !rows[0].instances ? 'receiver' : 'none');
 export type Action =
   | { type: 'LOAD'; slot: number; objects: ObjectRow[]; name?: string }
   | { type: 'RELOAD'; slot: number; objects: ObjectRow[] } // the same stage re-read (a variant switch): the selection and each path's no-shade flag stay; the view roles by path
   | ({ type: 'ROLE'; slot: number; ids: string[]; role: Role; group?: string } & OfTab) // a row whose role changes casts shade as its new role does; group: a shade's target group (views)
+  | ({ type: 'ROLES_RESET'; slot: number } & OfTab) // every row back to its role at load (loadRole), no no-shade flags or groups
   | ({ type: 'SHADE'; slot: number; ids: string[]; shade: boolean } & OfTab) // whether the receivers among them cast shade
   | { type: 'SELECT'; slot: number; ids: string[]; additive?: boolean } // rows (the results table): the viewer selects their prims
   | ({ type: 'SELECTION'; slot: number } & Selection) // the viewer's selection changed
@@ -167,7 +177,8 @@ export type Action =
   | ({ type: 'CHART' } & ({ spec: ChartSpec } | { id: string; remove: true } | { id: string; reset: true })) // put in place by id, removed (an extra), its look back to the kind's
   | ({ type: 'ERRORS'; errors: Record<string, string> } & OfTab)
   | { type: 'OPTICS_EDIT'; slot: number; key: string; edit: OpticsEdit } // a material by prim path, or a default row
-  | { type: 'OPTICS_RESET'; slot: number; key: string }; // back to the derived (or default) values
+  | { type: 'OPTICS_RESET'; slot: number; key?: string } // back to the derived (or default) values; no key: every edit of the model
+  | { type: 'APPLY_SET'; set: AnalysisSet }; // a saved set opened on its tab (sets/apply.ts)
 
 const year = new Date().getFullYear();
 const solstice = `${year}-06-21`;
@@ -195,7 +206,7 @@ const model = (slot: number): Model => ({ slot, name: '', objects: [], selection
 
 export const initialState = (settings = defaultSettings()): State => ({
   models: [model(0)], active: 0, hovered: null, probe: null, bin: null, bins: NO_BINS, settings, stations: null, column: '', colourBy: 'plain', errors: {},
-  viewAnalysis: { column: '', colourBy: 'plain', errors: {} },
+  viewAnalysis: { column: '', colourBy: 'plain', errors: {} }, combined: { column: '', colourBy: 'value' },
 });
 
 // The view analysis seen as daylight is: its rows, run, result and error (per model) and its column, colouring and errors
@@ -223,7 +234,7 @@ export function swapState(s: State): State {
 /** A target group (views --target GROUP): letters, digits, _ and -. */
 export const GROUP = /^[A-Za-z0-9_-]{1,64}$/;
 /** Row `o` with the view role `role` from the row it had (by path), if any: its no-shade flag (a receiver) or group (a shade). */
-const viewRole = (o: ObjectRow, role: Role, was?: ObjectRow): ObjectRow => {
+const viewRole = (o: ObjectRow, role: Role, was?: Pick<ObjectRow, 'shade' | 'group'>): ObjectRow => {
   const { shade: _s, group: _g, ...rest } = o;
   return { ...rest, role, ...(role === 'receiver' && was?.shade === false ? { shade: false as const } : {}), ...(role === 'shade' && was?.group ? { group: was.group } : {}) };
 };
@@ -265,7 +276,12 @@ const keptViews = (models: readonly Model[]) => models.some((m) => m.viewAnalysi
 const viewsKept = (s: State): State => (keptViews(s.models) ? s : { ...s, viewAnalysis: { ...s.viewAnalysis, colourBy: 'plain' } });
 
 export function reducer(s: State, a: Action): State {
-  if ('tab' in a && a.tab === 'views') { // the view analysis' action: daylight's rules on its slice; nothing changed = the same state
+  if ('tab' in a && a.tab === 'combined') { // the Combined tab's column and colouring; nothing else is its own
+    if (a.type === 'COLUMN') return a.column === s.combined.column ? s : { ...s, combined: { ...s.combined, column: a.column }, bins: NO_BINS };
+    return a.type === 'COLOUR_BY' && a.colourBy !== s.combined.colourBy ? { ...s, combined: { ...s.combined, colourBy: a.colourBy } } : s;
+  }
+  // the view analysis' action (or set): daylight's rules on its slice; nothing changed = the same state
+  if (('tab' in a && a.tab === 'views') || (a.type === 'APPLY_SET' && a.set.tool === 'views')) {
     const t = swapState(s), n = analysis(t, a);
     return n === t ? s : swapState(n);
   }
@@ -290,6 +306,12 @@ function analysis(s: State, a: Action): State {
       });
       return n; // the shown column stays: the next run shows it again
     }
+    case 'ROLES_RESET': // as ROLE: the result goes; nothing to reset keeps it
+      return put(s, a.slot, (m) => {
+        const role = loadRole(m.objects);
+        const objects = m.objects.map((o) => (o.role === role && o.shade === undefined && o.group === undefined ? o : (({ shade: _s, group: _g, ...r }) => ({ ...r, role }))(o)));
+        return objects.every((o, i) => o === m.objects[i]) ? m : { ...m, objects, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null };
+      });
     case 'SHADE': { // the same receivers with other run arguments: the result stays, stale where the arguments differ
       const ids = new Set(a.ids);
       return put(s, a.slot, (m) => {
@@ -439,10 +461,29 @@ function analysis(s: State, a: Action): State {
       return put(s, a.slot, (m) => ({ ...m, optics: { ...m.optics, [a.key]: a.edit } }));
     case 'OPTICS_RESET':
       return put(s, a.slot, (m) => {
+        if (a.key === undefined) return Object.keys(m.optics).length ? { ...m, optics: {} } : m;
         if (!(a.key in m.optics)) return m;
         const { [a.key]: _gone, ...optics } = m.optics;
         return { ...m, optics };
       });
+    case 'APPLY_SET': { // each open model with its entry takes its roles by path (listed: theirs; others none; as ROLE, an
+      // instanced row is never a receiver), its result going where they change, and its Materials edits (stale, not
+      // dropped, as an edit); then the set's settings, column and colours
+      const set = a.set;
+      const models = s.models.map((m) => {
+        const match = entryFor(m, set.models, s.models);
+        if (!match) return m;
+        const roles = new Map(match.entry.roles.map((r) => [r.path, r]));
+        const objects = m.objects.map((o) => {
+          const r = roles.get(o.path), next = viewRole(o, r && !(r.role === 'receiver' && o.instances) ? r.role : 'none', r);
+          return next.role === o.role && next.shade === o.shade && next.group === o.group ? o : next;
+        });
+        const optics = match.entry.optics && !sameOptics(match.entry.optics, m.optics) ? { ...match.entry.optics } : m.optics;
+        if (objects.every((o, i) => o === m.objects[i])) return optics === m.optics ? m : { ...m, optics };
+        return { ...m, objects, optics, run: inFlight(m.run) ? m.run : IDLE, result: null, error: null };
+      });
+      return { ...s, models, settings: settingsWith(s.settings, set), column: set.column, colourBy: set.colourBy, probe: null, bin: null, bins: NO_BINS };
+    }
   }
 }
 

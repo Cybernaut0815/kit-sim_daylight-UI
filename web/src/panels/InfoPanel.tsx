@@ -10,7 +10,7 @@ export function InfoButton() {
   const dlg = useRef<HTMLDialogElement>(null);
   return (
     <>
-      <button className="btn btn--ghost" type="button" aria-haspopup="dialog" title="How to use the app: a quick start, reading the results, comparing models, glass and reflective materials" onClick={() => dlg.current?.showModal()}>Info</button>
+      <button className="btn btn--ghost" type="button" aria-haspopup="dialog" title="How to use the app: a quick start, reading the results, comparing models, glass and reflective materials, sets and combined views" onClick={() => dlg.current?.showModal()}>Info</button>
       {createPortal(<dialog ref={dlg} className="dialog dialog--md" aria-labelledby="info-title" onClick={(e) => { if (e.target === e.currentTarget) dlg.current?.close(); }}>
         <div className="dialog__header">
           <h2 className="dialog__title" id="info-title">Using Daylight</h2>
@@ -41,6 +41,8 @@ export function InfoButton() {
             <li><em>Distribution</em> and <em>Cumulative area</em> are weighted by area, <em>Problem range split</em> gives the share of the area below, within and above the range, and the table lists every receiver mesh (a click selects it).</li>
             <li>Hover a mesh to read its value; hover a bar of the <em>Distribution</em> to see where those values lie on the model. Click a bar to keep it: Shift+click takes the range from the bar clicked before, Ctrl+click adds or removes a bar, a drag takes the bars it crosses; a click on the empty plot lets go.</li>
             <li>The result shown stays the one you picked when you change roles or settings and run again.</li>
+            <li><em>Display</em>, <em>Values on the surfaces</em> (off by default) writes the values on the painted surfaces where nothing covers them, one per face or point, at most 150 a view, once the camera rests.</li>
+            <li>Values from a million on show in exponent form with three digits (1.23e6), in the panels, the legend and the charts.</li>
           </ul>
 
           <h3>Comparing models</h3>
@@ -95,6 +97,18 @@ export function InfoButton() {
             <li><em>See through glass</em>: rays pass the glass of the Materials table and count what lies behind; off, windows block.</li>
             <li><em>Total obstruction</em> is everything that is not open sky: the ground, the obstructions and the targets together (1 minus the sky share).</li>
             <li>Results: the shares (0 to 1 of the field), the distances (m) and the isovist (m³ or m²) per element, the <em>View composition</em> of the field and the <em>Reach</em>, beside the same distribution charts as Daylight.</li>
+          </ul>
+
+          <h3>Sets and the Combined tab</h3>
+          <ul>
+            <li><em>Sets</em> in the bar under the 3D view saves the tab's whole setup under a name: per open model its roles and Materials edits, linked to that model (its letter and file); the Daylight or View analysis settings, north, the location and weather (Daylight; an uploaded EPW by its name), the result shown, the colours, the charts and the subdivision. Display switches and per-mesh refinements are not part of one. Sets are kept on the server, for every browser and the agent.</li>
+            <li>A click on a set opens it: each model takes its own entry only, the one of its letter and file (or its file reopened in another tab). A model without one keeps its roles and edits. The note under the list says what each model took. <em>Update</em> saves the open set again with the current setup.</li>
+            <li>A set's fold-out lists what it keeps. <em>Copy to model</em> makes a new set of one entry for another open model: the roles and Materials edits whose USD paths that model has, every other mesh without a role. It opens at once, to change and update.</li>
+            <li>Resets: the Model panel's puts the roles back to how the file opened (on the tab shown), the Materials panel's undoes every edit of the model, and the Location panel's moves the site to your own position when the browser shares it (it asks first; refused, nothing changes and a warning says why).</li>
+            <li>Results stay at hand while the page is open (up to 512 MB): a set opened again shows its result without a run. Opening another file in a model's tab forgets that model's results.</li>
+            <li>The <em>Combined</em> tab, always the last, saves the Daylight or View analysis setup as it is now as a new set, and lists the sets of each tab, each folded to its name and its state per model. Unfolded: <em>Open</em>, <em>Run</em> (in the background for the models without a result, one run at a time), <em>Update from the current setup</em> (after asking), <em>Rename</em> (its id stays, so combined views keep it), <em>Delete</em>, what it keeps and Copy to model.</li>
+            <li>A <em>Combined view</em> weighs up to 8 inputs into one value per element: each a set's result through a function (as it is, normalised 0 to 1, inverted, log10, a threshold or a band), with a weight, on some meshes or every receiver; combined by weighted mean or sum, the lowest, the highest or the product. In the editor each input is a fold-out whose line says what it takes; unfolded, it shows only the bounds its function uses. <em>Show</em> paints it on every model, with the same results charts.</li>
+            <li>A report the agent saves keeps the Daylight setup of that time. <em>Generate PDF</em> in the Reports menu opens it first (it stays open), runs what has no result, then makes the PDF; the files and variants must still be those of the save (the setup brings its location and weather back).</li>
           </ul>
 
           <h3>Views and download</h3>

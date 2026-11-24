@@ -1,5 +1,6 @@
 // Smoke test of daylight_server: the job API on a plain server (a job that fails in the core fails alone, the next
-// runs, an identical request is a cache hit, finished jobs go after their TTL); then --mcp in Claude-only mode (no app
+// runs, an identical request is a cache hit, finished jobs go after their TTL) and the analysis sets' /sets routes,
+// which need no --mcp; then --mcp in Claude-only mode (no app
 // tab): the agent routes off without --mcp; the
 // local-only gate; the MCP handshake; the fixture (building.usda) walked through tools/call in the hidden instance the
 // server starts: options A and B, runs, results, find_critical, a 4:1 screenshot, sections (view only; a shot's own), a
@@ -118,6 +119,23 @@ await part('off', async () => {
     const r = await http(OFF, method, path, method === 'POST' ? { headers: JSONH, body: PING } : {});
     check(`off: ${method} ${path} -> 404`, r.status === 404, `${r.status} ${brief(r.text)}`);
   }
+});
+
+// 1a. Analysis sets need no --mcp: a round trip, and the refusals (over 256 KB, not one JSON object, a bad id)
+if (off) await part('sets', async () => {
+  const spec = JSON.stringify({ kind: 'set', id: 'smoke-set', name: 'Smoke' });
+  const put = await http(OFF, 'PUT', '/sets/smoke-set', { headers: JSONH, body: spec });
+  check('sets: PUT /sets/smoke-set without --mcp -> 204', put.status === 204, `${put.status} ${brief(put.text)}`);
+  const list = await http(OFF, 'GET', '/sets'), had = list.status === 200 ? parse(list) : [];
+  check('sets: GET /sets lists it, its spec as stored', had.length === 1 && had[0].id === 'smoke-set' && had[0].spec === spec, `${list.status} ${brief(list.text)}`);
+  const big = await http(OFF, 'PUT', '/sets/smoke-big', { headers: JSONH, body: JSON.stringify({ pad: 'x'.repeat(256 << 10) }) });
+  check('sets: a set over 256 KB -> 413', big.status === 413, `${big.status} ${brief(big.text)}`);
+  const arr = await http(OFF, 'PUT', '/sets/smoke-arr', { headers: JSONH, body: '[1, 2]' });
+  check('sets: not one JSON object -> 400', arr.status === 400, `${arr.status} ${brief(arr.text)}`);
+  const upper = await http(OFF, 'PUT', '/sets/Smoke_Set', { headers: JSONH, body: spec });
+  check('sets: an id outside [a-z0-9-] -> 404', upper.status === 404, `${upper.status} ${brief(upper.text)}`);
+  const del = await http(OFF, 'DELETE', '/sets/smoke-set'), gone = await http(OFF, 'DELETE', '/sets/smoke-set'), after = parse(await http(OFF, 'GET', '/sets'));
+  check('sets: DELETE -> 204, again -> 404, the list empty', del.status === 204 && gone.status === 404 && after.length === 0, `${del.status} ${gone.status} ${after.length}`);
 });
 
 // A 10 m roof quad facing up as a .dmesh, from x = x0: "DLM1", flags, n_points, n_faces, n_indices, xyz float64, counts,

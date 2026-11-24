@@ -49,9 +49,10 @@ function ValueBox({ value, label, max, disabled, describedBy, commit }: { value:
   );
 }
 
-interface Props { slot: number; title: string; rows: MaterialRow[]; fallback: Optics; glass: Optics; reading: boolean; mode: SimMode; transmission: boolean; reflections: boolean; dispatch: Dispatch<Action> }
+/** `edited`: the model holds an edit, of a row here or of a material of a mesh without a role. */
+interface Props { slot: number; title: string; rows: MaterialRow[]; fallback: Optics; glass: Optics; reading: boolean; mode: SimMode; transmission: boolean; reflections: boolean; edited: boolean; dispatch: Dispatch<Action> }
 
-export const MaterialsPanel = memo(function MaterialsPanel({ slot, title, rows, fallback, glass, reading, mode, transmission, reflections, dispatch }: Props) {
+export const MaterialsPanel = memo(function MaterialsPanel({ slot, title, rows, fallback, glass, reading, mode, transmission, reflections, edited, dispatch }: Props) {
   const names = rowNames(rows.map((m) => m.path)); // parent names in front while two share one (/A/Looks/Glass, /B/Looks/Glass)
   const list: { key: string; name: string; title: string; optics: Optics; colour?: string }[] = [
     { key: DEFAULT_KEY, name: 'Default - no material', optics: fallback, title: 'Surfaces without a material, materials other than a UsdPreviewSurface (MaterialX, OpenPBR), and the reflectance of a material without a colour of its own (none set, or vertex colours). Built in: opaque, reflectance 0.20 (Honeybee generic_context_0.20, BRE GN50).' },
@@ -65,7 +66,7 @@ export const MaterialsPanel = memo(function MaterialsPanel({ slot, title, rows, 
           : 'ρ: the share reflected diffusely; τ: the share passed straight through, at normal incidence';
   const edit = (key: string, e: OpticsEdit) => { dispatch({ type: 'OPTICS_EDIT', slot, key, edit: e }); return clamp({ ...e, source: 'edited' }); };
   return (
-    <Section id="materials" title={title} busy={reading}>
+    <Section id="materials" title={title} busy={reading} reset={edited ? { onReset: () => dispatch({ type: 'OPTICS_RESET', slot }), label: `Undo every Materials edit of this model (both tabs): the values read from its materials, and the built-in defaults` } : undefined}>
       <p className="text-muted lines-3" id="materials-status" role="status" tabIndex={-1} title={mode === 'physical' ? 'Masks and, with Reflections on, colour textures are read once per model while their numbers count; a run waits for them' : undefined}>
         {reading ? <><span className="spinner" aria-hidden="true" /> Reading the materials</> : status}
       </p>

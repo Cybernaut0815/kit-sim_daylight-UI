@@ -90,6 +90,15 @@ Weather downloads use the Windows-bundled `curl.exe` and only these URL prefixes
 the EnergyPlus station index on raw.githubusercontent.com, EnergyPlus weather files on S3 (see the EnergyPlus weather
 data licence), and PVGIS (European Commission JRC; 30 requests per second per IP).
 
+## Analysis sets
+
+The web app saves its analysis sets (one analysis' roles by prim path per model, its settings and the shown result) and
+its combined views (weighted combinations of sets' results) here, one JSON object each in `<cache>\sets\<id>.json`:
+`GET /sets` lists them, `PUT /sets/{id}` stores one (at most 256 KB, one JSON object, written to a temporary file and
+renamed; at most 500 sets, a new one past that is `409`), `DELETE /sets/{id}` removes one. These routes need no
+`--mcp` and answer every client: every browser that reaches the server sees and edits the same sets, with no owner and
+no version check (the last write wins), and the agent reaches them through the app's tools.
+
 ## Agents (MCP)
 
 `--mcp` lets agents on this machine work with the web app over MCP: Claude Code or Claude Desktop opens models, sets

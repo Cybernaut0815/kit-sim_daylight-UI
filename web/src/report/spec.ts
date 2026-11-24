@@ -8,6 +8,7 @@ import { FIELDS as LOOK, cleanSpec, isShare, type ChartSpec, type Metric as Char
 import { fmtNum, unitFor } from '../lib/result';
 import { given, validate as sectionProblems, type Bounds, type Given, type Section } from '../lib/section';
 import { SECTION, check } from '../mcp/schema';
+import { readSetup, type AnalysisSet } from '../sets/model';
 import type { Settings } from '../store';
 
 const LETTERS = 'ABCD';
@@ -32,8 +33,11 @@ export interface Range { lo: number | null; hi: number | null }
  *  ponytail: every receiver and shade path, stored once; counts and a hash if models of many thousand meshes must fit
  *  the server's 1 MB */
 export interface ModelRef { model: string; file: string; open?: string[]; variants: Variants; receivers: string[]; shades: string[]; noShade?: string[]; runKey: string }
-/** ranges: per quantity the report shows, its problem range at save (its shares and range colours are drawn on it). */
-export interface Report { id: string; title: string; created: string; updated: string; models: ModelRef[]; ranges?: Record<string, Range>; stats?: Stat[]; summary: string; blocks: Block[]; notes?: string }
+/** ranges: per quantity the report shows, its problem range at save (its shares and range colours are drawn on it).
+ *  setup: the Daylight setup at save, a copy as a set keeps it (one entry per report model: its roles and Materials
+ *  edits; the simulation and time settings, north, the site and weather; the column shown and the colours), which a
+ *  generation opens first; absent in a report saved before (the site, north and weather: in one saved before those). */
+export interface Report { id: string; title: string; created: string; updated: string; models: ModelRef[]; ranges?: Record<string, Range>; setup?: AnalysisSet; stats?: Stat[]; summary: string; blocks: Block[]; notes?: string }
 /** A checked spec before the save stamps it (created, updated). */
 export type Draft = Omit<Report, 'created' | 'updated'>;
 /** A stored report as GET /reports lists it, its spec parsed. */
@@ -69,13 +73,21 @@ function readable(id: string, s: unknown): s is Report {
       : b.type === 'view' ? typeof b.caption === 'string' && typeof b.name === 'string' && isObj(b.view) && vec(b.view.eye) && vec(b.view.target) && (b.section === undefined || cut(b.section))
         : b.type === 'table' && typeof b.caption === 'string' && typeof b.column === 'string' && Array.isArray(b.metrics) && b.metrics.every(metric));
   return Array.isArray(s.models) && s.models.length > 0 && s.models.every(model) && (s.ranges === undefined || isObj(s.ranges))
+    && (s.setup === undefined || (readSetup(s.setup)?.tool === 'daylight'))
     && (s.stats === undefined || (Array.isArray(s.stats) && s.stats.every((x) => isObj(x) && metric(x.metric) && [x.label, x.column, x.model].every((v) => typeof v === 'string'))))
     && Array.isArray(s.blocks) && s.blocks.every(block);
 }
 /** GET /reports' answer, each spec parsed; one the app cannot read (damaged, hand-edited, of another version) is left
  *  out, so it never breaks the app (delete_report still removes it by id). */
 export const parseReports = (list: { id: string; pdf: boolean; spec: string }[]): Stored[] =>
-  list.flatMap((e) => { try { const spec: unknown = JSON.parse(e.spec); return readable(e.id, spec) ? [{ id: e.id, pdf: e.pdf, spec }] : []; } catch { return []; } });
+  list.flatMap((e) => {
+    try {
+      const spec: unknown = JSON.parse(e.spec);
+      return readable(e.id, spec) ? [{ id: e.id, pdf: e.pdf, spec: spec.setup ? { ...spec, setup: readSetup(spec.setup)! } : spec }] : []; // its settings over today's defaults
+    } catch {
+      return [];
+    }
+  });
 
 /** A chart block's spec as the charts draw it: models as slots, the report's models when unset. */
 export const chartSpec = (c: ReportChart, r: Pick<Report, 'models'>): ChartSpec => ({ ...c, models: (c.models ?? r.models.map((m) => m.model)).map((l) => LETTERS.indexOf(l)) });
@@ -161,9 +173,9 @@ function rangeless(r: Pick<Draft, 'stats' | 'blocks'>, ranges: AppView['ranges']
  * empty'). Its models are letters (or get_report's model objects, whose letters alone count): each open with a fresh
  * result now, and stored with its run (ModelRef). A chart's column defaults to the one shown; a view's section is
  * set_display's (its schema, boxes round prims where `bounds` finds them) and kept with footprints; created and updated
- * are the save's.
+ * are the save's. `setup`: the Daylight setup now (sets/model captureSet), stored with the entries of the report's models.
  */
-export function validateSpec(raw: unknown, app: AppView, bounds?: Bounds): Draft | string[] {
+export function validateSpec(raw: unknown, app: AppView, bounds?: Bounds, setup?: AnalysisSet): Draft | string[] {
   const no: string[] = [];
   const bad = (at: string, what: string): undefined => { no.push(`${at}: ${what}`); return undefined; };
   const keys = (at: string, o: Obj, kind: string) => { for (const k of Object.keys(o)) if (!FIELDS[kind].includes(k)) bad(`${at}${at ? '.' : ''}${k}`, `not a field of ${kind === 'spec' ? 'a ReportSpec' : kind === 'stat' ? 'a stat' : `a ${kind} block`} (${FIELDS[kind].join(', ')})`); };
@@ -286,6 +298,7 @@ export function validateSpec(raw: unknown, app: AppView, bounds?: Bounds): Draft
     id: id!, title: title!,
     models: refs.map((m) => ({ model: m.model, file: m.file, ...(m.open ? { open: m.open } : {}), variants: chosenOf(m.choices), receivers: m.receivers, shades: m.shades, ...(m.noShade.length ? { noShade: m.noShade } : {}), runKey: m.key! })),
     ranges: Object.fromEntries([...new Set(used.map(quantityOf))].map((q) => [q, { lo: app.ranges[q]?.lo ?? null, hi: app.ranges[q]?.hi ?? null }])),
+    ...(setup ? { setup: { ...setup, models: setup.models.filter((m) => listed.includes(m.model)) } } : {}),
     ...(stats ? { stats } : {}), summary: summary!, blocks, ...(notes !== undefined ? { notes } : {}),
   };
   const ranges = rangeless(draft, app.ranges);
@@ -300,9 +313,12 @@ const rangeText = (q: string, g?: Partial<Range>) => {
   const u = unitFor(q).value, lo = g?.lo ?? null, hi = g?.hi ?? null;
   return lo === null && hi === null ? 'none' : [lo !== null ? `below ${fmtNum(lo)} ${u}` : '', hi !== null ? `above ${fmtNum(hi)} ${u}` : ''].filter(Boolean).join(' and ');
 };
-/** The run settings that differ between two AppModel keys (at save, now), each '--from X at save, Y now'; '' when none
- *  or unreadable. */
-function differ(was: string, now: string): string {
+/** The run settings a report's setup of an older version does not hold (lib/args buildArgs): the site's, north and the
+ *  weather. */
+const SITE = new Set(['weather', '--lat', '--lon', '--tz', '--north', '--clear-sky', '--turbidity', '--altitude']);
+/** The run settings that differ between two AppModel keys (at save, now), each '--from X at save, Y now' (`only`: those
+ *  settings alone); '' when none or unreadable. */
+function differ(was: string, now: string, only?: ReadonlySet<string>): string {
   try {
     const parse = (k: string) => {
       const [args, w] = JSON.parse(k) as [string[], unknown], m = new Map([['weather', Array.isArray(w) ? String(w[0]) : typeof w === 'string' ? w : 'clear sky']]);
@@ -310,7 +326,7 @@ function differ(was: string, now: string): string {
       return m;
     };
     const a = parse(was), b = parse(now), say = (v?: string) => (v === undefined ? 'off' : v.length > 40 ? `${v.slice(0, 37)}...` : v);
-    const d = [...new Set([...a.keys(), ...b.keys()])].filter((k) => a.get(k) !== b.get(k)).map((k) => `${k} ${say(a.get(k))} at save, ${say(b.get(k))} now`);
+    const d = [...new Set([...a.keys(), ...b.keys()])].filter((k) => (!only || only.has(k)) && a.get(k) !== b.get(k)).map((k) => `${k} ${say(a.get(k))} at save, ${say(b.get(k))} now`);
     return d.length ? ` (${d.join('; ')})` : '';
   } catch {
     return '';
@@ -322,10 +338,12 @@ function differ(was: string, now: string): string {
  * in its slot with its file (open_model); the variants or roles (which receivers cast no shade included, while receivers
  * block rays) not as at save (set_geometry, set_roles, then run); a run on its way (wait), no result or a stale one
  * (run); a result run with settings other than at save, which it names. Then a problem range other than at save, share
- * metrics without one, and a generation of it on its way.
+ * metrics without one, and a generation of it on its way. A report with a setup is generated with it opened first
+ * (generate.ts), so its roles, its settings, the results and the problem ranges are none of these: only the file and the
+ * variants are, and the site, north and weather where its setup (of an older version) does not hold them.
  */
 export function readiness(r: Report, app: AppView, generating = false): string[] {
-  const out: string[] = [];
+  const out: string[] = [], setup = !!r.setup, holdsSite = !!r.setup?.site && !!r.setup.weather && r.setup.north !== undefined;
   for (const ref of r.models) {
     const L = ref.model, m = app.models.find((k) => k.model === L), say = (what: string) => out.push(`model ${L}: ${what}`), open = `open_model ${ref.open?.join(', ') ?? ref.file} into ${L}`;
     if (!m || (!m.file && !m.loading)) { say(`not open; ${open}`); continue; }
@@ -334,6 +352,11 @@ export function readiness(r: Report, app: AppView, generating = false): string[]
     const now = chosenOf(m.choices), fix: string[] = [];
     for (const [p, sets] of Object.entries(ref.variants)) for (const [set, v] of Object.entries(sets)) if (now[p]?.[set] !== v) fix.push(`set_geometry variant ${set} of ${p} to ${v} (now ${now[p]?.[set] ?? "the file's own"})`);
     for (const [p, sets] of Object.entries(now)) for (const [set, v] of Object.entries(sets)) if (ref.variants[p]?.[set] === undefined) fix.push(`set_geometry variant ${set} of ${p} back to ${m.choices[p][set][0]}, the file's own (now ${v})`);
+    if (setup) {
+      if (fix.length) say(`not as at save: ${fix.join('; ')}`);
+      else if (!holdsSite) { const d = differ(ref.runKey, m.inputs, SITE); if (d) say(`the site or weather differ from save time${d}; set them back, or save the report again`); }
+      continue;
+    }
     // a path's role as set_roles gives it; back to a receiver that casts shade takes shade true (a receiver's flag stays).
     // With receivers out of the rays at save or now (--no-self-occlude) the flags change nothing: the run key names that.
     const flags = [ref.runKey, m.inputs].every((k) => !k.includes('"--no-self-occlude"'));
@@ -357,6 +380,10 @@ export function readiness(r: Report, app: AppView, generating = false): string[]
     }
   }
   const moved = new Set<string>();
+  if (setup) {
+    if (generating) out.push('generating: a PDF of this report is being made; call generate_report for it');
+    return out;
+  }
   for (const [q, was] of Object.entries(r.ranges ?? {})) {
     const now = app.ranges[q], lo = was?.lo ?? null, hi = was?.hi ?? null;
     if ((now?.lo ?? null) === lo && (now?.hi ?? null) === hi) continue;

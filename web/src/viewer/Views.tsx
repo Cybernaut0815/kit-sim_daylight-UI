@@ -229,16 +229,26 @@ export const DISPLAYS: readonly (readonly [Display, string])[] = [
   ['plain', 'Plain'], ['plain-wire', 'Plain + wire'], ['plain-selwire', 'Plain + selection wire'], ['wire', 'Wireframe'],
 ];
 
-/** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw alone in each. */
-export function DisplayMenu({ value, onChange }: { value: Display; onChange: (d: Display) => void }) {
+/** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw alone in each.
+ *  `labels`: the values written on the painted surfaces (viewer/labels.ts). */
+export function DisplayMenu({ value, onChange, labels, onLabels }: { value: Display; onChange: (d: Display) => void; labels: boolean; onLabels: (on: boolean) => void }) {
   return (
     <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges. Result colours always show as they are">
-      {() => DISPLAYS.map(([d, label]) => (
-        <label key={d} className="menu__item">
-          <input className="menu__check" type="radio" name="display-mode" value={d} checked={value === d} onChange={() => onChange(d)} />
-          <span>{label}</span>
-        </label>
-      ))}
+      {() => (
+        <>
+          {DISPLAYS.map(([d, label]) => (
+            <label key={d} className="menu__item">
+              <input className="menu__check" type="radio" name="display-mode" value={d} checked={value === d} onChange={() => onChange(d)} />
+              <span>{label}</span>
+            </label>
+          ))}
+          <div className="menu__separator" role="separator" />
+          <label className="menu__item" title="Writes the values on the painted surfaces where nothing covers them, one per face or point, at most 150 a view; they show once the camera rests">
+            <input className="menu__check" type="checkbox" id="display-labels" checked={labels} onChange={(e) => onLabels(e.target.checked)} />
+            <span>Values on the surfaces</span>
+          </label>
+        </>
+      )}
     </MenuButton>
   );
 }
@@ -328,7 +338,8 @@ export function ReportsMenu({ reports, app, error, onOpen, onGenerate, onDelete 
             <button className="btn btn--danger" type="button" disabled={generating} onClick={() => { if (confirm(`Delete the report "${r.spec.title}" and its PDF? This cannot be undone.`)) onDelete(r.id); }}>Delete</button>
             <div className="cluster">
               <button className="btn btn--secondary" type="button" disabled={!r.pdf} title={r.pdf ? undefined : 'Generate it first'} onClick={() => window.open(`/reports/${r.id}/pdf`)}>Open PDF</button>
-              <button className="btn btn--primary" type="button" disabled={generating || no.length > 0} aria-busy={generating} onClick={() => onGenerate(r.id)}>Generate PDF</button>
+              <button className="btn btn--primary" type="button" disabled={generating || no.length > 0} aria-busy={generating} onClick={() => onGenerate(r.id)}
+                title={r.spec.setup ? "Opens the report's Daylight setup first (its models' roles, the simulation and time settings and problem ranges, as Open on a set: it stays open; the other models keep their roles), runs what has no result, then makes the PDF" : undefined}>Generate PDF</button>
             </div>
           </div>
         </>

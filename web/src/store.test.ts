@@ -250,6 +250,43 @@ describe('optics edits', () => {
     expect(m(s).optics).toEqual({ '/M/Glass': glass });
     expect(m(reducer(s, { type: 'LOAD', slot: 0, objects: [obj('b')] })).optics).toEqual({});
   });
+  it('OPTICS_RESET without a key drops every edit of that model only, for both tabs (they share them)', () => {
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a')] });
+    s = reducer(s, { type: 'ADD' });
+    s = reducer(s, { type: 'LOAD', slot: 1, objects: [obj('b')] });
+    for (const slot of [0, 1]) s = reducer(s, { type: 'OPTICS_EDIT', slot, key: DEFAULT_KEY, edit: { rho: 0.3, tau: 0, kind: 'opaque' } });
+    s = reducer(s, { type: 'OPTICS_EDIT', slot: 0, key: '/M/Glass', edit: { rho: 0, tau: 0.5, kind: 'glass' } });
+    const b = m(s, 1);
+    s = reducer(s, { type: 'OPTICS_RESET', slot: 0 });
+    expect([m(s).optics, m(s, 1)]).toEqual([{}, b]);
+    expect(m(s, 1)).toBe(b);
+    expect(reducer(s, { type: 'OPTICS_RESET', slot: 0 })).toBe(s); // nothing to reset
+  });
+});
+
+describe('ROLES_RESET', () => {
+  const rows = () => [obj('a'), { ...obj('b'), shade: false as const }, obj('c', 'shade'), obj('d', 'none')];
+  it('every row back to its role at load (a scene: none), the no-shade flags gone, the result dropped; nothing to reset keeps the state', () => {
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows() });
+    s = reducer(s, { type: 'RUN', slot: 0, run: { status: 'done', result: { data: [], weights: new Float32Array(), columns: ['radiation_front'], receivers: ['a', 'b'], on: 'faces', key: 'k', elapsed: 0, manifest: { columns: ['radiation_front'], meshes: [] } as unknown as RunResult['manifest'] } } });
+    const views = m(s).viewAnalysis;
+    s = reducer(s, { type: 'ROLES_RESET', slot: 0 });
+    expect(m(s).objects.map((o) => [o.role, o.shade])).toEqual([['none', undefined], ['none', undefined], ['none', undefined], ['none', undefined]]);
+    expect([m(s).result, m(s).viewAnalysis]).toEqual([null, views]); // daylight's only
+    expect(reducer(s, { type: 'ROLES_RESET', slot: 0 })).toBe(s);
+  });
+  it("a single mesh drawn once receives again, an instanced one has none; tagged, it resets the view analysis' roles and groups only", () => {
+    let one = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [obj('a', 'shade')] });
+    expect(m(reducer(one, { type: 'ROLES_RESET', slot: 0 })).objects[0].role).toBe('receiver');
+    one = reducer(initialState(), { type: 'LOAD', slot: 0, objects: [{ ...obj('a', 'shade'), instances: 4 }] });
+    expect(m(reducer(one, { type: 'ROLES_RESET', slot: 0 })).objects[0].role).toBe('none');
+    let s = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows() });
+    s = reducer(s, { type: 'ROLE', slot: 0, ids: ['c'], role: 'shade', group: 'park', tab: 'views' });
+    const daylight = m(s).objects;
+    s = reducer(s, { type: 'ROLES_RESET', slot: 0, tab: 'views' });
+    expect(m(s).viewAnalysis.objects.map((o) => [o.role, o.group])).toEqual([['none', undefined], ['none', undefined], ['none', undefined], ['none', undefined]]);
+    expect(m(s).objects).toBe(daylight);
+  });
 });
 
 describe('several models', () => {

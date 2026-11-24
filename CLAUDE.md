@@ -16,9 +16,14 @@
   the viewer's GitHub Pages, which serves only the latest `main` core. When a `native/` or protocol change lands on the
   viewer's `main`, re-pin to that `main` the same day, or `npm run core` refuses on fresh clones. The viewer's own chrome
   (its status line, the Shift-drag marquee) is the one exception to kit-ui-only.
-- Two analyses of the same models, a tab each: Daylight and View analysis (the core's `views`). Their roles, settings,
-  runs and results are separate (`web/src/store.ts`: the view analysis' slice, actions tagged `tab: 'views'`; untagged =
-  daylight, which the agent tools in `web/src/mcp` drive). Materials edits are shared.
+- Two analyses of the same models, a tab each: Daylight and View analysis (the core's `views`), then the Combined tab,
+  always last (saved sets' results weighed into one value per element, `web/src/sets`). Their roles, settings, runs and
+  results are separate (`web/src/store.ts`: the view analysis' slice, actions tagged `tab: 'views'`, the Combined tab's
+  column and colouring `tab: 'combined'`; untagged = daylight). The agent tools in `web/src/mcp` drive both analyses
+  (`analysis` parameter, daylight by default) and the Combined tab. Materials edits are shared. Analysis sets and
+  combined views live on the server (`/sets`, open to every client); results stay per session in `web/src/sets/kept.ts`.
+  A set is a tab's whole setup, each entry linked to its own model (letter and file, `sets/apply.ts` `entryFor`, no
+  borrowing); another model takes one only as a copy (`copySet`, roles and Materials edits by USD path).
 - Server: `server/` (C++17, cpp-httplib, links `daylightcore`; `tool` = daylight or views per job); API and caching in
   `server/README.md`. Edit `server/src/server.cpp` and `server/openapi.json` together.
 - Web: `web/` (Vite + React + TS + three + maplibre); `npm test` (vitest; from PowerShell: in Git Bash its default

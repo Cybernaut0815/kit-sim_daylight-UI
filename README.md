@@ -14,7 +14,9 @@ the GPU box (or tick "Run on every change"), read the results on the meshes (per
 painted blue / red) and in charts (legend, area-weighted histogram, cumulative area curve, each over the colour scale
 or the whole data range, range split, per-mesh table); the cursor's element is read out on every chart. A bar of the
 histogram shows where its values lie on the model, on hover or kept by a click (Shift+click a range, Ctrl+click to add
-or remove, a drag across bars). The result shown stays the one picked through new runs and changed roles.
+or remove, a drag across bars). The result shown stays the one picked through new runs and changed roles. *Display*,
+*Values on the surfaces* (off by default) writes the values on the painted surfaces where nothing covers them, at most
+150 a view, once the camera rests; values from a million on show in exponent form with three digits (1.23e6).
 
 **Receivers keep the file's own mesh.** The 3D view draws every mesh as triangles, with points that share a position
 as one vertex. A run does not take that as the mesh: a receiver is sent as the faces and points its file has, so "on
@@ -43,7 +45,7 @@ files with it; a `.usda` / `.usdc` / `.usd` is the flattened stage, zipped with 
 the model as drawn, in metres, the receivers coloured with the shown result; glTF also every result as a value
 attribute (`_DAYLIGHT_<RESULT>`).
 *Info* in the app bar explains the app: a quick start, reading the results, comparing models, the view analysis,
-glass and reflective materials.
+glass and reflective materials, sets and combined views.
 Styled with [kit-ui](https://github.com/Cybernaut0815/kit-UI_template) (`data-kit="sim"`, KIT-SIM; `web/src/kit.css`).
 
 **View analysis.** The *View analysis* tab in the app bar runs the core's `views` tool on the same models, meshes and
@@ -58,6 +60,23 @@ the reach shares, painted on the meshes (each kind of result in a gradient of it
 obstruction greys, targets greens, distances logarithmic), with the distribution charts, a view composition donut (bars
 per model when comparing) and reach bars. Switching tabs keeps each analysis' roles and
 results; Daylight's inputs stay as they were.
+
+**Analysis sets and the Combined tab.** *Sets* in the bar under the 3D views saves the tab's whole setup under a name:
+per open model (up to four) its roles and Materials edits, each entry linked to its model's letter and file; the
+Daylight or View analysis settings, north, the site and weather (Daylight; an uploaded EPW by its file name), the
+result shown, the colours, the charts and the subdivision level (display switches and per-mesh refinements are not
+kept). Sets are kept on the server (`/sets`, for every browser and the agent). Opening one gives each model its own
+entry only (its letter and file, or its file reopened in another tab); a model without one keeps its roles, and the
+note says per model what it took. A set's fold-out lists what it keeps and offers *Copy to model*: a new set of one
+entry for another model, with the roles and Materials edits whose USD paths that model has (every other mesh without a
+role), opened at once to edit. The Model, Materials and Location panels reset the roles to how the file opened, every
+Materials edit, and the site to the user's own position (when the browser shares it). Results stay at hand while the page
+is open (a session cache of 512 MB), so a set opened again shows its result without a run. The **Combined** tab, always
+the last, saves the Daylight or View analysis setup now as a new set and lists the sets of each tab, each a fold-out with
+its state per model (*Run* computes the missing results in the background; *Update from the current setup*; *Rename*,
+its id kept so combined views follow), and the combined views, each input a fold-out of its own: up to 8 inputs, each a set's result column through a function (as it is, normalised, inverted, log10,
+a threshold or a band), weighted and limited to some meshes, combined by weighted mean or sum, minimum, maximum or
+product into one value per element, painted on every model with the Results charts.
 
 **Materials.** By default every surface is opaque and black (today's numbers and speed, as Ladybug's RadiationStudy);
 only the virtual ground reflects (*Ground reflectance*). Two switches in Simulation, each slower, add what the model's
@@ -120,7 +139,8 @@ cross-origin isolated page, which browsers allow on `localhost` or over HTTPS). 
 its log; Ctrl+C stops it. Useful flags: `--port 8090`, `--mcp` (let Claude Code / Desktop drive the app, see
 [server/README.md](server/README.md#agents-mcp)); every flag is in [server/README.md](server/README.md#flags).
 
-The app has two tabs in its top bar: **Daylight** and **View analysis**, on the same models. Open a model in the Model
+The app has three tabs in its top bar: **Daylight** and **View analysis**, on the same models, and **Combined**, the
+saved sets' results weighed together. Open a model in the Model
 panel (or try `server\test\building.usda`), select meshes in the prim tree, give them roles, and press *Run*.
 *Info* in the top bar explains the rest.
 
@@ -153,10 +173,12 @@ the new numbers; an annual one is its compute time, mostly the CPU sky model, pl
 `server/mcp-stdio.mjs`) work with the app: open models by path, set roles, settings and cameras, run, read and discuss
 the results, find critical areas, take screenshots of any shape, section the views with clipping planes and boxes (view
 only: runs use the whole model), set up the Results charts, and write PDF reports on one option or 2 to 4 compared, in
-the kit-ui report layout. The app has no chat: the agent drives the open tab and every change shows there; with no tab
-open the server runs the app hidden in headless Chrome, and opening the app picks that session up. Report charts and
-cameras stay editable in the app (the chart settings button, the Views menu), and the Reports menu generates the PDF
-again. The agent routes answer only on this machine; setup in [server/README.md](server/README.md#agents-mcp).
+the kit-ui report layout. The tools drive both analyses (an `analysis` parameter, Daylight by default), save, open and
+run sets, and build combined views. The app has no chat: the agent drives the open tab and every change shows there;
+with no tab open the server runs the app hidden in headless Chrome, and opening the app picks that session up. Report
+charts and cameras stay editable in the app (the chart settings button, the Views menu), and the Reports menu generates
+the PDF again: a report keeps the Daylight setup it was saved with (roles, settings, problem ranges), which generating
+opens first. The agent routes answer only on this machine; setup in [server/README.md](server/README.md#agents-mcp).
 
 - [server/README.md](server/README.md): documentation endpoints, multi-user behaviour (queue, limits, cancel), caching, flags.
 - `kit-sim_daylight/`: the core (GitHub repo `kit-sim_core`) as a git submodule (`git submodule update --init`); its

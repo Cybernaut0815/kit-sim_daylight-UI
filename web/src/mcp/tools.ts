@@ -11,13 +11,13 @@ import { Matrix4, Vector3, type InstancedMesh, type Mesh, type Object3D } from '
 import type { RowMesh } from '../lib/extract';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
 import type { Pane, UiPrefs } from '../App';
-import { validate, weatherLeap } from '../lib/args';
+import { validate, validateViews, weatherLeap } from '../lib/args';
 import { BUILT_IN, FIELDS, dataOf, putChart, type ChartSpec } from '../lib/charts';
 import { boxToWorld, cornersOf, describeView, facingOf, findCritical, frameView, meanNormal, viewDir, type Box, type Facing, type Points, type Vec3 } from '../lib/frame';
 import { STATION_INDEX_URL, haversineKm, nearestStations, parseStationIndex, photonReverse, photonSearch, proxyUrl } from '../lib/geo';
 import { defaultScaling, gradientFor, type Scale } from '../lib/gradients';
 import { DEFAULT_KEY, GLASS_KEY, PRESETS, editOptics, type Optics, type resolveOptics } from '../lib/optics';
-import { QUANTITY_HELP, SIDE_HELP, fmtNum, roundNum, roundPct, summarize, unitFor, type Summary } from '../lib/result';
+import { SIDE_HELP, fmtNum, helpFor, roundNum, roundPct, splitColumn, summarize, unitFor, type Summary } from '../lib/result';
 import { NONE, describe, given, toStage, type Bounds, type Section } from '../lib/section';
 import { dayBounds, parseHoy, sunAt } from '../lib/sun';
 import { fmtClock, fmtTime, yearOf } from '../lib/time';
@@ -26,15 +26,23 @@ import { stageView, type SavedView } from '../lib/views';
 import { zoneAt } from '../lib/zone';
 import { changed, outcome, type Pdf } from '../report/generate';
 import { parseReports, readiness, validateSpec, type AppModel, type AppView, type Draft, type Report, type Stored } from '../report/spec';
-import { QUANTITIES, inFlight, parseSettings, reducer, serializeSettings, type Action, type Model, type ObjectRow, type RunResult, type Settings, type State, type Station, type TimePoint } from '../store';
-import { selectionFill } from '../viewer/Viewer';
+import { columnOf, inputKeysOf } from '../sets/combine';
+import { captureSet, type AnalysisSet } from '../sets/model';
+import type { SetRuns } from '../sets/runs';
+import type { Combined } from '../sets/useCombined';
+import type { SavedSets } from '../sets/useSaved';
+import { QUANTITIES, inFlight, parseSettings, reducer, serializeSettings, type Action, type Model, type ObjectRow, type RunResult, type Settings, type State, type Station, type Tab, type TimePoint, type Tool, type ViewSim } from '../store';
+import { labelScenes, selectionFill } from '../viewer/Viewer';
 import { boundsOf } from '../viewer/Views';
-import { capture } from '../viewer/capture';
+import { capture, type Shot } from '../viewer/capture';
+import { labelsOf } from '../viewer/labels';
 import type { ExportMode, Format } from '../viewer/download';
 import type { Slot } from '../viewer/usd';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
+import viewsGuide from './views.md?raw';
 import { HEADLESS, exclusive, fail, startBridge, until, type CallToolResult } from './bridge';
+import { combinedOf, setHandlers, setsOf } from './sets';
 import { TOOLS, check } from './schema';
 // kit-ui's skills as its package ships them (from v0.2.1; none in an older one): the 'report' and 'kit-ui' topics
 const SKILLS = import.meta.glob<string>('/node_modules/kit-ui/skills/*/*.md', { query: '?raw', import: 'default', eager: true, exhaustive: true });
@@ -67,19 +75,32 @@ export interface Ctl {
   fileOf: (slot: number) => string | undefined; // the file the slot opened (within a picked folder: its path there)
   reports: Stored[] | null; refreshReports: () => Promise<void>; // GET /reports (null: no report routes here); fetch it again
   generate: (id: string) => Promise<Pdf>; generation: (id: string) => { generating: boolean; lastError: string | null }; // report/generate.ts
+  sets: Pick<SavedSets, 'saved' | 'put' | 'remove' | 'refresh' | 'error'>; // the saved sets and combined views (GET /sets), written through
+  runs: Pick<SetRuns, 'statusOf' | 'run' | 'cancel' | 'busy'>; // the sets run in the background (sets/runs.ts)
+  combined: Pick<Combined, 'views' | 'sets' | 'view' | 'inputs' | 'notes' | 'models' | 'shown' | 'scale' | 'domain'>; // the Combined tab (sets/useCombined.ts)
+  openSet: (set: AnalysisSet, copied?: { model: string; text: string }) => void; // a set opened as the Sets menu opens it (APPLY_SET, its tab shown); copied: a copy's own note line
+  analysis: (tool: Tool) => AnalysisCtl; // daylight's (the fields above) or the view analysis'
+}
+/** One analysis as the tools drive it (analysis.ts useAnalysis): its models (the view analysis' seen as daylight's: its
+ *  own roles and results), optics, run inputs, the column it shows with its colouring and scale, its problems and its
+ *  own dispatch (the view analysis' actions tagged for its slice). */
+export interface AnalysisCtl {
+  tool: Tool; models: Model[]; optics: Ctl['optics']; materialsReady: boolean; per: Ctl['per']; shown: string | null; scale: Scale | null; domain: [number, number];
+  colourBy: 'plain' | 'value'; column: string; errors: Record<string, string>; dispatch: Dispatch<Action>;
+  onRun: () => Promise<void>; onDownload: Ctl['onDownload']; busy: () => boolean; held: () => boolean; cancel: () => void;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- checked against the tool's inputSchema before a handler runs
-type Args = Record<string, any>;
+export type Args = Record<string, any>;
 /** A tool: its checked arguments, the controller now, and when its budget ends (Date.now() ms). */
-type Handler = (a: Args, c: () => Ctl, end: number) => Promise<CallToolResult>;
+export type Handler = (a: Args, c: () => Ctl, end: number) => Promise<CallToolResult>;
 
-const LETTERS = 'ABCD', letter = (slot: number) => LETTERS[slot];
+export const LETTERS = 'ABCD', letter = (slot: number) => LETTERS[slot];
 const BUDGET = 42e3; // ms per call for App's async work; the bridge answers by 45 s whatever happens
-const ok = (o: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(o) }] });
+export const ok = (o: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(o) }] });
 const base = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 /** App's async work ended within the call's budget (else it goes on, and the reply says running). */
-const done = (pred: () => boolean, end: number, what: string) => until(pred, end - Date.now(), what).then(() => true, () => false);
+export const done = (pred: () => boolean, end: number, what: string) => until(pred, end - Date.now(), what).then(() => true, () => false);
 
 /** One tool call, its budget ending at `end`: an unknown tool, bad arguments and a thrown error answer isError. */
 async function invoke(name: string, args: Record<string, unknown>, c: () => Ctl, end: number): Promise<CallToolResult> {
@@ -121,13 +142,13 @@ export function connect(c: () => Ctl): () => void {
 
 // ---------------------------------------------------------------------------------------------- helpers
 /** The model in slot `l` (default the active one); a refusal names `field`, the argument that gave the letter. */
-function modelOf(x: Ctl, l?: string, field = 'model'): Model {
+export function modelOf(x: Ctl, l?: string, field = 'model'): Model {
   const slot = l === undefined ? x.state.active : LETTERS.indexOf(l), m = x.state.models.find((k) => k.slot === slot);
   if (!m) throw new Error(`${field}: no model in slot ${l}; open one with open_model, or use ${x.state.models.map((k) => letter(k.slot)).join(', ')}`);
   return m;
 }
 /** The model in slot `l` with meshes, not loading. */
-function loadedOf(x: Ctl, l?: string, field = 'model'): Model {
+export function loadedOf(x: Ctl, l?: string, field = 'model'): Model {
   const m = modelOf(x, l, field), L = letter(m.slot);
   if (x.panes[m.slot]?.loading) throw new Error(`${field}: model ${L} is loading; call app_state until it has loaded`);
   if (!m.objects.length) throw new Error(`${field}: model ${L} has no model open; open one with open_model`);
@@ -140,10 +161,24 @@ const roles = (m: Model) => {
 };
 const problems = (x: Ctl) => validate(x.state.settings, x.per.some((p) => p.receivers.length > 0), x.materialsReady, Math.max(0, ...x.per.map((p) => p.elements)));
 const loadedSlots = (x: Ctl) => x.state.models.filter((m) => (x.panes[m.slot]?.meshes.size ?? 0) > 0).map((m) => m.slot);
-const display = (x: Ctl) => ({
-  active: letter(x.state.active), column: x.shown, colourBy: x.state.colourBy, highlight: x.state.bin, theme: x.theme,
-  sunPath: x.ui.sunPath, sunScale: x.sunScale, split: x.ui.split, link: x.ui.link, auto: x.ui.auto, section: x.section,
-});
+/** What tab `tab` shows: its models (their results), the column it keeps and shows with its colouring and scale, and
+ *  the dispatch that sets them (tagged for its slice). */
+export function tabOf(x: Ctl, tab: Tab) {
+  if (tab === 'combined') {
+    const { column, colourBy } = x.state.combined;
+    return { models: x.combined.models, column, colourBy, shown: x.combined.shown, scale: x.combined.scale, dispatch: (a: Action) => x.dispatch(a.type === 'COLUMN' || a.type === 'COLOUR_BY' ? { ...a, tab: 'combined' } : a) };
+  }
+  const y = x.analysis(tab);
+  return { models: y.models, column: y.column, colourBy: y.colourBy, shown: y.shown, scale: y.scale, dispatch: y.dispatch };
+}
+const display = (x: Ctl) => {
+  const t = tabOf(x, x.ui.tab);
+  return {
+    tab: x.ui.tab, active: letter(x.state.active), column: t.shown, colourBy: t.colourBy, highlight: x.state.bin, labels: x.ui.labels, theme: x.theme,
+    sunPath: x.ui.sunPath, sunScale: x.sunScale, split: x.ui.split, link: x.ui.link, auto: x.ui.auto, section: x.section,
+    ...(x.ui.tab === 'combined' ? { combined: x.combined.view?.id ?? null } : {}),
+  };
+};
 /** Section boxes round prims: the bounds (model metres) of what is drawn at or under them in model `l` (default the
  *  active one). */
 const boundsIn = (x: Ctl, l?: string): Bounds => (paths, at) => {
@@ -188,16 +223,41 @@ export const appView = (x: Pick<Ctl, 'shown' | 'state' | 'panes' | 'variants' | 
 /** A result's element areas per receiver, m²: views of its weights. */
 export const weightsOf = (r: RunResult) => r.manifest.meshes.map((g) => r.weights.subarray(g.first, g.first + g.count));
 /** Per model: its run status, timing and the shown column's mean, P10 and P90 (the Results panel's numbers, cached). */
-function runLines(x: Ctl) {
-  return x.state.models.map((m, i) => {
-    const r = m.result, f = freshness(x, i), col = r && x.shown ? r.columns.indexOf(x.shown) : -1, sum = r && col >= 0 ? dataOf(r, col, m.objects).markers : null;
-    const status = m.run.status === 'error' ? 'failed' : inFlight(m.run) ? m.run.status : !x.per[i].receivers.length ? 'no receiver' : f === 'fresh' ? 'done' : f ?? 'not run';
+function runLines(y: Pick<AnalysisCtl, 'models' | 'per' | 'shown'>) {
+  return y.models.map((m, i) => {
+    const r = m.result, f = freshness(y, i), col = r && y.shown ? r.columns.indexOf(y.shown) : -1, sum = r && col >= 0 ? dataOf(r, col, m.objects).markers : null;
+    const status = m.run.status === 'error' ? 'failed' : inFlight(m.run) ? m.run.status : !y.per[i].receivers.length ? 'no receiver' : f === 'fresh' ? 'done' : f ?? 'not run';
     return {
       model: letter(m.slot), status, ...(m.error ? { error: m.error } : {}),
       ...(r ? { seconds: roundNum(r.elapsed), ...(r.manifest.run_s !== undefined ? { compute: roundNum(r.manifest.run_s) } : {}) } : {}),
-      ...(sum ? { column: x.shown, unit: unitFor(x.shown!).value, mean: roundNum(sum.mean), p10: roundNum(sum.p10), p90: roundNum(sum.p90) } : {}),
+      ...(sum ? { column: y.shown, unit: unitFor(y.shown!).value, mean: roundNum(sum.mean), p10: roundNum(sum.p10), p90: roundNum(sum.p90) } : {}),
     };
   });
+}
+/** The analysis a tool acts on: its `analysis` argument's, else daylight's. */
+const analysisOf = (x: Ctl, a: Args) => x.analysis(a.analysis ?? 'daylight');
+/** Model `m` as analysis `y` sees it (its roles and result there). */
+const inAnalysis = (y: Pick<AnalysisCtl, 'models'>, m: Model) => y.models.find((k) => k.slot === m.slot) ?? m;
+const nameOf = (tool: Tool) => (tool === 'views' ? 'View analysis' : 'Daylight');
+/** A model's meshes by its View analysis role: receivers, obstructions, targets by group (noShade: the receivers that
+ *  block no rays). */
+const viewRoles = (m: Pick<Model, 'objects'>) => {
+  const n = (f: (o: ObjectRow) => boolean) => m.objects.filter(f).length, groups: Record<string, number> = {}, free = n((o) => o.role === 'receiver' && o.shade === false);
+  for (const o of m.objects) if (o.role === 'shade' && o.group) groups[o.group] = (groups[o.group] ?? 0) + 1;
+  return { receiver: n((o) => o.role === 'receiver'), obstruction: n((o) => o.role === 'shade' && !o.group), targets: groups, none: n((o) => o.role === 'none'), ...(free ? { noShade: free } : {}) };
+};
+/** What would stop a View analysis run (lib/args validateViews), by field. */
+const viewProblems = (x: Ctl) => {
+  const y = x.analysis('views'), groups = y.models.flatMap((m) => m.objects.flatMap((o) => (o.role === 'shade' && o.group ? [o.group] : [])));
+  return validateViews(x.state.settings.viewSim, groups, y.per.some((p) => p.receivers.length > 0), y.materialsReady);
+};
+/** app_state's viewAnalysis: its settings, per model its roles, run and result, the column and colouring, its problems. */
+function viewState(x: Ctl) {
+  const y = x.analysis('views');
+  return {
+    settings: x.state.settings.viewSim, column: y.shown, colourBy: y.colourBy, problems: viewProblems(x),
+    models: y.models.map((m, i) => ({ model: letter(m.slot), meshes: viewRoles(m), run: m.run.status === 'error' ? 'failed' : m.run.status, ...(m.error ? { error: m.error } : {}), result: freshness(y, i) })),
+  };
 }
 /** A Materials table row as get_materials and edit_material answer it. */
 const materialRow = (material: string, p: Optics) => ({ material, kind: p.kind, rho: roundNum(p.rho), tau: roundNum(p.tau), source: p.source, ...(p.warning ? { warning: p.warning } : {}) });
@@ -213,7 +273,7 @@ function viewOf(x: Ctl, slot: number) {
 const NUMS = ['area', 'min', 'p10', 'median', 'mean', 'p90', 'max', 'total'] as const;
 /** A summary as results quotes it: values as the app rounds them; shares in %, of the problem range when one is set
  *  (`ranged`) and per threshold x below x and at or above it. */
-function quoted(u: Summary, th: readonly number[], ranged: boolean) {
+export function quoted(u: Summary, th: readonly number[], ranged: boolean) {
   return {
     elements: u.elements, ...Object.fromEntries(NUMS.map((k) => [k, roundNum(u[k])])),
     ...(ranged ? { below: roundPct(u.below), within: roundPct(u.within), above: roundPct(u.above) } : {}),
@@ -231,8 +291,19 @@ export function difference(u: Summary, v: Summary, th: readonly number[], ranged
     ...(th.length ? { thresholds: th.map((x, i) => ({ x, below: pts(v.atLeast[i] - u.atLeast[i]), atOrAbove: pts(u.atLeast[i] - v.atLeast[i]) })) } : {}),
   };
 }
-/** The north a result ran with (its run key starts with the core's arguments): its facings' compass. */
-const northOf = (r: RunResult) => { const [args] = JSON.parse(r.key) as [string[]]; return Number(args[args.indexOf('--north') + 1]); };
+/** The north a result ran with (its run key starts with the core's arguments): its facings' compass. A combined result's
+ *  key holds its inputs' run keys instead: the first input run's north (0 without one). */
+const northOf = (r: Pick<RunResult, 'key'>): number => {
+  const [args] = JSON.parse(r.key) as [unknown];
+  if (Array.isArray(args)) return Number(args[args.indexOf('--north') + 1]);
+  const run = inputKeysOf(r.key).find((k) => k !== null);
+  return run ? northOf({ key: run }) : 0;
+};
+/** A View analysis run as results quotes it (no period or weather): elements, the core's arguments (mesh ids as prim
+ *  paths), timing, the server cache. */
+const viewProvenance = (r: RunResult, rows: readonly ObjectRow[]) => ({
+  elements: r.on, args: (JSON.parse(stableKey(r.key, rows)) as [string[]])[0], seconds: roundNum(r.elapsed), ...(r.manifest.run_s !== undefined ? { compute: roundNum(r.manifest.run_s) } : {}), ...(r.cache ? { cache: r.cache } : {}),
+});
 /** A result's run as results quotes it: period, hours and sun directions evaluated, weather, the core's arguments (mesh ids
  *  as prim paths), timing, the server cache. */
 export function provenance(r: RunResult, rows: readonly ObjectRow[]) {
@@ -352,10 +423,11 @@ export function shotSize(width: number, height: number): { width: number; height
 /** One MessageChannel task (not throttled in a hidden tab, unlike timers). */
 const tick = () => new Promise<void>((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(null); });
 
-/** How the views look for shots: the column by name, the colouring, the sun path, the ground grid (the overlay frame()
- *  skips), a quantity's colour scale Min and Max (`pin`), no bin highlight and no selection fill (`clean`), a section of
- *  their own (model metres; null: none; left out: the user's). */
-export interface Look { column?: string; colourBy?: 'plain' | 'value'; sunPath?: boolean; grid?: boolean; pin?: { quantity: string; min: number; max: number }; clean?: boolean; section?: Section | null }
+/** How the views look for shots: the tab (its analysis' results and colours; left out: the one shown), the column by
+ *  name, the colouring, the sun path, the ground grid (the overlay frame() skips), a quantity's colour scale Min and Max
+ *  (`pin`), no bin highlight and no selection fill (`clean`), a section of their own (model metres; null: none; left
+ *  out: the user's). */
+export interface Look { tab?: Tab; column?: string; colourBy?: 'plain' | 'value'; sunPath?: boolean; grid?: boolean; pin?: { quantity: string; min: number; max: number }; clean?: boolean; section?: Section | null }
 let staging = 0; // looks staged now
 /** A look is staged for shots: App keeps it out of the stored settings and view preferences (the restore stores them). */
 export const isStaging = () => staging > 0;
@@ -365,9 +437,14 @@ export const inShot = (el: UsdViewerElement) => shooting.has(el);
 /** fn with the views of `slots` showing `look` (each part only when given) and no pointer hover or probe (a bin highlight
  *  and the selection stay, unless clean); all of it put back after fn, also when it throws. */
 export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Look, fn: () => Promise<T>): Promise<T> {
-  const x = c(), ref = x.state.models.find((m) => m.result)?.result, col = look.column === undefined ? -1 : ref?.columns.indexOf(look.column) ?? -1;
-  if (look.column !== undefined && col < 0) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the views show; run again`);
-  const was = { column: x.state.column, colourBy: x.state.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, bins: x.state.bins, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
+  const x = c(), tab = look.tab ?? x.ui.tab, t = tabOf(x, tab), moved = tab !== x.ui.tab;
+  if (look.column !== undefined && tab === 'combined') {
+    if (!x.combined.views.some((v) => columnOf(v) === look.column)) throw new Error(`combined: ${look.column.replace(/^combined_/, '')} is not a combined view (${x.combined.views.map((v) => v.id).join(', ') || 'none saved; save_combined first'})`);
+  } else if (look.column !== undefined) {
+    const ref = t.models.find((m) => m.result)?.result;
+    if (!ref?.columns.includes(look.column)) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the ${tab === 'views' ? 'View analysis' : 'Daylight'} tab shows; run again`);
+  }
+  const was = { column: t.column, colourBy: t.colourBy, sunPath: x.ui.sunPath, bin: x.state.bin, bins: x.state.bins, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
   // the shot's section goes straight to its views, without the gizmo (a drag would edit the shot's); after it they get the
@@ -378,12 +455,12 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     flushSync(() => {
       x.dispatch({ type: 'HOVER', id: null });
       x.dispatch({ type: 'PROBE', probe: null }); // the pointer's, not the shot's
-      if (was.tab !== 'daylight') x.setUi((u) => ({ ...u, tab: 'daylight' })); // the views show daylight's results and colours: the tools' analysis
-      if (look.column !== undefined) x.dispatch({ type: 'COLUMN', column: look.column });
-      if (look.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
+      if (moved) x.setUi((u) => ({ ...u, tab })); // the views show that tab's results and colours
+      if (look.column !== undefined) t.dispatch({ type: 'COLUMN', column: look.column });
+      if (look.colourBy) t.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
       if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
       if (look.pin) x.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: look.pin.min, max: look.pin.max } });
-      if (look.clean) { x.dispatch({ type: 'BIN', bin: null }); x.dispatch({ type: 'BINS', bins: [] }); }
+      if (look.clean || moved) { x.dispatch({ type: 'BIN', bin: null }); x.dispatch({ type: 'BINS', bins: [] }); } // a bin of another tab's column
     });
     if (fill) fill.highlight = { color: '#000000', opacity: 0 }; // after the commit: a colouring change sets it again
     for (const [o] of grids) o.visible = look.grid!;
@@ -404,15 +481,15 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (gizmo && !el.sectionGizmo) el.sectionGizmo = gizmo;
     }
     flushSync(() => {
-      const z = c();
-      if (look.column !== undefined) z.dispatch({ type: 'COLUMN', column: was.column });
-      if (look.colourBy) z.dispatch({ type: 'COLOUR_BY', colourBy: was.colourBy });
+      const z = c(), back = tabOf(z, tab).dispatch;
+      if (look.column !== undefined) back({ type: 'COLUMN', column: was.column });
+      if (look.colourBy) back({ type: 'COLOUR_BY', colourBy: was.colourBy });
       if (look.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
       if (look.pin) z.dispatch({ type: 'VIZ', quantity: look.pin.quantity, patch: { min: was.scale?.min ?? null, max: was.scale?.max ?? null } });
-      if (look.clean) { z.dispatch({ type: 'BIN', bin: was.bin }); z.dispatch({ type: 'BINS', bins: was.bins }); }
-      if (was.tab !== 'daylight') z.setUi((u) => ({ ...u, tab: was.tab }));
+      if (look.clean || moved) { z.dispatch({ type: 'BIN', bin: was.bin }); z.dispatch({ type: 'BINS', bins: was.bins }); }
+      if (moved) z.setUi((u) => ({ ...u, tab: was.tab }));
     });
-    if (fill) fill.highlight = selectionFill(c().state.colourBy === 'value' && !!c().scale);
+    if (fill) { const z = c(), u = tabOf(z, z.ui.tab); fill.highlight = selectionFill(u.colourBy === 'value' && !!u.scale); }
   }
 }
 export async function b64(blob: Blob): Promise<string> {
@@ -478,7 +555,7 @@ async function stationIndex(c: () => Ctl): Promise<Station[]> {
 export function publicSettings(s: Settings) {
   const { site, sim, time: t, weather: w, viz } = s, at = (p: TimePoint) => ({ date: p.date, hour: fmtClock(p.hour) });
   return {
-    site, sim,
+    site, sim, view: s.viewSim,
     time: { mode: t.mode, date: t.date, hour: fmtClock(t.hour), from: at(t.from), to: at(t.to), step: t.stepMin },
     weather: { source: w.source, station: w.station?.title ?? null, file: w.file && (pathOf.get(w.file) ?? w.file.name), turbidity: w.turbidity, altitude: w.altitude },
     viz: {
@@ -506,7 +583,7 @@ function dateOf(field: string, d: string): string {
 }
 
 /**
- * update_settings' arguments -> the actions the panels dispatch for them (SITE, WEATHER, TIME, SIM, VIZ, CHART), each value
+ * update_settings' arguments -> the actions the panels dispatch for them (SITE, WEATHER, TIME, SIM, VIEW_SIM, VIZ, CHART), each value
  * checked; a site query is geocoded and a weather file fetched before (`file`), a station is found in `s`'s index, and
  * each chart is checked against the ones before it. `shown`: the column shown, whose quantity viz takes by default.
  */
@@ -543,8 +620,9 @@ export function settingsActions(a: Args, s: State, shown: string | null, file?: 
     out.push({ type: 'TIME', patch });
   }
   if (a.sim) out.push(...(a.sim.mode ? [simMode(a.sim.mode)] : []), { type: 'SIM', patch: a.sim });
+  if (a.view) out.push({ type: 'VIEW_SIM', patch: viewPatch(a.view, s.settings.viewSim) });
   if (a.viz) {
-    const { quantity = shown?.split('_')[0], reset, gradient, scaling, min, max, below, above, belowColour, aboveColour } = a.viz;
+    const { quantity = shown ? splitColumn(shown)[0] : undefined, reset, gradient, scaling, min, max, below, above, belowColour, aboveColour } = a.viz;
     if (!quantity) throw new Error('viz.quantity: no result is shown yet; name the quantity');
     if (reset) out.push({ type: 'VIZ_RESET', quantity, what: reset }); // first: the other fields go over it
     const patch = Object.fromEntries(Object.entries({ gradient, scaling, min, max, lo: below, hi: above, below: belowColour, above: aboveColour }).filter(([, v]) => v !== undefined));
@@ -571,6 +649,30 @@ export function settingsActions(a: Args, s: State, shown: string | null, file?: 
     st = reducer(st, act);
   }
   return out;
+}
+
+/** A roles entry (set_roles; save_set's roles, `at` its path) as the store's actions on model `m` in analysis `tool`:
+ *  daylight's receiver, shade or none (shade: whether receivers cast shade); the view analysis' receiver, obstruction,
+ *  target (a shade in target group `group`) or none. A role of the other analysis throws, naming its field. */
+export function roleActions(m: Model, r: Args, tool: Tool, at = 'arguments'): Action[] {
+  const field = (k: string) => (at === 'arguments' ? k : `${at}.${k}`), views = tool === 'views';
+  if (!views && (r.role === 'obstruction' || r.role === 'target')) throw new Error(`${field('role')}: ${r.role} is a View analysis role (analysis 'views'); Daylight's are receiver, shade and none`);
+  if (views && r.role === 'shade') throw new Error(`${field('role')}: the View analysis' roles are receiver, obstruction, target and none (a shade there is an obstruction)`);
+  if (r.shade !== undefined && r.role !== 'receiver') throw new Error(`${field('shade')}: only with role 'receiver' (a shade always casts shade; role none leaves a mesh out)`);
+  if (r.group !== undefined && r.role !== 'target') throw new Error(`${field('group')}: only with role 'target'`);
+  if (r.role === 'target' && r.group === undefined) throw new Error(`${field('group')}: a target takes its group (the result's column, e.g. 'park' gives park_front)`);
+  const ids = idsUnder(r.paths, views ? m.viewAnalysis.objects : m.objects), tag = views ? { tab: 'views' as const } : {}, role = r.role === 'obstruction' || r.role === 'target' ? 'shade' : r.role;
+  return [{ type: 'ROLE', slot: m.slot, ids, role, ...(r.group !== undefined ? { group: r.group } : {}), ...tag }, ...(r.shade !== undefined ? [{ type: 'SHADE' as const, slot: m.slot, ids, shade: r.shade as boolean, ...tag }] : [])];
+}
+
+/** A view block (update_settings, save_set; its schema checked) as the View analysis' settings patch, checked with the
+ *  settings it lands on as its panel checks them (lib/args validateViews: the field and cell, far, reach); a problem
+ *  throws, naming its field. */
+export function viewPatch(v: Args, now: ViewSim): Partial<ViewSim> {
+  const patch: Partial<ViewSim> = { ...v, ...(v.fov ? { fov: [...v.fov] as ViewSim['fov'] } : {}) }, e = validateViews({ ...now, ...patch }, [], true);
+  const k = (['fov', 'cell', 'far', 'reach'] as const).find((f) => e[f]);
+  if (k) throw new Error(`view.${k}: ${e[k]}`);
+  return patch;
 }
 
 // ---------------------------------------------------------------------------------------------- reports
@@ -616,13 +718,14 @@ export const HANDLERS: Record<string, Handler> = {
         })),
         display: display(x), subdivision: x.ui.subdiv, settings: publicSettings(s.settings), problems: problems(x), views: x.views.map(({ name, view }) => ({ name, view })),
         reports: (x.reports ?? []).map((e) => ({ id: e.id, title: e.spec.title, models: e.spec.models.map((m) => m.model), updated: e.spec.updated, pdf: e.pdf, ...x.generation(e.id) })),
+        viewAnalysis: viewState(x), sets: setsOf(x), combined: combinedOf(x),
       });
     });
   },
 
   async guide(a) {
     const ui = [skill('kit-ui/SKILL.md'), skill('kit-ui/reference.md')].filter(Boolean).join('\n\n---\n\n'), kr = skill('kit-report/SKILL.md');
-    const text = a.topic === 'daylight' ? guide : a.topic === 'kit-ui' ? ui : kr
+    const text = a.topic === 'daylight' ? guide : a.topic === 'views' ? viewsGuide : a.topic === 'kit-ui' ? ui : kr
       ? `${reportGuide}\n\n---\n\nThe kit-ui kit-report skill, for reference: the app lays the report out and prints it (its sections 1, 3 and 4); its data rules (2) and read-back (5) apply to what you write.\n\n${kr}`
       : reportGuide;
     return text ? { content: [{ type: 'text', text }] } : fail("topic: 'kit-ui' is not in this build (its kit-ui package ships no skills); read 'daylight' or 'report'");
@@ -665,7 +768,7 @@ export const HANDLERS: Record<string, Handler> = {
     const file = a.weather?.file === undefined ? undefined : await epwFile(a.weather.file);
     if (a.weather?.station !== undefined) await stationIndex(c).catch((e: Error) => { throw new Error(`weather.station: ${e.message}; try again, or use source pvgis`); });
     await exclusive(() => {
-      const acts = settingsActions({ ...a, site }, c().state, c().shown, file), { dispatch } = c();
+      const acts = settingsActions({ ...a, site }, c().state, tabOf(c(), c().ui.tab).shown, file), { dispatch } = c();
       flushSync(() => { for (const x of acts) dispatch(x); });
     });
     if (site && site.place === undefined && (site.lat !== undefined || site.lon !== undefined)) { // named later, as the Location panel names a picked point
@@ -747,19 +850,17 @@ export const HANDLERS: Record<string, Handler> = {
   },
 
   async set_roles(a, c) {
-    if (a.shade !== undefined && a.role !== 'receiver') throw new Error("shade: only with role 'receiver' (a shade always casts shade; role none leaves a mesh out)");
+    const tool: Tool = a.analysis ?? 'daylight', views = tool === 'views', rowsOf = (k: Model) => (views ? k.viewAnalysis.objects : k.objects);
     return exclusive(() => {
-      const m = loadedOf(c(), a.model), L = letter(m.slot), ids = idsUnder(a.paths, m.objects), was = new Map(m.objects.map((o) => [o.id, o]));
-      flushSync(() => {
-        c().dispatch({ type: 'ROLE', slot: m.slot, ids, role: a.role });
-        if (a.shade !== undefined) c().dispatch({ type: 'SHADE', slot: m.slot, ids, shade: a.shade });
-      });
-      const now = modelOf(c(), L), changed = now.objects.filter((o) => was.get(o.id)?.role !== o.role || was.get(o.id)?.shade !== o.shade).map((o) => o.path);
-      const hit = new Set(ids), instanced = a.role === 'receiver' ? now.objects.filter((o) => hit.has(o.id) && o.instances).length : 0;
-      const notes = [instanced ? 'instanced meshes can only shade or be ignored' : '', a.shade === false && !c().state.settings.sim.selfOcclude ? 'no receiver casts shade while sim.selfOcclude is off: shade false counts once it is on' : ''].filter(Boolean);
+      const m = loadedOf(c(), a.model), L = letter(m.slot), actions = roleActions(m, a, tool), ids = idsUnder(a.paths, rowsOf(m)), was = new Map(rowsOf(m).map((o) => [o.id, o]));
+      flushSync(() => { for (const action of actions) c().dispatch(action); });
+      const now = modelOf(c(), L), rows = rowsOf(now), changed = rows.filter((o) => { const w = was.get(o.id); return w?.role !== o.role || w?.shade !== o.shade || w?.group !== o.group; }).map((o) => o.path);
+      const hit = new Set(ids), instanced = a.role === 'receiver' ? rows.filter((o) => hit.has(o.id) && o.instances).length : 0;
+      const selfOcclude = views ? c().state.settings.viewSim.selfOcclude : c().state.settings.sim.selfOcclude, block = views ? 'view' : 'sim';
+      const notes = [instanced ? 'instanced meshes can only shade or be ignored' : '', a.shade === false && !selfOcclude ? `no receiver casts shade while ${block}.selfOcclude is off: shade false counts once it is on` : ''].filter(Boolean);
       return ok({
-        model: L, meshes: roles(now), changed: changed.slice(0, 50), ...(changed.length > 50 ? { moreChanged: changed.length - 50 } : {}),
-        unmatched: (a.paths as string[]).filter((p) => !idsUnder([p], m.objects).length), ...(instanced ? { instanced } : {}), ...(notes.length ? { note: notes.join('; ') } : {}),
+        model: L, ...(views ? { analysis: tool } : {}), meshes: views ? viewRoles(now.viewAnalysis) : roles(now), changed: changed.slice(0, 50), ...(changed.length > 50 ? { moreChanged: changed.length - 50 } : {}),
+        unmatched: (a.paths as string[]).filter((p) => !idsUnder([p], rowsOf(m)).length), ...(instanced ? { instanced } : {}), ...(notes.length ? { note: notes.join('; ') } : {}),
       });
     });
   },
@@ -855,41 +956,41 @@ export const HANDLERS: Record<string, Handler> = {
   },
 
   async run(a, c, end) {
-    const going = () => { const x = c(); return x.busy() || x.held() || x.state.models.some((m) => inFlight(m.run)); };
+    const y = () => analysisOf(c(), a), going = () => { const z = y(); return z.busy() || z.held() || z.models.some((m) => inFlight(m.run)); };
     if (a.cancel) {
-      if (c().busy()) { c().cancel(); await done(() => !c().busy(), end, 'the cancel'); }
-      return ok({ status: c().busy() ? 'cancelling' : 'stopped', models: runLines(c()) });
+      if (y().busy()) { y().cancel(); await done(() => !y().busy(), end, 'the cancel'); }
+      return ok({ status: y().busy() ? 'cancelling' : 'stopped', models: runLines(y()) });
     }
     const started = await exclusive(() => {
       if (going()) return false; // join the batch on its way
-      flushSync(() => void c().onRun());
+      flushSync(() => void y().onRun());
       return true;
     });
-    const refused = started ? Object.entries(c().state.errors).filter(([k]) => k !== 'materials') : []; // materials: held until they are read
-    if (refused.length) return fail(JSON.stringify({ status: 'refused', problems: Object.fromEntries(refused), fix: 'update_settings, set_roles or edit_material' }));
+    const refused = started ? Object.entries(y().errors).filter(([k]) => k !== 'materials') : []; // materials: held until they are read
+    if (refused.length) return fail(JSON.stringify({ status: 'refused', problems: Object.fromEntries(refused), fix: `update_settings${a.analysis === 'views' ? ' view' : ''}, set_roles or edit_material` }));
     const finished = await done(() => !going(), Math.min(end, Date.now() + 1000 * (a.wait ?? 40)), 'the run');
-    return ok({ status: finished ? 'done' : 'running', models: runLines(c()) });
+    return ok({ status: finished ? 'done' : 'running', models: runLines(y()) });
   },
 
   async results(a, c) {
     return exclusive(() => {
-      const x = c(), s = x.state, named: string[] | undefined = a.models;
-      const ms = named ? named.map((l, i) => { const m = modelOf(x, l, `models[${i}]`); if (!m.result) throw new Error(`models[${i}]: model ${l} has no result; run first`); return m; }) : s.models.filter((m) => m.result);
-      if (!ms.length) throw new Error('models: no model has a result yet; run first');
-      const column: string = a.column ?? x.shown ?? ms[0].result!.columns[0], [q, side] = column.split('_'), lacks = ms.find((m) => !m.result!.columns.includes(column));
-      if (lacks) throw new Error(`column: model ${letter(lacks.slot)}'s result has no ${column} (${lacks.result!.columns.join(', ')}); run again`);
+      const x = c(), s = x.state, y = analysisOf(x, a), named: string[] | undefined = a.models, run = a.analysis === 'views' ? 'run analysis views' : 'run';
+      const ms = named ? named.map((l, i) => { const m = inAnalysis(y, modelOf(x, l, `models[${i}]`)); if (!m.result) throw new Error(`models[${i}]: model ${l} has no ${nameOf(y.tool)} result; ${run} first`); return m; }) : y.models.filter((m) => m.result);
+      if (!ms.length) throw new Error(`models: no model has a ${nameOf(y.tool)} result yet; ${run} first`);
+      const column: string = a.column ?? y.shown ?? ms[0].result!.columns[0], [q, side] = splitColumn(column), lacks = ms.find((m) => !m.result!.columns.includes(column));
+      if (lacks) throw new Error(`column: model ${letter(lacks.slot)}'s result has no ${column} (${lacks.result!.columns.join(', ')}); ${run} again`);
       const paths: string[] | undefined = a.paths, by: 'mesh' | 'parts' | 'facing' = a.by ?? (paths ? 'parts' : 'mesh'), th: number[] = a.thresholds ?? [], limit: number = a.limit ?? 50;
       if (by === 'parts' && !paths) throw new Error("paths: by 'parts' takes the prim paths (model_tree)");
       const { lo = null, hi = null } = s.settings.viz.ranges[q] ?? {}, ranged = lo !== null || hi !== null;
       const each = ms.map((m) => ({ m, ...summaries(x, m, column, by, paths, lo, hi, th) }));
       const [ref] = each, refRows = new Map(ref.rows.map((row) => [row.key, row.u])); // the differences: to the first model, row by row
       return ok({
-        column, unit: unitFor(column).value, totalUnit: unitFor(column).total, meaning: `${QUANTITY_HELP[q]} ${SIDE_HELP[side]}`, problemRange: { below: lo, above: hi }, by,
+        ...(a.analysis === 'views' ? { analysis: 'views' } : {}), column, unit: unitFor(column).value, totalUnit: unitFor(column).total, meaning: `${helpFor(q)} ${SIDE_HELP[side] ?? ''}`.trim(), problemRange: { below: lo, above: hi }, by,
         models: each.map(({ m, whole, rows }, j) => ({
-          model: letter(m.slot), name: m.name, result: freshness(x, s.models.indexOf(m)),
+          model: letter(m.slot), name: m.name, result: freshness(y, y.models.indexOf(m)),
           whole: { ...quoted(whole, th, ranged), ...(j ? { diff: difference(whole, ref.whole, th, ranged) } : {}) },
           rows: rows.slice(0, limit).map((row) => { const v = j ? refRows.get(row.key) : undefined; return { ...row.head, ...quoted(row.u, th, ranged), ...(v ? { diff: difference(row.u, v, th, ranged) } : {}) }; }),
-          ...(rows.length > limit ? { moreRows: rows.length - limit } : {}), run: provenance(m.result!, m.objects),
+          ...(rows.length > limit ? { moreRows: rows.length - limit } : {}), run: y.tool === 'views' ? viewProvenance(m.result!, m.objects) : provenance(m.result!, m.objects),
         })),
       });
     });
@@ -897,10 +998,10 @@ export const HANDLERS: Record<string, Handler> = {
 
   async find_critical(a, c) {
     return exclusive(() => {
-      const x = c(), m = loadedOf(x, a.model), L = letter(m.slot), r = m.result, f = freshness(x, x.state.models.indexOf(m));
-      if (!r) throw new Error(`model: model ${L} has no result; run first`);
-      if (f !== 'fresh') throw new Error(`model: model ${L}'s result is ${f === 'running' ? 'being replaced by a run on its way; call run to wait for it' : 'stale (inputs changed since it ran); run first'}`);
-      const column: string = a.column ?? x.shown!, col = r.columns.indexOf(column), q = column.split('_')[0], range = x.state.settings.viz.ranges[q];
+      const x = c(), y = analysisOf(x, a), m = inAnalysis(y, loadedOf(x, a.model)), L = letter(m.slot), r = m.result, f = freshness(y, y.models.indexOf(m)), run = a.analysis === 'views' ? 'run analysis views' : 'run';
+      if (!r) throw new Error(`model: model ${L} has no ${nameOf(y.tool)} result; ${run} first`);
+      if (f !== 'fresh') throw new Error(`model: model ${L}'s result is ${f === 'running' ? `being replaced by a run on its way; call ${run} to wait for it` : `stale (inputs changed since it ran); ${run} first`}`);
+      const column: string = a.column ?? y.shown!, col = r.columns.indexOf(column), q = splitColumn(column)[0], range = x.state.settings.viz.ranges[q];
       if (col < 0) throw new Error(`column: not in model ${L}'s result (${r.columns.join(', ')})`);
       const given = a.below !== undefined || a.above !== undefined, below: number | undefined = given ? a.below : range?.lo ?? undefined, above: number | undefined = given ? a.above : range?.hi ?? undefined;
       if (below === undefined && above === undefined) throw new Error(`below: the problem range of ${q} is empty; give below or above (${unitFor(column).value}), or set the range with update_settings viz`);
@@ -924,24 +1025,34 @@ export const HANDLERS: Record<string, Handler> = {
 
   async set_display(a, c) {
     return exclusive(() => {
-      const x = c(), ref = x.state.models.find((m) => m.result)?.result;
+      // column and colourBy: the analysis named, else the tab's (given or shown)
+      const x = c(), tab: Tab = a.tab ?? (a.combined !== undefined ? 'combined' : x.ui.tab), target: Tab = a.analysis ?? tab, t = tabOf(x, target), ref = t.models.find((m) => m.result)?.result;
       if (a.active) modelOf(x, a.active, 'active');
-      if (a.column && !ref) throw new Error('column: no result yet; run first');
+      if (a.combined !== undefined && tab !== 'combined') throw new Error("combined: a combined view shows on the Combined tab; leave tab out, or give tab 'combined'");
+      if (a.combined !== undefined && !x.combined.views.some((v) => v.id === a.combined)) throw new Error(`combined: no combined view ${a.combined} (${x.combined.views.map((v) => v.id).join(', ') || 'none saved; save_combined first'})`);
+      if (a.column && target === 'combined') throw new Error("column: the Combined tab shows a combined view; give combined (its id) instead, or analysis for an analysis' column");
+      if (a.column && !ref) throw new Error(`column: no ${nameOf(target as Tool)} result yet; ${target === 'views' ? 'run analysis views' : 'run'} first`);
       if (a.column && !ref!.columns.includes(a.column)) throw new Error(`column: not in the result (${ref!.columns.join(', ')})`);
       if (a.highlight && !(a.highlight[0] < a.highlight[1])) throw new Error('highlight: [lo, hi] with lo < hi');
-      const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
+      const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto', 'labels'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
       const section = a.section && sectionArg(x, a.section, a.active); // a view's look: no run key holds it, results stay fresh
       flushSync(() => {
+        if (tab !== x.ui.tab) { // as a tab clicked: the probe and the bin highlight belong to the old tab's column
+          x.dispatch({ type: 'PROBE', probe: null }); x.dispatch({ type: 'BIN', bin: null }); x.dispatch({ type: 'BINS', bins: [] });
+          x.setUi((u) => ({ ...u, tab }));
+        }
         if (a.active) x.dispatch({ type: 'ACTIVE', slot: LETTERS.indexOf(a.active) });
-        if (a.column) x.dispatch({ type: 'COLUMN', column: a.column });
-        if (a.colourBy) x.dispatch({ type: 'COLOUR_BY', colourBy: a.colourBy });
+        if (a.column) t.dispatch({ type: 'COLUMN', column: a.column });
+        if (a.combined !== undefined) tabOf(x, 'combined').dispatch({ type: 'COLUMN', column: columnOf({ id: a.combined }) });
+        if (a.colourBy) t.dispatch({ type: 'COLOUR_BY', colourBy: a.colourBy });
         if (a.highlight !== undefined) x.dispatch({ type: 'BIN', bin: a.highlight });
         if (a.theme) x.setTheme(a.theme);
         if (a.sunScale !== undefined) x.setSunScale(a.sunScale);
         if (Object.keys(ui).length) x.setUi((u) => ({ ...u, ...ui }));
         if (section) x.setSection(section);
       });
-      return ok(display(c()));
+      const u = tabOf(c(), target); // an analysis not shown: its column and colouring as they are now
+      return ok({ ...display(c()), ...(target !== tab ? { [target === 'views' ? 'viewAnalysis' : 'daylight']: { column: u.shown, colourBy: u.colourBy } } : {}) });
     });
   },
 
@@ -987,16 +1098,22 @@ export const HANDLERS: Record<string, Handler> = {
     if (a.view && a.frame) throw new Error('view: give view or frame, not both');
     frameOnly(a);
     return exclusive(async () => {
-      const x = c(), ms = ((a.models ?? [letter(x.state.active)]) as string[]).map((l, i) => loadedOf(x, l, a.models ? `models[${i}]` : 'models')), ref = x.state.models.find((m) => m.result)?.result;
-      if (a.column && !ref?.columns.includes(a.column)) throw new Error(`column: ${ref ? `not in the results (${ref.columns.join(', ')})` : 'no result yet; run first'}`);
-      const section: Section | null | undefined = a.section && sectionArg(x, a.section), words = describe(section === undefined ? x.section : section ?? NONE);
-      // the shot's own column, colouring, sun path, grid and section, restored after it
-      return staged(c, ms.map((m) => m.slot), { column: a.column, colourBy: a.colourBy, sunPath: a.sunPath, grid: a.grid, section }, async () => {
-        const y = c(), sc = y.scale, north = y.state.settings.sim.north, out: CallToolResult['content'] = [];
+      const x = c(), ms = ((a.models ?? [letter(x.state.active)]) as string[]).map((l, i) => loadedOf(x, l, a.models ? `models[${i}]` : 'models'));
+      if (a.tab && a.analysis && a.tab !== a.analysis) throw new Error(`analysis: the shot shows one tab; give tab ${a.tab} or analysis ${a.analysis}, not both`);
+      const tab: Tab = a.tab ?? a.analysis ?? (a.combined !== undefined ? 'combined' : x.ui.tab), ref = tabOf(x, tab).models.find((m) => m.result)?.result;
+      if (a.combined !== undefined && tab !== 'combined') throw new Error("combined: a combined view shows on the Combined tab; leave tab and analysis out, or give tab 'combined'");
+      if (a.column && tab === 'combined') throw new Error('column: the Combined tab shows a combined view; give combined (its id) instead');
+      if (a.column && !ref?.columns.includes(a.column)) throw new Error(`column: ${ref ? `not in the results (${ref.columns.join(', ')})` : `no ${tab === 'views' ? 'View analysis' : 'Daylight'} result yet; run first`}`);
+      const section: Section | null | undefined = a.section && sectionArg(x, a.section), words = describe(section === undefined ? x.section : section ?? NONE), labels: boolean = a.labels ?? x.ui.labels;
+      // the shot's own tab, column, colouring, sun path, grid and section, restored after it
+      const column = a.combined !== undefined ? columnOf({ id: a.combined }) : a.column;
+      return staged(c, ms.map((m) => m.slot), { tab, column, colourBy: a.colourBy, sunPath: a.sunPath, grid: a.grid, section }, async () => {
+        const y = c(), u = tabOf(y, tab), sc = u.scale, north = y.state.settings.sim.north, out: CallToolResult['content'] = [];
         for (const m of ms) {
-          const { el } = y.viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1, L = letter(m.slot);
-          const fr = a.frame ? framed(y, m, a, size.width / size.height, !!y.shown?.endsWith('_back')) : null, view = a.view ?? fr?.view ?? el.view;
-          const shot = await capture(el, { width: size.width, height: size.height, view, near: a.near === undefined ? undefined : a.near / mpu, type: 'image/jpeg', quality: 0.85 })
+          const { el } = y.viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1, L = letter(m.slot), shown = u.models.find((k) => k.slot === m.slot);
+          const fr = a.frame ? framed(y, m, a, size.width / size.height, !!u.shown?.endsWith('_back')) : null, view = a.view ?? fr?.view ?? el.view;
+          const onSurfaces = labels ? (cam: Parameters<NonNullable<Shot['labels']>>[0]) => { const s = labelScenes.get(el)?.(cam, size.width, size.height); return s ? labelsOf(s) : []; } : undefined;
+          const shot = await capture(el, { width: size.width, height: size.height, view, near: a.near === undefined ? undefined : a.near / mpu, type: 'image/jpeg', quality: 0.85, labels: onSurfaces })
             .catch((e: Error) => { throw new Error(e.message.replace(/less than (\S+) here$/, (_, v: string) => `less than ${fmtNum(Number(v) * mpu)} m here`)); }); // near's limit: stage units -> m
           // the reply's base64 within budget: a lower JPEG quality first, then fewer pixels (from the first JPEG)
           let data = await b64(shot), q = 0.85, w = size.width, h = size.height;
@@ -1009,9 +1126,10 @@ export const HANDLERS: Record<string, Handler> = {
             data = await b64(await cv.convertToBlob({ type: 'image/jpeg', quality: q }));
           }
           bmp?.close();
-          const value = y.state.colourBy === 'value' && !!sc && !!y.shown && !!m.result?.columns.includes(y.shown), unit = y.shown ? unitFor(y.shown).value : '';
-          const colours = !value ? "the model's own (plain view)"
-            : `${y.shown} in ${unit}, ${sc!.gradient.label} from ${fmtNum(sc!.vmin)} (low) to ${fmtNum(sc!.vmax)} (high)${sc!.lo !== null ? `; under ${fmtNum(sc!.lo)} ${sc!.below}` : ''}${sc!.hi !== null ? `; over ${fmtNum(sc!.hi)} ${sc!.above}` : ''}; meshes without a value plain grey`;
+          const value = u.colourBy === 'value' && !!sc && !!u.shown && !!shown?.result?.columns.includes(u.shown), unit = u.shown ? unitFor(u.shown).value : '';
+          const what = tab === 'combined' ? `the combined view ${y.combined.view?.name ?? u.shown}${unit ? ` in ${unit}` : ''}` : `${u.shown} in ${unit}`;
+          const colours = !value ? `the model's own (plain view)${tab === 'combined' && shown && !shown.result ? `; the combined view has no result for it (${y.combined.notes.join('; ') || 'its inputs are running'})` : ''}`
+            : `${what}, ${sc!.gradient.label} from ${fmtNum(sc!.vmin)} (low) to ${fmtNum(sc!.vmax)} (high)${sc!.lo !== null ? `; under ${fmtNum(sc!.lo)} ${sc!.below}` : ''}${sc!.hi !== null ? `; over ${fmtNum(sc!.hi)} ${sc!.above}` : ''}; meshes without a value plain grey${labels ? '; values written on the surfaces' : ''}`;
           out.push({ type: 'image', data, mimeType: 'image/jpeg' }, {
             type: 'text',
             text: `Model ${L} (${m.name}): ${w} x ${h} px${w !== W || h !== H ? ` (${W} x ${H} asked; images come at most ${LONG} px on the long side${size.reshaped ? ' and at least 16 px on the short one, so the aspect differs' : ''}${w !== size.width ? ', fewer to keep the reply under 800 KB' : ''})` : ''}, JPEG quality ${q.toFixed(2)}. Camera: ${describeView(view, north, mpu)}; ${fmtNum(reach(view, mpu))} m away${a.near !== undefined ? `; geometry nearer than ${fmtNum(a.near)} m cut away` : fr ? `; near ${roundNum(fr.cut * mpu)} would cut away what stands in front of the frame` : ''}. Colours: ${colours}. Section: ${words}.`,
@@ -1024,19 +1142,19 @@ export const HANDLERS: Record<string, Handler> = {
 
   async download_result(a, c, end) {
     return exclusive(async () => {
-      const x = c(), m = loadedOf(x, a.model), L = letter(m.slot), mode: ExportMode = a.mode ?? 'replace';
+      const x = c(), y = analysisOf(x, a), m = inAnalysis(y, loadedOf(x, a.model)), L = letter(m.slot), mode: ExportMode = a.mode ?? 'replace', run = a.analysis === 'views' ? 'run analysis views' : 'run';
       // one at a time, as the Download menu: a second export would write the same file, and the first one's end would
       // say it was saved
       if (x.exporting) throw new Error('format: a download is still being written; it lands in the downloads folder by itself, do not download it again');
-      if (!m.result) throw new Error(`model: model ${L} has no result; run first`);
-      if (!x.shown || !m.result.columns.includes(x.shown)) throw new Error(`model: model ${L}'s result has no ${x.shown} column; run it again`);
+      if (!m.result) throw new Error(`model: model ${L} has no ${nameOf(y.tool)} result; ${run} first`);
+      if (!y.shown || !m.result.columns.includes(y.shown)) throw new Error(`model: model ${L}'s result has no ${y.shown} column; ${run} again`);
       flushSync(() => x.dispatch({ type: 'ACTIVE', slot: m.slot })); // the Download menu acts on the active model
-      flushSync(() => void c().onDownload(a.format, mode));
+      flushSync(() => void analysisOf(c(), a).onDownload(a.format, mode));
       if (!(await done(() => !c().exporting, end, 'the download'))) return ok({ model: L, status: 'running', note: 'still writing the file; it lands in the downloads folder by itself: do not call download_result again for it' });
       const e = c().exportError;
       if (e && e.key === m.result.key) return fail(`download failed: ${e.message}`);
       return ok({
-        model: L, format: a.format, ...(a.format.startsWith('usd') ? { mode } : {}), column: x.shown, saved: "the browser's downloads folder",
+        model: L, ...(a.analysis === 'views' ? { analysis: 'views' } : {}), format: a.format, ...(a.format.startsWith('usd') ? { mode } : {}), column: y.shown, saved: "the browser's downloads folder",
         note: "several downloads from a background tab can trigger the browser's 'automatic downloads' prompt, after which it blocks them",
       });
     });
@@ -1044,13 +1162,24 @@ export const HANDLERS: Record<string, Handler> = {
 
   async get_report(a, c) {
     const e = await storedReport(a.id), problems = readiness(e.spec, appView(c()), c().generation(a.id).generating);
-    const { ranges: _r, blocks, ...spec } = e.spec; // the spec as save_report takes it: what the save adds left out
-    return ok({ spec: { ...spec, blocks: blocks.map((b) => (b.type === 'chart' ? { type: b.type, chart: b.chart, caption: b.caption } : b)) }, pdf: e.pdf, ready: !problems.length, problems });
+    const { ranges: _r, setup, blocks, ...spec } = e.spec; // the spec as save_report takes it: what the save adds left out
+    return ok({
+      spec: { ...spec, blocks: blocks.map((b) => (b.type === 'chart' ? { type: b.type, chart: b.chart, caption: b.caption } : b)) },
+      // what Generate opens first: per report model its roles' counts, the settings, the column shown
+      ...(setup ? {
+        setup: {
+          models: setup.models.map((m) => ({ model: m.model, file: m.file, receivers: m.roles.filter((r) => r.role === 'receiver').length, shades: m.roles.filter((r) => r.role === 'shade').length })),
+          settings: setup.settings, column: setup.column,
+        },
+      } : {}),
+      pdf: e.pdf, ready: !problems.length, problems,
+    });
   },
 
   async save_report(a, c) {
     return exclusive(async () => {
-      const d = validateSpec(a.spec, appView(c()), boundsIn(c()));
+      // the Daylight setup now goes with it (the name a set's: a title may be longer than a set's name takes)
+      const d = validateSpec(a.spec, appView(c()), boundsIn(c()), captureSet(c().state, 'daylight', 'Report setup', { shown: c().shown, subdiv: c().ui.subdiv }));
       if (Array.isArray(d)) return fail(`spec: ${d.length} problem${d.length > 1 ? 's' : ''}; fix ${d.length > 1 ? 'them' : 'it'} and save again:\n${d.join('\n')}`);
       const old = (await storedReports()).find((e) => e.id === d.id)?.spec, since: unknown = a.updated ?? a.spec.updated; // get_report's spec carries its updated
       if (old && since !== old.updated) {
@@ -1091,6 +1220,8 @@ export const HANDLERS: Record<string, Handler> = {
     if ('e' in r) return fail(/^(?:id|blocks\[\d+\]): /.test(r.e.message) ? r.e.message : `${a.id}: ${r.e.message}`); // a field it names, else the report
     return ok({ id: a.id, ...r.p });
   },
+
+  ...setHandlers({ difference, loadedOf, ok, quoted, roleActions, settingsActions, summaries }),
 };
 
 // ---------------------------------------------------------------------------------------------- the hidden instance's session
@@ -1098,7 +1229,7 @@ export const HANDLERS: Record<string, Handler> = {
  *  file opened by path), its subdivision level (a view preference of its own browser profile that shapes the meshes run),
  *  its state-changing calls in order, and whether a model had a result (or a run on its way). */
 interface Session { settings: string; subdiv: number; epw?: string; steps: { name: string; arguments: Args }[]; ran: boolean }
-const STEPS = new Set(['open_model', 'remove_model', 'set_roles', 'set_geometry', 'edit_material', 'set_visibility', 'set_display', 'set_camera', 'save_view']);
+const STEPS = new Set(['open_model', 'remove_model', 'set_roles', 'set_geometry', 'edit_material', 'set_visibility', 'set_display', 'set_camera', 'save_view', 'open_set']);
 const steps: Session['steps'] = [];
 const textOf = (r: CallToolResult) => r.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
 
@@ -1109,7 +1240,8 @@ const textOf = (r: CallToolResult) => r.content.flatMap((b) => (b.type === 'text
 async function record(name: string, args: Args, res: CallToolResult, active: number, c: () => Ctl): Promise<void> {
   const tool = TOOLS.find((t) => t.name === name);
   if (res.isError || !tool || tool.annotations?.readOnlyHint) return;
-  if (STEPS.has(name)) {
+  if (name === 'copy_set') steps.push({ name: 'open_set', arguments: { id: (JSON.parse(textOf(res)) as { saved: { id: string } }).saved.id } }); // the copy is saved: the tab opens it, never copies it again
+  else if (STEPS.has(name)) {
     const reply = JSON.parse(textOf(res)) as { model?: string; view?: unknown; section?: unknown };
     const model: string | undefined = name === 'open_model' ? reply.model : args.model ?? (tool.inputSchema.properties?.model ? letter(active) : undefined);
     steps.push({ name, arguments: { ...(name === 'set_camera' ? { view: reply.view } : args.section ? { ...args, section: reply.section } : args), ...(model ? { model } : {}) } });

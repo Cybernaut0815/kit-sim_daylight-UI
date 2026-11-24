@@ -87,9 +87,10 @@ export function Illustration({ kind }: { kind: 'model' | 'results' }) {
   );
 }
 
-export function Alert({ title, children }: { title: string; children?: ReactNode }) {
+/** `intent`: an error (the default), a warning or a note; a note is announced politely. */
+export function Alert({ title, intent = 'error', children }: { title: string; intent?: 'error' | 'warning' | 'info'; children?: ReactNode }) {
   return (
-    <div className="alert alert--error" role="alert">
+    <div className={`alert alert--${intent}`} role={intent === 'info' ? 'status' : 'alert'}>
       <span className="alert__icon"><Icon name="alert" /></span>
       <div><span className="alert__title">{title}</span>{children}</div>
     </div>

@@ -22,6 +22,10 @@
 /* the sun-path labels over the 3D view (three.js CSS2DRenderer): chart text that never takes the pointer; z-index 0
    keeps the renderer's per-label z-order below the readout and the run bar */
 .viewport__labels { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+/* the value labels over the 3D view (viewer/labels.ts): kit-ui tooltips JS places at their cells, never taking the
+   pointer, below the readout and the run bar */
+.viewport__values { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.viewport__values > .tooltip { position: absolute; inset-block-start: 0; inset-inline-start: 0; white-space: nowrap; }
 .sunpath-label { font-size: var(--fs-small); color: var(--chart-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sunpath-label--strong { color: var(--chart-text-strong); }
 .sunpath-label--at { padding: 0 0 var(--space-1) var(--space-2); } /* anchored by its corner at a handle: up and right of it */
@@ -63,6 +67,8 @@
 /* fixed-size regions: text and data that load or change never move what is below them */
 .line { block-size: 1lh; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* exactly one line, spinner or text */
 .line > .spinner { vertical-align: text-bottom; }
+.sets__summary, .sets__summary > .line { min-inline-size: 0; } /* a set's or an input's fold-out summary: a long name ellipsizes beside its badges and the chevron */
+.accordion .accordion:not([open]) > summary::after { transform: rotate(45deg); } /* kit-ui v0.2.2 turns every summary's chevron inside an open accordion: a folded one nested in it points down */
 .lines-2 { min-block-size: 2lh; }
 .lines-3 { min-block-size: 3lh; }
 .lines-5 { min-block-size: 5lh; }
@@ -132,6 +138,9 @@
 .views__format { padding: var(--space-2) var(--space-3) var(--space-1); }
 .views__save { gap: var(--space-2); }
 .views__save .input { inline-size: auto; flex: 1; min-inline-size: 0; }
+.sets__save { flex-wrap: wrap; } /* the Sets menu's: its label on a row of its own above the name and the button */
+.sets__save > .field__label { flex-basis: 100%; }
+.menu__item > .badge { flex: none; margin-inline-start: auto; } /* a row's state (the open set) at its end, never squeezed */
 .views__download { justify-content: space-between; align-items: center; gap: var(--space-2); }
 /* a menu's fields (a chart's settings, the section's numbers in the run bar): padded as the menu's items */
 .chart-menu { padding: var(--space-2) var(--space-3); }

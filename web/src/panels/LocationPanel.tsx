@@ -1,11 +1,13 @@
 // Location: place search (results float under the field), the map (click, drag the marker, or click a station pin: the
-// site moves there and takes its weather), coordinates, the place's time zone (read only) and model north.
+// site moves there and takes its weather), coordinates, the place's time zone (read only) and model north. Its reset
+// moves the site to the user's own position, when the browser shares it.
 import { memo, useEffect, useRef, useState, type Dispatch, type FocusEvent, type KeyboardEvent } from 'react';
 import { photonReverse, photonSearch, type Place } from '../lib/geo';
+import { locate } from '../lib/locate';
 import { fmtOffset, type Zone } from '../lib/zone';
 import { SiteMap } from '../map/SiteMap';
 import type { Action, Settings, Station } from '../store';
-import { NumberField, ResetButton, Section, knob } from '../ui';
+import { Alert, NumberField, ResetButton, Section, knob } from '../ui';
 
 interface Props {
   site: Settings['site']; tz: number; zone: Zone; north: number; stations: Station[] | null; selectedHref: string | null;
@@ -17,8 +19,9 @@ export const LocationPanel = memo(function LocationPanel({ site, tz, zone, north
   const [found, setFound] = useState<{ key: string; places: Place[] }>({ key: '', places: [] }); // the results and the query they answer
   const [open, setOpen] = useState(false); // the results list may show (the field has focus, nothing chosen yet)
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false), [locateWarning, setLocateWarning] = useState<string | null>(null);
   const memo = useRef(new Map<string, Place[]>()); // Photon asks for fair use: one round trip per distinct query
-  const seq = useRef(0);
+  const seq = useRef(0), asked = useRef(0); // per move of the site; per request of the user's position
   const want = useRef<string | null>(null); // Enter came before the answer to this query: take its first place when it lands
   const input = useRef<HTMLInputElement>(null), list = useRef<HTMLDivElement>(null);
   const key = q.trim().toLowerCase(), places = found.places, fresh = found.key === key;
@@ -66,8 +69,22 @@ export const LocationPanel = memo(function LocationPanel({ site, tz, zone, north
   }, [found]); // eslint-disable-line react-hooks/exhaustive-deps -- choose is new every render; the answer is the trigger
   const pick = (lat: number, lon: number) => {
     const n = ++seq.current;
+    setLocateWarning(null);
     dispatch({ type: 'SITE', patch: { lat, lon, place: `${lat.toFixed(4)}, ${lon.toFixed(4)}` } });
     photonReverse(lat, lon).then((place) => { if (seq.current === n) dispatch({ type: 'SITE', patch: { place } }); }).catch(() => undefined); // coordinates stay as the name
+  };
+  // the browser asks for access on this click; refused or failed, the site stays and the warning says why (north stays: its own reset)
+  const toMyPosition = () => {
+    const n = ++asked.current, at = seq.current;
+    setLocating(true);
+    setLocateWarning(null);
+    void locate().then((r) => {
+      if (asked.current !== n) return; // a later click asks again
+      setLocating(false);
+      if (seq.current !== at) return; // the site was moved meanwhile: that wins
+      if ('error' in r) setLocateWarning(r.error);
+      else pick(r.lat, r.lon);
+    });
   };
   const options = () => [...(list.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
   const onFieldKey = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -88,7 +105,9 @@ export const LocationPanel = memo(function LocationPanel({ site, tz, zone, north
   const north0 = ((Math.round(north) % 360) + 360) % 360;
 
   return (
-    <Section id="location" title="Location">
+    <Section id="location" title="Location" busy={locating} reset={{ onReset: toMyPosition, label: 'Reset Location to your position (the browser asks to share it)' }}>
+      {locating && <p className="field__help" role="status">Asking the browser for your position…</p>}
+      {locateWarning && <Alert intent="warning" title="Your position is not available">{locateWarning}</Alert>}
       <div className="field" onBlur={onLeave}>
         <label className="field__label" htmlFor="place">Search a place</label>
         <input

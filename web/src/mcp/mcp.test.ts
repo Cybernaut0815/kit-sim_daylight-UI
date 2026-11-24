@@ -5,10 +5,11 @@ import { noOccludeArgs } from '../lib/args';
 import type { Summary } from '../lib/result';
 import { NONE, toStage, type Section } from '../lib/section';
 import { glyphs } from '../report/spec';
-import { defaultSettings, initialState, reducer, type Action, type ObjectRow, type State, type Station } from '../store';
+import { TAGGED, defaultSettings, initialState, reducer, swapModel, type Action, type ObjectRow, type RunResult, type State, type Station, type Tab, type Tool } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
+import viewsGuide from './views.md?raw';
 import { SECTION, TOOLS, WORDS, check } from './schema';
 import { HANDLERS, bySide, connect, difference, publicSettings, settingsActions, shotSize, stableKey, type Ctl } from './tools';
 
@@ -64,9 +65,9 @@ describe('the tool list', () => {
 describe('the guides', () => {
   it('name only tools and update_settings fields that exist, in glyphs the report fonts have', () => {
     const names = new Set(mcp.tools.map((t) => t.name)), us = schema('update_settings').properties as Record<string, { properties?: Record<string, unknown> }>;
-    for (const text of [guide, reportGuide]) {
+    for (const text of [guide, reportGuide, viewsGuide]) {
       expect((text.match(/\b(?:app_state|site_info|model_tree|(?:update|open|remove|set|get|edit|find|save|delete|generate|download)_[a-z_]+)\b/g) ?? []).filter((w) => !names.has(w))).toEqual([]);
-      expect((text.match(/\b(?:sim|time|weather|viz|site)\.[a-zA-Z]+\b/g) ?? []).filter((d) => { const [g, k] = d.split('.'); return !us[g]?.properties?.[k]; })).toEqual([]);
+      expect((text.match(/\b(?:sim|time|weather|viz|site|view)\.[a-zA-Z]+\b/g) ?? []).filter((d) => { const [g, k] = d.split('.'); return !us[g]?.properties?.[k]; })).toEqual([]);
       expect([...new Set(text)].filter(glyphs)).toEqual([]); // what the report's fonts draw: agents copy it
     }
   });
@@ -217,8 +218,9 @@ describe('sections', () => {
     };
     let x = {
       state: { active: 0, models: [{ slot: 0, name: 'block', objects: [{ id: 'b', path: '/Site/Block' }] }], colourBy: 'plain', bin: null, settings: { sim: { north: 0 } } },
-      panes: { 0: { loading: false } }, ui: {}, section: NONE, dispatch: () => {}, setUi: () => {}, viewer: () => ({ el }),
+      panes: { 0: { loading: false } }, ui: { tab: 'daylight' }, section: NONE, dispatch: () => {}, setUi: () => {}, viewer: () => ({ el }),
       setSection: (s: Section) => { x = { ...x, section: s }; el.section = toStage(s, 1, 'Z'); },
+      analysis: () => ({ models: x.state.models, column: '', colourBy: 'plain', shown: null, scale: null, dispatch: () => {} }),
     } as unknown as Ctl;
     return { c: () => x, el, shown, gizmos };
   }
@@ -289,8 +291,13 @@ describe('receivers that cast no shade', () => {
     const kids: Record<string, unknown[]> = { '/': [prim('/Room', true)], '/Room': rows.map((o) => prim(o.path)) }, el = { usd: { children: async (p: string) => kids[p] ?? [] }, session: { isLocked: () => false } };
     let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'room' });
     return () => ({
-      state, dispatch: (a: Action) => { state = reducer(state, a); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), ui: {}, views: [], reports: null, generation: () => ({}),
+      state, dispatch: (a: Action) => { state = reducer(state, a); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), ui: { tab: 'daylight' }, views: [], reports: null, generation: () => ({}),
       per: state.models.map((m) => ({ m, receivers: m.objects.filter((o) => o.role === 'receiver'), shades: [], key: '' })),
+      analysis: (tool: Tool) => {
+        const models = tool === 'views' ? state.models.map(swapModel) : state.models;
+        return { tool, models, per: models.map((m) => ({ m, receivers: m.objects.filter((o) => o.role === 'receiver'), shades: [], key: '' })), materialsReady: true, column: state.column, colourBy: state.colourBy, shown: null, scale: null };
+      },
+      sets: { saved: [] }, runs: { statusOf: () => [] }, combined: { views: [], models: [] },
     }) as unknown as Ctl;
   }
   const json = async (c: () => Ctl, name: string, args: Record<string, unknown>) => JSON.parse(await call(c, name, args));
@@ -321,6 +328,102 @@ describe('receivers that cast no shade', () => {
     const a = '00000000-0000-4000-8000-00000000000a', b = '00000000-0000-4000-8000-00000000000b';
     expect(key([a, b])).toBe(JSON.stringify([['--no-occlude', '/Room/Desk;/Room/Grid'], null, ['/Room/Grid', '/Room/Desk'], []]));
     expect(key([b, a])).toBe(key([a, b])); // new ids per re-read, in another order: the same stable key
+  });
+});
+
+describe('the View analysis (analysis views)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const KEY = JSON.stringify([['--fov', '120,-70,50', '--cell', '2', '--north', '0', '--target', 'park=park'], null, 'facade']);
+  const RESULT = {
+    columns: ['sky_front', 'park_front', 'distance_min_front'], data: [[0.2, 0.6], [0.1, 0.3], [4, 12]].map((v) => Float32Array.from(v)), weights: Float32Array.from([1, 3]),
+    receivers: ['facade'], on: 'faces', key: KEY, elapsed: 2, manifest: { meshes: [{ name: 'facade', first: 0, count: 2 }] },
+  } as unknown as RunResult;
+  /** Model A: a 10 x 6 m facade facing -Y (two faces, 1 and 3 m²), a park and a block, all ignored; its View analysis'
+   *  run lands RESULT (or the problem without a receiver). Also the tabs the app was set to and the downloads. */
+  function app() {
+    const rows = ['/Site/Facade', '/Site/Park', '/Site/Block'].map((path): ObjectRow => ({ id: path.slice(6).toLowerCase(), name: path.slice(6), path, tris: 2, verts: 4, role: 'none' }));
+    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = { tab: 'daylight' as Tab, labels: false };
+    const tabs: Tab[] = [], downloads: unknown[] = [], dispatch = (a: Action) => { state = reducer(state, a); };
+    const views = (a: Action) => dispatch(TAGGED.has(a.type) ? ({ ...a, tab: 'views' } as Action) : a);
+    const el = { stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, -20, 3], target: [5, 0, 3], fov: 45, projection: 'perspective', height: 1 }, three: { objectsFor: () => [], overlay: { children: [] } } };
+    const analysis = (tool: Tool) => {
+      const v = tool === 'views', models = v ? state.models.map(swapModel) : state.models, column = v ? state.viewAnalysis.column : state.column, first = models.find((m) => m.result)?.result;
+      return {
+        tool, models, materialsReady: true, per: models.map((m) => ({ m, receivers: m.objects.filter((o) => o.role === 'receiver'), shades: m.objects.filter((o) => o.role === 'shade'), key: KEY })),
+        shown: first ? column || first.columns[0] : null, scale: null, colourBy: v ? state.viewAnalysis.colourBy : state.colourBy, column, errors: v ? state.viewAnalysis.errors : state.errors,
+        dispatch: v ? views : dispatch, busy: () => false, held: () => false, cancel: () => {},
+        onRun: () => { // as useAnalysis: its problems every time, then the job
+          const ready = models[0].objects.some((o) => o.role === 'receiver');
+          views({ type: 'ERRORS', errors: ready ? {} : { model: 'No receiver mesh.' } });
+          if (ready) views({ type: 'RUN', slot: 0, run: { status: 'done', result: RESULT } });
+        },
+        onDownload: (format: string, mode: string) => downloads.push([tool, format, mode]),
+      };
+    };
+    const c = () => ({
+      state, dispatch, ui, setUi: (f: (u: typeof ui) => typeof ui) => { ui = f(ui); tabs.push(ui.tab); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), section: NONE,
+      views: [], reports: null, generation: () => ({}), exporting: false, analysis, per: analysis('daylight').per, shown: null, sets: { saved: [] }, runs: { statusOf: () => [] }, combined: { views: [], models: [] },
+      meshOf: () => ({ positions: [0, 0, 0, 10, 0, 0, 10, 0, 6, 0, 0, 6], indices: [0, 1, 2, 0, 2, 3] }),
+    }) as unknown as Ctl;
+    return { c, tabs, downloads };
+  }
+  const json = async (c: () => Ctl, name: string, args: Record<string, unknown>) => JSON.parse(await call(c, name, args));
+  /** The facade a receiver, the park a target and the block an obstruction, then run. */
+  const ran = async (c: () => Ctl) => {
+    for (const [paths, role, group] of [[['/Site/Facade'], 'receiver'], [['/Site/Park'], 'target', 'park'], [['/Site/Block'], 'obstruction']] as const) await call(c, 'set_roles', { analysis: 'views', paths, role, ...(group ? { group } : {}) });
+    return json(c, 'run', { analysis: 'views' });
+  };
+
+  it("set_roles and app_state: its own roles beside Daylight's, its settings and problems; a role of the other analysis refused", async () => {
+    const { c } = app();
+    vi.stubGlobal('document', { visibilityState: 'visible' });
+    expect((await json(c, 'set_roles', { analysis: 'views', paths: ['/Site/Facade'], role: 'receiver' })).meshes).toEqual({ receiver: 1, obstruction: 0, targets: {}, none: 2 });
+    const park = await json(c, 'set_roles', { analysis: 'views', paths: ['/Site/Park'], role: 'target', group: 'park' });
+    expect([park.analysis, park.meshes, park.changed]).toEqual(['views', { receiver: 1, obstruction: 0, targets: { park: 1 }, none: 1 }, ['/Site/Park']]);
+    expect(await call(c, 'set_roles', { analysis: 'views', paths: ['/Site/Block'], role: 'shade' })).toMatch(/^role: the View analysis' roles are receiver, obstruction, target and none/);
+    expect(await call(c, 'set_roles', { paths: ['/Site/Block'], role: 'obstruction' })).toMatch(/^role: obstruction is a View analysis role/);
+    expect(await call(c, 'set_roles', { analysis: 'views', paths: ['/Site/Block'], role: 'target' })).toMatch(/^group: a target takes its group/);
+    expect(await call(c, 'set_roles', { analysis: 'views', paths: ['/Site/Block'], role: 'target', group: 'a park' })).toBe('group: 1 to 64 letters, digits, _ or -');
+    await call(c, 'set_roles', { analysis: 'views', paths: ['/Site/Block'], role: 'obstruction' });
+    const s = await json(c, 'app_state', {});
+    expect(s.models[0].meshes).toEqual({ receiver: 0, shade: 0, none: 3 }); // Daylight's as they were
+    expect(s.viewAnalysis).toEqual({
+      settings: defaultSettings().viewSim, column: null, colourBy: 'plain', problems: {},
+      models: [{ model: 'A', meshes: { receiver: 1, obstruction: 1, targets: { park: 1 }, none: 0 }, run: 'idle', result: null }],
+    });
+  });
+
+  it("run, results and find_critical act on its result; Daylight's has none", async () => {
+    const { c } = app();
+    expect(await json(c, 'run', { analysis: 'views' })).toEqual({ status: 'refused', problems: { model: 'No receiver mesh.' }, fix: 'update_settings view, set_roles or edit_material' });
+    expect(await ran(c)).toMatchObject({ status: 'done', models: [{ model: 'A', status: 'done', seconds: 2, column: 'sky_front', unit: '', mean: 0.5 }] });
+    const r = await json(c, 'results', { analysis: 'views' }), [m] = r.models;
+    expect([r.analysis, r.column, r.unit, r.meaning.slice(0, 42), m.result, m.whole.mean, m.rows[0].mesh]).toEqual(['views', 'sky_front', '', 'Share of the field of view that is open sk', 'fresh', 0.5, '/Site/Facade']);
+    expect(m.run).toEqual({ elements: 'faces', args: JSON.parse(KEY)[0], seconds: 2 }); // no period or weather
+    const d = await json(c, 'results', { analysis: 'views', column: 'distance_min_front' });
+    expect([d.unit, d.meaning, d.models[0].whole.mean]).toEqual(['m', 'The nearest thing in view, m (Far when the whole field is open). Front side: where the face normal points.', 10]);
+    expect(await call(c, 'results', { analysis: 'views', column: 'sunhours_front' })).toBe("column: model A's result has no sunhours_front (sky_front, park_front, distance_min_front); run analysis views again");
+    expect(await call(c, 'results', {})).toBe('models: no model has a Daylight result yet; run first');
+    expect(await call(c, 'find_critical', { analysis: 'views' })).toMatch(/^below: the problem range of sky is empty; give below or above/);
+    expect(await json(c, 'find_critical', { analysis: 'views', below: 0.5 })).toMatchObject({ model: 'A', column: 'sky_front', below: 0.5, groups: [{ mesh: '/Site/Facade', facing: 'S', elements: 1 }] });
+    expect(await call(c, 'find_critical', { below: 0.5 })).toBe('model: model A has no Daylight result; run first');
+    expect(settingsActions({ viz: { below: 2 } }, c().state, 'distance_min_front')).toEqual([{ type: 'VIZ', quantity: 'distance_min', patch: { lo: 2 } }]); // a view quantity's name holds '_'
+  });
+
+  it('set_display, screenshot and download_result show and save its result, the tab put back after a shot', async () => {
+    const { c, tabs, downloads } = app();
+    await ran(c);
+    const d = await json(c, 'set_display', { analysis: 'views', column: 'park_front', colourBy: 'value' });
+    expect([d.tab, d.column, d.viewAnalysis, c().state.column]).toEqual(['daylight', null, { column: 'park_front', colourBy: 'value' }, '']);
+    expect(await call(c, 'set_display', { analysis: 'views', column: 'sunhours_front' })).toBe('column: not in the result (sky_front, park_front, distance_min_front)');
+    expect(await call(c, 'set_display', { column: 'sky_front' })).toBe('column: no Daylight result yet; run first');
+    const shot = await call(c, 'screenshot', { analysis: 'views', column: 'sky_front' });
+    expect(shot).toMatch(/^Model A \(site\): 1280 x 800 px/);
+    expect([tabs, c().ui.tab, c().state.viewAnalysis.column]).toEqual([['views', 'daylight'], 'daylight', 'park_front']); // shown for the shot, then put back
+    expect(await call(c, 'screenshot', { tab: 'daylight', analysis: 'views' })).toBe('analysis: the shot shows one tab; give tab daylight or analysis views, not both');
+    expect(await json(c, 'download_result', { analysis: 'views', format: 'glb' })).toMatchObject({ model: 'A', analysis: 'views', format: 'glb', column: 'park_front' });
+    expect(downloads).toEqual([['views', 'glb', 'replace']]);
+    expect(await call(c, 'download_result', { format: 'glb' })).toBe('model: model A has no Daylight result; run first');
   });
 });
 

@@ -138,6 +138,7 @@ function inline({ values, rows, cols }: Result): string {
 
 // jobs: queued for 0.5 s (one fake job ahead), running for 0.7 s, then done; the result is computed at submission
 const jobs = new Map<string, { t0: number; result: Result; cancelled: boolean }>();
+const sets = new Map<string, string>(); // /sets, in memory: the dev server's life
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const isDone = (id: string) => { const j = jobs.get(id)!; return !j.cancelled && Date.now() - j.t0 >= 1200; };
 function view(id: string): string {
@@ -211,6 +212,24 @@ export function mock(): Plugin {
             const wait = Math.min(30, Number(url.searchParams.get('wait') ?? 0)) * 1000, before = view(id);
             for (const t = Date.now(); Date.now() - t < wait && view(id) === before; ) await sleep(50); // long poll
             return send(res, 200, view(id));
+          }
+          if (url.pathname === '/sets' && req.method === 'GET') return send(res, 200, JSON.stringify([...sets].map(([id, spec]) => ({ id, spec }))));
+          const setId = /^\/sets\/([a-z0-9-]{1,64})$/.exec(url.pathname)?.[1];
+          if (setId && req.method === 'PUT') { // the server's limits: 256 KB, one JSON object, 500 sets
+            const buf = await body(req);
+            if (buf.length > 256 << 10) return send(res, 413, 'error: a set is at most 256 KB\n', 'text/plain');
+            let spec: unknown;
+            try { spec = JSON.parse(buf.toString('utf8')); } catch { spec = null; }
+            if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return send(res, 400, 'error: the body is one JSON object (the set)\n', 'text/plain');
+            if (!sets.has(setId) && sets.size >= 500) return send(res, 409, 'error: the server keeps at most 500 sets: delete some first\n', 'text/plain');
+            sets.set(setId, buf.toString('utf8'));
+            res.statusCode = 204;
+            return res.end();
+          }
+          if (setId && req.method === 'DELETE') {
+            if (!sets.delete(setId)) return send(res, 404, 'error: no such set\n', 'text/plain');
+            res.statusCode = 204;
+            return res.end();
           }
           if (url.pathname === '/proxy') {
             const u = url.searchParams.get('url') ?? '';
