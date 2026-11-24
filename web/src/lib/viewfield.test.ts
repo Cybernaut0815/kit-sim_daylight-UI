@@ -78,6 +78,7 @@ describe('the ray grid', () => {
     near([...side[1], 0], [Math.cos((50 * Math.PI) / 180), -Math.sin((50 * Math.PI) / 180), 0]); // HI first, above the gaze
     near([...side.at(-2)!, 0], [Math.cos((70 * Math.PI) / 180), Math.sin((70 * Math.PI) / 180), 0]);
     expect(planOutline(rayGrid([360, 0, 0], 2))[0]).not.toEqual([0, 0]); // a ring, not a wedge
+    expect(planOutline(rayGrid([360, 0, 0], 2))).toHaveLength(181); // every 2°: no polygon under hairlines
     expect(sectionOutline(rayGrid([360, 0, 0], 2))).toEqual([[0, 0], [1, 0]]);
     expect([panX(g, -60), panX(g, 0), panX(g, 60), panY(90), panY(0), panY(-90)]).toEqual([1 / 3, 0.5, 2 / 3, 0, 0.5, 1]);
     expect(panX(rayGrid([360, -70, 50], 2), 90)).toBe(0.25);

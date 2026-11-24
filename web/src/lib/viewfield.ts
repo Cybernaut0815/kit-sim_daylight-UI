@@ -70,21 +70,21 @@ export function rayGrid([h, lo, hi]: Fov, cell: number, max = 8): RayGrid {
   };
 }
 
-/** Points along an arc from a to b (deg), about every `per`° (at most 24 pieces), both ends included. */
-const steps = (a: number, b: number, per = 7.5) => { const n = Math.min(24, Math.max(2, Math.ceil(Math.abs(b - a) / per))); return Array.from({ length: n + 1 }, (_, i) => a + ((b - a) * i) / n); };
+/** Points along an arc from a to b (deg), about every `per`° (at most `most` pieces), both ends included. */
+const steps = (a: number, b: number, per = 7.5, most = 24) => { const n = Math.min(most, Math.max(2, Math.ceil(Math.abs(b - a) / per))); return Array.from({ length: n + 1 }, (_, i) => a + ((b - a) * i) / n); };
 /** A point on the unit circle, `a` degrees clockwise from up (SVG: y down). */
 const clock = (a: number): Pt => [Math.sin(a * RAD), -Math.cos(a * RAD)];
 
 /** The field in plan (unit circle, y down): azimuth clockwise from up (the gaze; all around north), a wedge closed at
  *  the centre, or the whole circle. */
 export function planOutline(g: RayGrid): Pt[] {
-  const arc = steps(g.az[0], g.az[1], 5).map(clock);
+  const arc = steps(g.az[0], g.az[1], 2, 180).map(clock);
   return g.all ? arc : [[0, 0], ...arc, [0, 0]];
 }
 /** The field from the side (unit circle, y down): the gaze to the right, LO to HI as a wedge closed at the eye; a flat
  *  field is one line along the horizon. */
 export function sectionOutline(g: RayGrid): Pt[] {
-  return g.flat ? [[0, 0], [1, 0]] : [[0, 0], ...steps(90 - g.el[1], 90 - g.el[0], 5).map(clock), [0, 0]];
+  return g.flat ? [[0, 0], [1, 0]] : [[0, 0], ...steps(90 - g.el[1], 90 - g.el[0], 2, 180).map(clock), [0, 0]];
 }
 /** Panorama coordinates, fractions of its width and height: azimuth across -180..180 about the gaze (all around
  *  0..360 from north), elevation from 90 at the top to -90 at the bottom. */
