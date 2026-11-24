@@ -14,7 +14,7 @@ import type { ViewSim } from '../store';
 /** What the preview draws: the view settings it shows, its size and how many glyphs at most. */
 export interface FieldView {
   fov: Fov; cell: number; gaze: Gaze; sides: ViewSim['sides']; on: ViewSim['on']; offset: number; north: number; // offset: metres
-  scale: number; max: number; // scale: x the default glyph size (a few % of the model); max: the most glyphs drawn
+  scale: number; max: number; // scale: x the default glyph size (a few % of the receivers shown); max: the most glyphs drawn
 }
 /** The preview's densities: the most glyphs each draws. */
 export const DENSITY = { few: 30, some: 120, many: 400 } as const;
@@ -50,6 +50,13 @@ export function createViewField() {
     o.geometry.dispose();
     o.geometry = g;
   };
+  /** The accent of the theme now. */
+  const colour = () => {
+    const c = new THREE.Color(cssVar('--accent', '#ff4d2e', '--bg-surface-2'));
+    edges.color.copy(c);
+    fill.color.copy(c);
+  };
+  colour();
 
   return {
     group,
@@ -67,12 +74,7 @@ export function createViewField() {
       swap(lines, place(glyph.lines, eyes, frames, radius));
       swap(surface, place(glyph.tris, eyes, frames, radius));
     },
-    /** The accent of the theme now. */
-    colour() {
-      const c = new THREE.Color(cssVar('--accent', '#ff4d2e', '--bg-surface-2'));
-      edges.color.copy(c);
-      fill.color.copy(c);
-    },
+    colour,
     hide() { group.visible = false; },
     dispose() {
       lines.geometry.dispose();

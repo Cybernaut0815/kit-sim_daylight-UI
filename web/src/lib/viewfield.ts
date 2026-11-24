@@ -123,8 +123,9 @@ export function glyphOf(g: RayGrid): { lines: Float32Array; tris: Float32Array }
 
 /** A receiver's drawn triangles: local positions, indices (null: unindexed) and its local-to-world matrix (column-major). */
 export interface EyeMesh { positions: ArrayLike<number>; indices: ArrayLike<number> | null; matrix: ArrayLike<number> }
-/** Triangles the eyes may sit on (world): centroid, first corner and unit normal, xyz each. */
-export interface Candidates { centroid: Float32Array; corner: Float32Array; normal: Float32Array; count: number }
+/** Triangles the eyes may sit on (world): centroid, first corner and unit normal, xyz each; `span`: half the diagonal of
+ *  their corners' box, what the glyphs are sized by. */
+export interface Candidates { centroid: Float32Array; corner: Float32Array; normal: Float32Array; count: number; span: number }
 /** The most candidate triangles taken from all receivers together. */
 export const CANDIDATES = 50_000;
 
@@ -136,6 +137,7 @@ export function candidatesOf(meshes: readonly EyeMesh[], max = CANDIDATES): Cand
   const total = tris.reduce((s, t) => s + t, 0), stride = Math.max(1, Math.ceil(total / max));
   const room = tris.reduce((s, t) => s + (t ? Math.max(1, Math.floor(t / stride)) : 0), 0);
   const centroid = new Float32Array(3 * room), corner = new Float32Array(3 * room), normal = new Float32Array(3 * room);
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   let count = 0;
   meshes.forEach((m, k) => {
     const t = tris[k], M = m.matrix, P = m.positions, I = m.indices;
@@ -152,11 +154,12 @@ export function candidatesOf(meshes: readonly EyeMesh[], max = CANDIDATES): Cand
         centroid[3 * count + i] = (a[i] + b[i] + c[i]) / 3;
         corner[3 * count + i] = a[i];
         normal[3 * count + i] = (s * x[i]) / l;
+        lo[i] = Math.min(lo[i], a[i], b[i], c[i]); hi[i] = Math.max(hi[i], a[i], b[i], c[i]);
       }
       count++;
     }
   });
-  return { centroid, corner, normal, count };
+  return { centroid, corner, normal, count, span: count ? Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2 : 0 };
 }
 
 /** The preview's eyes (world): positions and unit looking directions, xyz each. */

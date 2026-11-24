@@ -110,9 +110,10 @@ describe('where the preview puts its eyes', () => {
     near([...c.normal.slice(3 * (c.count - 1), 3 * c.count)] as Vec3, [0, 0, 1]); // the lone triangle
     const moved = candidatesOf([plate(2, 2, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 6, 7, 1])]);
     expect(moved.centroid[1]).toBe(6);
+    expect(moved.span).toBeCloseTo(Math.SQRT2); // half the diagonal of the 2 x 2 plate, wherever it stands: the glyphs' size
     const mirrored = candidatesOf([plate(2, 2, [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]);
     expect(mirrored.normal[1]).toBe(1); // mirrored across X: turned as the core turns a mirrored mesh, still facing +Y
-    expect(candidatesOf([{ positions: [0, 0, 0, 1, 0, 0, 2, 0, 0], indices: [0, 1, 2], matrix: I4 }]).count).toBe(0); // degenerate
+    expect(candidatesOf([{ positions: [0, 0, 0, 1, 0, 0, 2, 0, 0], indices: [0, 1, 2], matrix: I4 }])).toMatchObject({ count: 0, span: 0 }); // degenerate
   });
 
   it('eyes: under the cap, deterministic, both sides doubled and offset along each side', () => {

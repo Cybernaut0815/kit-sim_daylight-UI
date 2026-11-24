@@ -72,7 +72,7 @@ interface Ctx {
   canvas: HTMLCanvasElement; sun: SunPath; gridSpec: { size: number; x: number; y: number; z: number };
   grid: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>; // one object and material for good, a new geometry per size or theme
   dome: { x: number; y: number; z: number; r: number }; // the sun path, fitted to the model: centre on the ground, radius
-  field: ViewField; span: number; // the view field's glyphs; half the model's box diagonal (world), what they are sized by
+  field: ViewField; // the view field's glyphs
 }
 
 /** The scene info at the top right of the view: meshes by role, drawn triangles and vertices, units, the section, and the frame
@@ -136,7 +136,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.three.overlay.add(grid);
     const viewField = createViewField();
     usd.three.overlay.add(viewField.group);
-    const c: Ctx = { canvas, sun: sunPath, grid, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 }, field: viewField, span: 1 };
+    const c: Ctx = { canvas, sun: sunPath, grid, gridSpec: { size: 20, x: 0, y: 0, z: 0 }, dome: { x: 0, y: 0, z: 0, r: 10 }, field: viewField };
     ctx.current = c;
 
     // Every frame, with that frame's camera: the sun-path labels (the sun path only, never the stage), and the scene
@@ -288,7 +288,6 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     const size = box.getSize(new THREE.Vector3()), whole = domeOf(box); // the dome stands on the ground and encloses the model
     c.dome = part.isEmpty() ? whole : domeOf(part);
     c.gridSpec = { size: 2 * Math.max(size.x, size.y, size.z, 2.3 * whole.r), x: whole.x, y: whole.y, z: whole.z };
-    c.span = size.length() / 2 || 1;
   }, [meshes, around]); // eslint-disable-line react-hooks/exhaustive-deps -- the rows' paths change with the meshes
 
   // The view field's glyphs (./viewfield.ts) while the preview shows: the candidates (a bounded sample of the shown
@@ -321,7 +320,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     if (!c) return;
     if (!field || !candidates?.count) c.field.hide();
     else {
-      const mpu = usd.stage?.metersPerUnit ?? 1, radius = 0.04 * c.span * field.scale, p = new THREE.Vector3();
+      const mpu = usd.stage?.metersPerUnit ?? 1, radius = 0.04 * candidates.span * field.scale, p = new THREE.Vector3(); // by the receivers shown, not a site's context
       const eyes = sampleEyes(candidates, { spacing: 2.5 * radius, max: field.max, on: field.on, sides: field.sides, offset: field.offset / mpu, keep: (x, y, z) => usd.three.keeps(p.set(x, y, z)) });
       c.field.build(eyes, field, radius);
     }
