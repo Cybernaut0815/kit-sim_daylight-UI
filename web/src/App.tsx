@@ -149,6 +149,7 @@ export default function App() {
   const sets = useSaved(); // the saved sets and combined views (every client's)
   const [openSets, setOpenSets] = useState<Readonly<Record<Tool, string | null>>>({ daylight: null, views: null }); // per tab, the set opened or saved last
   const [setNote, setSetNote] = useState<{ tool: Tool; lines: string[] } | null>(null); // what the last open did per model, or the last save
+  const [cvPreview, setCvPreview] = useState<CombinedView | null>(null); // the combined view being edited, shown until Save or Cancel
   // whether this tab may use the agent routes (GET /health: --mcp, and this machine): only then the bridge and the reports
   // (a server without them would log a 404 for each request, on every load and window focus)
   const [agents, setAgents] = useState(false);
@@ -436,7 +437,7 @@ export default function App() {
   const V = useAnalysis({ ...shared, ...cfgFor('views', s), models: vModels, column: state.viewAnalysis.column, visible: views, dispatch: dispatchViews });
   analyses.current = [D, V];
   // the Combined tab: the combined view shown, from the saved sets' results (sets/useCombined.ts), last
-  const C = useCombined({ state, saved: sets.saved, runs, visible: combined, viz: s.viz });
+  const C = useCombined({ state, saved: sets.saved, runs, visible: combined, viz: s.viz, preview: cvPreview });
   // T: the tab's analysis that runs (daylight's on the Combined tab, whose inputs panels hide); A: what the screen shows
   const T = views ? V : D, A = combined ? C : T, viz = combined ? C.viz : s.viz;
   const colourBy = combined ? state.combined.colourBy : views ? state.viewAnalysis.colourBy : state.colourBy;
@@ -591,7 +592,7 @@ export default function App() {
             <div className="panel-wrap">
               <aside className="panel stack" style={knob('--stack-gap', 'var(--space-4)')} aria-label="Inputs">
                 {combined && <SetsPanel sets={C.sets} statusOf={runs.statusOf} error={sets.error} saving={sets.saving} models={openModels} open={openSets} onOpen={onOpenSet} onRun={onRunSet} onDelete={onDeleteSet} onCopy={onCopySet} onSave={(of, name) => onSaveSet(name, of)} onUpdate={(x) => onSaveSet(x.name, x.tool, x)} onRename={onRenameSet} />}
-                {combined && <CombinedPanel views={C.views} sets={C.sets} shown={C.view} notes={C.notes} error={sets.error} saving={sets.saving} statusOf={runs.statusOf} onShow={onShowCombined} onSave={onSaveCombined} onDelete={onDeleteCombined} />}
+                {combined && <CombinedPanel views={C.views} sets={C.sets} shown={C.view} notes={C.notes} error={sets.error} saving={sets.saving} statusOf={runs.statusOf} onShow={onShowCombined} onSave={onSaveCombined} onDelete={onDeleteCombined} onPreview={setCvPreview} />}
                 {/* the tab's model and materials (daylight's on the Combined tab), mounted there too, hidden */}
                 <div className="panel-group" hidden={combined}>
                 <ModelPanel models={T.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={views ? state.viewAnalysis.errors : state.errors} stage={ap.stage} subdiv={ui.subdiv} selfOcclude={views ? v.selfOcclude : s.sim.selfOcclude} analysis={tool} groups={groups} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={views ? dispatchViews : dispatch} />

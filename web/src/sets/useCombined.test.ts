@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { draftOf, previewOf, type Draft } from '../panels/CombinedPanel';
 import { initialState, reducer, type RunResult } from '../store';
+import { columnOf } from './combine';
 import { checkView, viewHelp, type AnalysisSet, type CombinedView } from './model';
 import type { SetModelStatus } from './runs';
-import { missingOf } from './useCombined';
+import { missingOf, shownView } from './useCombined';
 
 const set = (id: string, name: string): AnalysisSet => ({
   kind: 'set', id, name, created: 't', updated: 't', tool: 'daylight', models: [], settings: { viewSim: initialState().settings.viewSim }, column: 'radiation_front', colourBy: 'value',
@@ -52,5 +54,28 @@ describe('combined views', () => {
   it('viewHelp says the op, each input with its function and weight, and the unit', () => {
     const v = checkView({ name: 'x', unit: 'pts', op: 'sum', inputs: [{ set: 'sun-ab12', column: 'radiation_front', fn: 'threshold', lo: 1000, weight: 2 }, { set: 'nope-0000', column: 'sky_front', meshes: ['/W'] }] }, [...sets, set('nope-0000', 'n')]) as CombinedView;
     expect(viewHelp(v, sets)).toBe('The weighted sum of Sun, Radiation, front at or above 1,000 (1, else 0), weight 2; nope-0000 (deleted), Sky, front, on /W. In pts. Meshes no input covers stay unpainted.');
+  });
+
+  it('shownView: the preview, else the saved view of the column, else the first, else none', () => {
+    const a = checkView({ name: 'A', op: 'mean', inputs: [{ set: 'sun-ab12', column: 'radiation_front' }] }, sets) as CombinedView;
+    const b = checkView({ name: 'B', op: 'max', inputs: [{ set: 'view-cd34', column: 'sky_front' }] }, sets) as CombinedView;
+    const draft = { ...a, name: 'A edited' };
+    expect(shownView([a, b], columnOf(b), null)).toBe(b);
+    expect(shownView([a, b], 'combined_gone-0000', null)).toBe(a);
+    expect(shownView([a, b], columnOf(b), draft)).toBe(draft);
+    expect(shownView([], '', draft)).toBe(draft);
+    expect(shownView([], '', null)).toBeNull();
+  });
+
+  it("previewOf: a valid draft under its view's id ('draft' for a new one), else what is wrong", () => {
+    const saved = checkView({ name: 'Sun and view', op: 'mean', inputs: [{ set: 'sun-ab12', column: 'radiation_front' }] }, sets, undefined, 'then') as CombinedView;
+    const edited: Draft = { ...draftOf(saved), name: 'Renamed', op: 'sum' };
+    edited.inputs = [{ ...edited.inputs[0], weight: 2, fn: 'normalise', lo: 0, hi: 5, meshes: ' /W, /E ' }];
+    expect(previewOf(edited, sets)).toMatchObject({ id: saved.id, created: 'then', name: 'Renamed', op: 'sum', inputs: [{ set: 'sun-ab12', weight: 2, fn: 'normalise', lo: 0, hi: 5, meshes: ['/W', '/E'] }] });
+    const fresh: Draft = { name: 'New', unit: '', op: 'mean', inputs: [{ set: 'view-cd34', column: 'sky_front', weight: 1, fn: 'raw', meshes: '', uid: 1, unfolded: true }] };
+    const p1 = previewOf(fresh, sets) as CombinedView, p2 = previewOf({ ...fresh, name: 'New, typed on' }, sets) as CombinedView;
+    expect([p1.id, p2.id]).toEqual(['draft', 'draft']);
+    expect(p1.inputs[0]).not.toHaveProperty('meshes');
+    expect(previewOf({ ...fresh, name: ' ', inputs: [{ ...fresh.inputs[0], set: '' }] }, sets)).toEqual(['name: 1 to 80 characters', 'inputs[0].set: the id of a saved set (sun-ab12, view-cd34)']);
   });
 });

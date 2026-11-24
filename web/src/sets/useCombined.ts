@@ -1,8 +1,9 @@
 // The Combined tab's analysis: the combined view shown, per open model (combine.ts) from its input sets' results as the
 // set runner finds them, with the display fields of useAnalysis (models, compared, column, shown, cols, results, domain,
 // scale), so the views, the Results and Download work as on the other tabs. A model's objects show the combined meshes
-// as receivers and every other mesh as none. Whenever a view shows, it runs each input set that has no result for the
-// inputs now (once per set, model and inputs).
+// as receivers and every other mesh as none. Whenever a saved view shows, it runs each input set that has no result for
+// the inputs now (once per set, model and inputs). `preview`: the editor's draft (CombinedPanel), shown instead of the
+// saved view until Save or Cancel; it never starts a run by itself (Run missing sets does).
 import { useEffect, useMemo, useRef } from 'react';
 import { scaleFor, type Scale } from '../lib/gradients';
 import { columnLabel, registerCombined, splitColumn, unionRange } from '../lib/result';
@@ -31,11 +32,15 @@ export function missingOf(slot: number, inputs: ReturnType<typeof inputStatus>):
   });
 }
 
-export function useCombined(c: { state: State; saved: readonly Saved[]; runs: SetRuns; visible: boolean; viz: Settings['viz'] }) {
-  const { state, saved, runs } = c, models = state.models;
+/** The view the Combined tab shows: the editor's preview, else the saved view of `column`, else the first. */
+export const shownView = (views: readonly CombinedView[], column: string, preview: CombinedView | null): CombinedView | null =>
+  preview ?? views.find((v) => columnOf(v) === column) ?? views[0] ?? null;
+
+export function useCombined(c: { state: State; saved: readonly Saved[]; runs: SetRuns; visible: boolean; viz: Settings['viz']; preview: CombinedView | null }) {
+  const { state, saved, runs, preview } = c, models = state.models;
   const views = useMemo(() => saved.filter(isCombined), [saved]), sets = useMemo(() => saved.filter(isSet), [saved]);
-  useMemo(() => registerCombined(views.map((v) => ({ id: v.id, name: v.name, unit: v.unit, help: viewHelp(v, sets) }))), [views, sets]);
-  const view = views.find((v) => columnOf(v) === state.combined.column) ?? views[0] ?? null, shown = view ? columnOf(view) : null;
+  useMemo(() => registerCombined([...views.filter((v) => v.id !== preview?.id), ...(preview ? [preview] : [])].map((v) => ({ id: v.id, name: v.name, unit: v.unit, help: viewHelp(v, sets) }))), [views, sets, preview]);
+  const view = shownView(views, state.combined.column, preview), shown = view ? columnOf(view) : null;
   const inputs = view ? inputStatus(view, sets, runs) : [];
   // per model and input, the result to combine (a done status with the column)
   const runsOf = models.map((m) => inputs.map(({ input, set, status }): InputRun | null => {
@@ -75,7 +80,8 @@ export function useCombined(c: { state: State; saved: readonly Saved[]; runs: Se
   });
   const cmodels = now.length === last.current.length && now.every((x, i) => x === last.current[i]) ? last.current : (last.current = now);
 
-  // a view shown runs each input set without a result for the inputs now (an error waits for Run missing sets)
+  // a saved view shown runs each input set without a result for the inputs now (an error, or a preview's input, waits for
+  // Run missing sets)
   const asked = useRef(new Set<string>());
   const missingKey = inputs.map(({ set, status }) => (set ? status.filter((x) => x.state === 'missing').map((x) => `${set.id}:${x.slot}:${x.key}`).join() : '')).join('|');
   const runMissing = (all = false) => {
@@ -86,7 +92,7 @@ export function useCombined(c: { state: State; saved: readonly Saved[]; runs: Se
       if (slots.length) void runs.run(set, slots);
     }
   };
-  useEffect(() => { if (c.visible && view) runMissing(); }, [c.visible, view?.id, missingKey]); // eslint-disable-line react-hooks/exhaustive-deps -- this render's inputs
+  useEffect(() => { if (c.visible && view && !preview) runMissing(); }, [c.visible, view?.id, missingKey, !preview]); // eslint-disable-line react-hooks/exhaustive-deps -- this render's inputs
 
   // the display fields, as useAnalysis gives them
   const q = shown ? splitColumn(shown)[0] : '';

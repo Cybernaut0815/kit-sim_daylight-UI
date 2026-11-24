@@ -2,8 +2,9 @@
 // name, unit and op, and its inputs, each a fold-out (CombinedInput): a set's result column through a function (lo, hi:
 // its bounds, only those the function reads; empty: from the results), weighed, on some meshes (empty: every receiver of
 // that set). Under the list, what each model misses of the view shown and the meshes it skipped. Saved through
-// sets/model.ts checkView, the agent's save_combined check.
-import { Fragment, memo, useState } from 'react';
+// sets/model.ts checkView, the agent's save_combined check. The draft shows in the views as it is edited (`onPreview`,
+// checked the same way); Cancel, or leaving the tab, goes back to the view shown before.
+import { Fragment, memo, useEffect, useRef, useState } from 'react';
 import { BOUNDS } from '../sets/combine';
 import { MAX_INPUTS, OPS, OP_LABEL, checkView, type AnalysisSet, type CombinedView, type Op } from '../sets/model';
 import type { SetModelStatus } from '../sets/runs';
@@ -13,8 +14,9 @@ import { CombinedInput, type DraftInput } from './CombinedInput';
 interface Props {
   views: readonly CombinedView[]; sets: readonly AnalysisSet[]; shown: CombinedView | null; notes: readonly string[]; error: string | null; saving: boolean;
   statusOf: (set: AnalysisSet) => SetModelStatus[]; onShow: (view: CombinedView) => void; onSave: (view: CombinedView) => Promise<boolean>; onDelete: (view: CombinedView) => void;
+  onPreview: (view: CombinedView | null) => void;
 }
-interface Draft { was?: CombinedView; name: string; unit: string; op: Op; inputs: DraftInput[] }
+export interface Draft { was?: CombinedView; name: string; unit: string; op: Op; inputs: DraftInput[] }
 
 /** The columns a set gives: daylight's quantities on its sides before a run, then every column a result of it has. */
 const columnsOf = (set: AnalysisSet, status: readonly SetModelStatus[]) => {
@@ -24,7 +26,7 @@ const columnsOf = (set: AnalysisSet, status: readonly SetModelStatus[]) => {
 };
 let uids = 0; // each draft input's key: a removal never hands one input's fold-out to the next
 // a saved view's inputs start folded (their lines show the view at a glance); a new view's and an added one unfolded
-const draftOf = (v: CombinedView): Draft => ({ was: v, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.map((i) => ({ ...i, meshes: i.meshes?.join(', ') ?? '', uid: ++uids, unfolded: false })) });
+export const draftOf = (v: CombinedView): Draft => ({ was: v, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.map((i) => ({ ...i, meshes: i.meshes?.join(', ') ?? '', uid: ++uids, unfolded: false })) });
 const inputOf = (set: AnalysisSet | undefined): DraftInput => ({ set: set?.id ?? '', column: set?.column ?? '', weight: 1, fn: 'raw', meshes: '', uid: ++uids, unfolded: true });
 /** The draft as checkView takes it: the meshes as paths, only the bounds its function reads. */
 const viewOf = (d: Draft) => ({
@@ -37,10 +39,29 @@ const viewOf = (d: Draft) => ({
     };
   }),
 });
+/** Draft `d` as the views show it while it is edited: the view it would save, under the id of the view it edits ('draft'
+ *  for a new one, the same through every edit), or what is wrong with it. */
+export const previewOf = (d: Draft, sets: readonly AnalysisSet[]): CombinedView | string[] => checkView({ ...viewOf(d), id: d.was?.id ?? 'draft' }, sets, d.was);
 
-export const CombinedPanel = memo(function CombinedPanel({ views, sets, shown, notes, error, saving, statusOf, onShow, onSave, onDelete }: Props) {
+export const CombinedPanel = memo(function CombinedPanel({ views, sets, shown, notes, error, saving, statusOf, onShow, onSave, onDelete, onPreview }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null), [problems, setProblems] = useState<string[]>([]);
-  const edit = (d: Draft | null) => { setDraft(d); setProblems([]); };
+  // why the draft is not in the views (null: it is); whether a version of this edit is; the draft and sets checked last
+  const [why, setWhy] = useState<string | null>(null), previewed = useRef(false), sent = useRef<[Draft, readonly AnalysisSet[]] | null>(null);
+  const show = (d: Draft) => {
+    const p = previewOf(d, sets);
+    sent.current = [d, sets];
+    if (Array.isArray(p)) { setWhy(`${previewed.current ? 'The views keep the last valid version' : 'Not in the views yet'}: ${p[0]}`); return; }
+    setWhy(null); previewed.current = true; onPreview(p);
+  };
+  // an edit shows at once; typing shows once it rests (each keystroke would recombine); no draft: the view before
+  useEffect(() => {
+    if (!draft) { sent.current = null; setWhy(null); onPreview(null); return; }
+    if (sent.current?.[0] === draft && sent.current[1] === sets) return;
+    const t = setTimeout(() => show(draft), 250);
+    return () => clearTimeout(t);
+  }, [draft, sets]); // eslint-disable-line react-hooks/exhaustive-deps -- onPreview is stable
+  useEffect(() => () => onPreview(null), []); // eslint-disable-line react-hooks/exhaustive-deps -- leaving the tab cancels
+  const edit = (d: Draft | null) => { setDraft(d); setProblems([]); previewed.current = false; if (d) show(d); };
   const setInput = (k: number, patch: Partial<DraftInput>) => setDraft((d) => d && { ...d, inputs: d.inputs.map((i, j) => (j === k ? { ...i, ...patch } : i)) });
   const save = async () => {
     if (!draft) return;
@@ -86,6 +107,7 @@ export const CombinedPanel = memo(function CombinedPanel({ views, sets, shown, n
         <form className="stack" aria-labelledby="cv-title" onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <hr className="divider" />
           <h3 id="cv-title">{draft.was ? `Edit '${draft.was.name}'` : 'New combined view'}</h3>
+          <span className="field__help line" role="status" title={why ?? undefined}>{why ?? 'Shown in the views as you edit, until Save or Cancel.'}</span>
           <div className="field">
             <label className="field__label" htmlFor="cv-name">Name</label>
             <input className="input" id="cv-name" value={draft.name} maxLength={80} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
