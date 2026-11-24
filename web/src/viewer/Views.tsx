@@ -5,7 +5,8 @@
 //   takes the current view and section with Update. Saved views (cameras only) serve every view, last this session and
 //   never go into a file.
 // - Section: every view's clipping planes and boxes (view only), added and edited in the active view.
-// - Display: how every view draws the stage (the viewer's display modes); the result colours draw alone in each.
+// - Display: how every view draws the stage (the viewer's display modes); the result colours draw in each, with their
+//   edges over them in the wire modes.
 // - Download: the active model's result as USD, glTF or OBJ (download.ts).
 // - Reports (only while there are any): a report's PDF generated from the current results, opened, or the report deleted.
 import { Fragment, memo, useEffect, useState } from 'react';
@@ -229,11 +230,12 @@ export const DISPLAYS: readonly (readonly [Display, string])[] = [
   ['plain', 'Plain'], ['plain-wire', 'Plain + wire'], ['plain-selwire', 'Plain + selection wire'], ['wire', 'Wireframe'],
 ];
 
-/** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw alone in each.
+/** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw in each (with
+ *  their edges in the wire modes).
  *  `labels`: the values written on the painted surfaces (viewer/labels.ts). */
 export function DisplayMenu({ value, onChange, labels, onLabels }: { value: Display; onChange: (d: Display) => void; labels: boolean; onLabels: (on: boolean) => void }) {
   return (
-    <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges. Result colours always show as they are">
+    <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges. Result colours always show, with their edges in the wire modes">
       {() => (
         <>
           {DISPLAYS.map(([d, label]) => (

@@ -327,7 +327,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   }, [meshes, theme, !!byValue]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
   // The look: the stage in the display mode of the Display menu, results shown or not (the painted receivers draw their
-  // colours alone in every mode); tone mapping off in the Value view (exact legend colours; the stage's materials draw
+  // colours in every mode, with their edges over them in the wire modes); tone mapping off in the Value view (exact legend colours; the stage's materials draw
   // untoned there); the selection fill in the accent colour, fainter over results.
   useEffect(() => {
     usd.displayMode = display;
