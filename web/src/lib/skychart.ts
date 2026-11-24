@@ -66,7 +66,7 @@ export interface SkyActive {
   windows: Pt[][];       // a period's hours on its end days
   band: Pt[] | null;     // a period over several days: the outline of the sky it sweeps (clamped to the horizon)
   steps: Pt[];           // a period's evaluated steps above the horizon (each at its middle, as the core takes it); none past SKY_DOTS
-  hours: Pt[];           // whole hours above the horizon on the first arc
+  hours: Pt[];           // the instant's whole hours above the horizon
   sun: { at: Pt; up: boolean } | null; // the instant's sun (below the horizon: on it)
 }
 
@@ -83,7 +83,7 @@ export function skyActive(site: Site, t: Time): SkyActive {
     const p = dayPath(site, mmdd(date, site.leap), 5);
     out.arcs.push(...upRuns(p.xyz, p.alt));
     if (t.mode === 'range') out.windows.push(...upRuns(p.xyz, p.alt, Math.round(from / 5), Math.round(to / 5) + 1));
-    if (!out.hours.length) for (let i = 0; i < p.alt.length - 1; i += 12) if (p.alt[i] >= 0) out.hours.push(planOf(p.xyz[3 * i], p.xyz[3 * i + 1], p.xyz[3 * i + 2]));
+    if (t.mode === 'instant') for (let i = 0; i < p.alt.length - 1; i += 12) if (p.alt[i] >= 0) out.hours.push(planOf(p.xyz[3 * i], p.xyz[3 * i + 1], p.xyz[3 * i + 2]));
   };
   if (t.mode === 'instant') {
     arc(t.date);

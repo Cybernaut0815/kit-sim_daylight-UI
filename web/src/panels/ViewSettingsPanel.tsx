@@ -4,6 +4,8 @@
 // the materials (glass) are the same as daylight's; north is the site's. Each section's reset button puts its own fields
 // back to their defaults.
 import { memo, type Dispatch } from 'react';
+import { FieldDiagram } from '../charts/FieldDiagram';
+import { rayGrid } from '../lib/viewfield';
 import type { Action, SettingsSection, ViewSim } from '../store';
 import { NumberField, Section, Segmented, knob } from '../ui';
 
@@ -28,8 +30,7 @@ const GLASS = 'Rays pass the faces whose material is glass (the Materials table)
 export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, errors, dispatch }: Props) {
   const set = (patch: Partial<ViewSim>) => dispatch({ type: 'VIEW_SIM', patch });
   const reset = (what: SettingsSection) => ({ onReset: () => dispatch({ type: 'RESET', what }) });
-  const field = fieldOf(v.fov), [h, lo, hi] = v.fov;
-  const cols = Math.max(1, Math.round(h / v.cell)), rows = Math.max(1, Math.round((hi - lo) / v.cell));
+  const field = fieldOf(v.fov), [h, lo, hi] = v.fov, { cols, rows } = rayGrid(v.fov, v.cell);
   const reach = v.reach === '' || v.reach === 'en17037' ? v.reach : 'own';
   const fov = (k: 0 | 1 | 2, x: number) => { if (Number.isFinite(x)) set({ fov: v.fov.map((y, i) => (i === k ? x : y)) as ViewSim['fov'] }); };
   return (
@@ -62,6 +63,7 @@ export const ViewSettingsPanel = memo(function ViewSettingsPanel({ v, north, err
             ? <span className="field__error">{errors.cell}</span>
             : <span className="field__help line">{`${cols} × ${rows} = ${(cols * rows).toLocaleString('en-GB')} rays per element; 1° for thin or far targets`}</span>}
         </div>
+        <FieldDiagram fov={v.fov} cell={v.cell} gaze={v.gaze} />
       </Section>
       <Section id="view-eye" title="Eye" reset={reset('view-eye')}>
         <div className="field">
