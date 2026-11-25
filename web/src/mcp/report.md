@@ -116,7 +116,7 @@ Blocks, by `type`:
 
 Metrics, exactly as results names them: mean, median, p10, p90, min, max (in the column's unit); total (the column's
 total unit: kWh, W, lm or h·m²); area (m²); elements (a count); below, within, above (% of the area under, inside or
-over the problem range: the quantity needs a problem range, update_settings viz below / above, and it must be the
+over the problem range: the quantity needs a problem range, update_settings viz lo / hi, and it must be the
 same at generation as at save).
 
 Columns: one the report models' results have ('sunhours_front', 'radiation_back', ...). Prim paths: those of

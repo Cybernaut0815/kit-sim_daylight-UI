@@ -12,7 +12,8 @@
 
 // ---------------------------------------------------------------------------------------------------- JSON scanner
 // ponytail: a scanner, not a validator (escaped keys and duplicate keys are not handled); the tab's JSON.parse validates.
-inline size_t ws(const std::string& s, size_t i) {   // past spaces, tabs, CR and LF
+// The index of the first byte at or after s[i] that is no JSON white space (space, tab, CR, LF); s.size() at the end.
+inline size_t ws(const std::string& s, size_t i) {
   while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
   return i;
 }
@@ -60,7 +61,8 @@ inline std::string member(const std::string& s, const std::string& key) {
   return "";
 }
 
-inline bool is_object(const std::string& s) {   // one whole {...} and nothing after it (a body passed on raw)
+// s is one whole {...} with nothing but white space around it: the check before a body is passed on raw.
+inline bool is_object(const std::string& s) {
   const size_t i = ws(s, 0);
   return i < s.size() && s[i] == '{' && ws(s, skip(s, i)) == s.size();
 }
@@ -82,6 +84,7 @@ inline std::vector<std::string> elements(const std::string& s) {
 }
 
 // ---------------------------------------------------------------------------------------------------- local-only gate
+// s in ASCII lower case (header names and hosts compare case-insensitively).
 inline std::string lower(std::string s) {
   for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return s;
@@ -172,7 +175,8 @@ inline std::string file_url(const std::string& path) {
 // ---------------------------------------------------------------------------------------------------- printed PDF
 // ponytail: text scans of Chromium's (Skia's) PDFs, which keep page and font objects out of compressed object streams; a
 // PDF packing them into object streams counts 0 pages and no fonts (a PDF parser then).
-inline int pdf_pages(const std::string& pdf) {   // the /Type /Page objects, not /Pages
+// The page count: the /Type /Page objects (not the /Pages tree nodes).
+inline int pdf_pages(const std::string& pdf) {
   int n = 0;
   for (size_t i = pdf.find("/Type"); i != std::string::npos; i = pdf.find("/Type", i + 1)) {
     const size_t j = ws(pdf, i + 5);

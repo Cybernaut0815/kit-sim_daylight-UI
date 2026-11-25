@@ -46,21 +46,22 @@ export const previewOf = (d: Draft, sets: readonly AnalysisSet[]): CombinedView 
 export const CombinedPanel = memo(function CombinedPanel({ views, sets, shown, notes, error, saving, statusOf, onShow, onSave, onDelete, onPreview }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null), [problems, setProblems] = useState<string[]>([]);
   // why the draft is not in the views (null: it is); whether a version of this edit is; the draft and sets checked last
-  const [why, setWhy] = useState<string | null>(null), previewed = useRef(false), sent = useRef<[Draft, readonly AnalysisSet[]] | null>(null);
+  // mine: the views show a draft of this editor (not the agent's save_combined preview), which no draft takes back
+  const [why, setWhy] = useState<string | null>(null), previewed = useRef(false), mine = useRef(false), sent = useRef<[Draft, readonly AnalysisSet[]] | null>(null);
   const show = (d: Draft) => {
     const p = previewOf(d, sets);
     sent.current = [d, sets];
     if (Array.isArray(p)) { setWhy(`${previewed.current ? 'The views keep the last valid version' : 'Not in the views yet'}: ${p[0]}`); return; }
-    setWhy(null); previewed.current = true; onPreview(p);
+    setWhy(null); previewed.current = true; mine.current = true; onPreview(p);
   };
-  // an edit shows at once; typing shows once it rests (each keystroke would recombine); no draft: the view before
+  // an edit shows at once; typing shows once it rests (each keystroke would recombine); no draft: the view before.
+  // Leaving the tab cancels a preview (App).
   useEffect(() => {
-    if (!draft) { sent.current = null; setWhy(null); onPreview(null); return; }
+    if (!draft) { sent.current = null; setWhy(null); if (mine.current) onPreview(null); mine.current = false; return; }
     if (sent.current?.[0] === draft && sent.current[1] === sets) return;
     const t = setTimeout(() => show(draft), 250);
     return () => clearTimeout(t);
   }, [draft, sets]); // eslint-disable-line react-hooks/exhaustive-deps -- onPreview is stable
-  useEffect(() => () => onPreview(null), []); // eslint-disable-line react-hooks/exhaustive-deps -- leaving the tab cancels
   const edit = (d: Draft | null) => { setDraft(d); setProblems([]); previewed.current = false; if (d) show(d); };
   const setInput = (k: number, patch: Partial<DraftInput>) => setDraft((d) => d && { ...d, inputs: d.inputs.map((i, j) => (j === k ? { ...i, ...patch } : i)) });
   const save = async () => {

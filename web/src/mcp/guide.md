@@ -9,7 +9,7 @@ with architects and engineers. Where an app help text (the meaning results retur
   inputs changed since that run: run before quoting it.
 - Quote numbers only from tool output (results, find_critical, run, site_info, get_materials, screenshot texts),
   rounded as given. Never estimate, interpolate or recompute a statistic a tool can give: ask the tool (results with
-  paths, by, thresholds; find_critical with below or above).
+  paths, by, thresholds; find_critical with lo or hi).
 - A number you derive (a ratio, a percentage change, a yield from an assumed efficiency) is called derived and shows
   the tool numbers and the formula it comes from, rounded no finer than its inputs.
 - Every number says: the model (letter and file name), the column in words (e.g. sun hours, front side), the period
@@ -112,11 +112,11 @@ over occupied hours (section 7) on an interior work plane, and even then a mean 
   metres): drawn in metres, it comes out 100 times too small. Check one known area (results by 'mesh') before quoting
   areas, totals or lengths; values per m² and sun hours do not depend on the scale (apart from sim.offset).
 - Thresholds (results thresholds): a value equal to x counts as at or above x.
-- Problem range: one per quantity (its front and back columns share it), update_settings viz.below and viz.above in the
-  column's unit, null = open. Values under viz.below count as 'below', over viz.above as 'above', between them
+- Problem range: one per quantity (its front and back columns share it), update_settings viz.lo and viz.hi in the
+  column's unit, null = open. Values under viz.lo count as 'below', over viz.hi as 'above', between them
   inclusive as 'within'. It drives the shares in results, the default of find_critical and the parts chart metrics
   below / within / above. Set it to the criterion under discussion so the views, charts and numbers agree, and name
-  the quantity: viz {quantity: 'sunhours', below: 1.5} (without quantity it applies to the shown column's quantity).
+  the quantity: viz {quantity: 'sunhours', lo: 1.5} (without quantity it applies to the shown column's quantity).
 - Colour scale: viz.gradient, viz.scaling (linear, log, sqrt, square, equalised: how the values spread along the
   gradient; say it in a figure's caption when it is not linear, since equal colour steps are then not equal value
   steps), viz.min and viz.max (null = the data's range over every model) only colour the views and
@@ -253,7 +253,7 @@ Each is an approximation: say so, and what it leaves out.
     'mesh', thresholds [2]: a garden meets the guideline when its row's share at or above 2 h is at least 50 %; judge
     every garden's row, never the whole-model row. Existing against proposed: models A (existing) and B (proposed)
     with the same garden receivers; per garden, the ratio of its areas at or above 2 h (share x area) is a derived
-    number to compare with 0.80. find_critical with below 2 shows the shaded parts.
+    number to compare with 0.80. find_critical with lo 2 shows the shaded parts.
 - New dwellings: a main window wall faces within 90 degrees of due south, and a habitable room, preferably the main
   living room, receives at least 1.5 h of sunlight on 21 March at the inside centre of its window(s): the EN 17037
   check above on 21 March. Before windows are placed, BR 209 suggests points 1.6 m above the ground or lowest storey
@@ -314,7 +314,7 @@ Each is an approximation: say so, and what it leaves out.
 ## 9. Critical conditions
 
 - Agree the criterion with the user (or take a standard's): set the problem range (update_settings viz with quantity,
-  below / above: section 4) or pass below / above to find_critical.
+  lo / hi: section 4) or pass lo / hi to find_critical.
 - find_critical groups the problem elements by receiver mesh and the side they face (N, E, S, W; up and down within 45
   degrees of vertical), largest problem area first. Groups under 0.5 % of the problem area are left out; one group can
   join separate pieces of one mesh (a large box).
@@ -328,8 +328,8 @@ Each is an approximation: say so, and what it leaves out.
   {keep: 'inside', box: its box, margin: 1} shows about that part alone. The box is square to the model axes: round a
   turned facade it holds some of what stands in front, and round a wall or a roof along the axes it is flat (the margin
   gives it room).
-- set_display highlight fades everything outside a band; screenshot sunPath draws the sun path of the time setting
-  (the simulation's sun positions).
+- set_display highlight fades everything outside value ranges ([[lo, hi], ...]); sunPath draws the sun path of the
+  time setting (the simulation's sun positions), sunAround fits it round prims.
 - Explain the cause with evidence: site_info sun altitude and azimuth at the period's times, direct against diffuse,
   the obstructing prim (model_tree). Test it: open the same file as another model, set the suspected obstruction to
   none there, run, compare.
@@ -349,46 +349,5 @@ Each is an approximation: say so, and what it leaves out.
 
 ## 11. Analysis sets and combined views
 
-- A set is one analysis' whole setup under a name: per open model an entry linked to it (its letter and file) with its
-  roles (receivers and shades by prim path, a receiver's casts-shade flag, a View analysis target's group) and its
-  Materials edits; the analysis' run settings (Daylight: sim and time; View analysis: view), north, the site and
-  weather (Daylight; an uploaded EPW by its file name: opened elsewhere, weather asks for that file again), the column
-  it shows, the colours of every quantity, the charts and the subdivision level. Not in it: display switches,
-  per-mesh refinements and the geometry. A set saved before these were kept leaves them as the app has them (app_state
-  summary says "not kept"). Every client of the app shares the sets.
-- save_set saves the app's setup now; its roles and settings change the set only, so several setups (a facade's
-  receivers in summer and in winter, a daylight and a view analysis of the same facade) are kept without changing what
-  the user sees. open_set applies one to the app and shows its tab; app_state's summary says what each keeps.
-- Each entry applies to its own model only: the one with its letter and file, else (its letter shows another file now)
-  its file reopened in another slot. An entry never goes to another model, not even of the same file: a model without
-  one keeps its roles and edits, and is not run (status 'no entry'). open_set says which entry each model took
-  (notOpen: entries whose file is not open).
-- copy_set makes a set for another model (another design option, the same file in another slot): a new set of one entry
-  for that model, with the roles of the prim paths it has (every other mesh none), the Materials edits of the material
-  paths it has and the default and glass rows, and the rest of the set as it is; it is saved and opened, so change it
-  and save_set it with its id. It says how many roles and edits matched: few matched means another model's paths, so
-  assign roles with set_roles.
-- rename_set gives a set another name only: its id and all it keeps stay, so combined views that take it as an input
-  keep it (save_set with its id would take the app's setup now as well). A combined view is renamed with save_combined.
-- run_set runs a set in the background: the app keeps showing what it shows, and one job runs at a time, only while
-  neither tab runs. Results stay in this session's cache (gone on reload, or when a model is opened, re-read or
-  removed), by their exact inputs: run_set, open_set and the Combined tab find them without running again. Status per
-  model: done, not run, queued, running, failed, no entry, no receiver, another subdivision (a set of another level runs
-  only once opened: open_set it).
-- A combined view takes up to 8 inputs, each a set's column, and per element transforms each (fn: raw; normalise and
-  invert to 0 to 1 over lo to hi, by default the range over every model; log10; threshold: 1 at or above lo, else 0;
-  band: 1 within lo to hi, else 0), weights it and joins them (op: weighted mean or sum, min, max, or the product with
-  the weights as powers). meshes limits an input to prims; an element takes the inputs that cover it.
-- Inputs combine element by element: each must have run on the same elements (the same receiver meshes, faces or
-  vertices, subdivision). For a mesh where an input ran on other elements, that input is skipped (combined_results
-  mismatches; the Results panel's "Skipped"): give every set the same receivers.
-- Units: raw inputs keep theirs, and mean or sum only join like with like (radiation in kWh/m² with radiation). Mixing
-  quantities takes normalise, invert, threshold or band and gives a score (unit ''), whose total is the score × area in
-  m². Say how a score is built (combined_results and app_state give it in words) whenever you quote one.
-- Typical: a daylight set and a View analysis set on the same receivers; a score as the mean of normalised sunhours and
-  inverted obstruction; or two criteria as threshold inputs with op min (1 where both hold): combined_results with
-  thresholds [0.5] gives the share of the area at or above 0.5, where both hold.
-- With several models, each combines its own input results; normalise and invert bounds span every model, so the
-  scores compare, and the differences are to the first model with a result.
-- Show one: set_display with tab 'combined' and combined (its id), or screenshot with the same; labels writes the
-  values on the surfaces.
+- Several setups side by side (a set per option, season or analysis), run in the background, their kept results, and
+  combined views that weigh them into one value per element: read guide 'sets' first.

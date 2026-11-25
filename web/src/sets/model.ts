@@ -101,8 +101,9 @@ export const SETUP_WORDS: Record<Tool, string> = {
   daylight: "every open model's roles and Materials edits, the location, north, weather, time and simulation settings, the result shown and its colours, the charts and the subdivision",
   views: "every open model's view roles and Materials edits, north, the view settings, the result shown and its colours, the charts and the subdivision",
 };
-/** Set `set` under the name `name` (trimmed), its id and all it keeps as they are: combined views that use it follow. */
-export function renameSet(set: AnalysisSet, name: string, now = new Date().toISOString()): AnalysisSet {
+/** Set or combined view `set` under the name `name` (trimmed), its id and all it keeps as they are: combined views that
+ *  use a set follow. */
+export function renameSet<T extends Saved>(set: T, name: string, now = new Date().toISOString()): T {
   if (!text(name, MAX_NAME)) throw new Error(`name: 1 to ${MAX_NAME} characters`);
   return { ...set, name: name.trim(), updated: now };
 }

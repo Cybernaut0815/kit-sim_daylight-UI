@@ -12,6 +12,7 @@ export const TOOLS = mcp.tools as unknown as { name: string; inputSchema: Schema
 /** set_display's section (clipping planes and boxes): a report's view block takes it too. */
 export const SECTION = TOOLS.find((t) => t.name === 'set_display')!.inputSchema.properties!.section;
 
+/** `v` is of JSON Schema type `t` (an integer or a finite number; null apart from object). */
 const is = (t: string, v: unknown) =>
   t === 'integer' ? Number.isInteger(v) : t === 'number' ? Number.isFinite(v) : t === 'array' ? Array.isArray(v)
     : t === 'object' ? !!v && typeof v === 'object' && !Array.isArray(v) : t === 'null' ? v === null : typeof v === t;
@@ -22,6 +23,7 @@ export const WORDS: Record<string, string> = {
   '^(radiation|direct|diffuse|irradiance|illuminance|sunhours)_(front|back)$': "a result column such as 'sunhours_front'",
   '^[A-Za-z0-9_-]+_(front|back)$': "a result column, a quantity and its side, such as 'sunhours_front' or 'sky_front'",
 };
+/** A bound or two in words: '2 to 7', 'at least 0', 'at most 40', or the one value when they meet. */
 const span = (lo?: number, hi?: number) => (lo === hi ? `${lo}` : lo !== undefined && hi !== undefined ? `${lo} to ${hi}` : lo !== undefined ? `at least ${lo}` : `at most ${hi}`);
 /** A span of a count, its noun agreeing with the last number: 'at least 1 item', '1 to 4 items'. */
 const count = (lo: number | undefined, hi: number | undefined, noun: string) => `${span(lo, hi)} ${noun}${(hi ?? lo) === 1 ? '' : 's'}`;

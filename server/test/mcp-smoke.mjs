@@ -276,9 +276,9 @@ if (on) await part('walk', async () => {
   await step('open_model -> A', 'open_model', { paths: [BUILDING] }, (r) => r.json?.model === 'A');
   await step('set_roles /Site/Block receiver', 'set_roles', { paths: ['/Site/Block'], role: 'receiver' });
   await step('set_roles /Site/Neighbour shade', 'set_roles', { paths: ['/Site/Neighbour'], role: 'shade' });
-  await step('update_settings: 21 March range, sun hours, clear sky, below 2 h', 'update_settings', {
+  await step('update_settings: 21 March range, sun hours, clear sky, problem range under 2 h', 'update_settings', {
     time: { mode: 'range', from: { date: '2026-03-21', hour: '08:00' }, to: { date: '2026-03-21', hour: '18:00' }, step: 15 },
-    sim: { quantities: ['sunhours'] }, weather: { source: 'clear-sky' }, viz: { quantity: 'sunhours', below: 2 },
+    sim: { quantities: ['sunhours'] }, weather: { source: 'clear-sky' }, viz: { quantity: 'sunhours', lo: 2 },
   });
   const running = (r) => r.json?.status === 'running', done = (r) => r.json?.status === 'done' && r.json.models.every((m) => m.status === 'done');
   let run = await again('run', {}, running);
@@ -287,8 +287,8 @@ if (on) await part('walk', async () => {
   check("results by 'parts': Facade_S least sun", least(parts)?.path === FAC[2], parts.map((r) => `${r.path.split('/').pop()} ${r.mean} h`).join(', '));
   const sides = (await tool('results', { models: ['A'], column: 'sunhours_front', by: 'facing' })).json?.models?.[0]?.rows ?? [];
   check("results by 'facing': S least sun", least(sides)?.facing === 'S', sides.map((r) => `${r.facing} ${r.mean} h`).join(', '));
-  const crit = await tool('find_critical', { model: 'A', column: 'sunhours_front', below: 2 }), g = crit.json?.groups?.[0];
-  check('find_critical below 2 -> Facade_S / S first', g?.mesh === FAC[2] && g.facing === 'S', g ? `${g.mesh} ${g.facing}, ${g.area} m², mean ${g.mean} h` : brief(crit.text));
+  const crit = await tool('find_critical', { model: 'A', column: 'sunhours_front', lo: 2 }), g = crit.json?.groups?.[0];
+  check('find_critical lo 2 -> Facade_S / S first', g?.mesh === FAC[2] && g.facing === 'S', g ? `${g.mesh} ${g.facing}, ${g.area} m², mean ${g.mean} h` : brief(crit.text));
   const shot = await tool('screenshot', { width: 2400, height: 600, column: 'sunhours_front' }), img = shot.images[0];
   const size = img && imageSize(Buffer.from(img.data, 'base64'));
   check('screenshot 2400 x 600 -> 4:1', !!size && Math.abs(size.w / size.h - 4) < 0.01, size ? `${img.mimeType} ${size.w} x ${size.h}` : brief(shot.text));
@@ -330,6 +330,26 @@ if (on) await part('walk', async () => {
   await step('set_roles B overhang and neighbour shade', 'set_roles', { model: 'B', paths: ['/Site/Block/Overhang', '/Site/Neighbour'], role: 'shade' });
   run = await again('run', {}, running);
   check('run -> A and B done', done(run) && run.json.models.length === 2, brief(run.text));
+  await step('set_display highlight two ranges, sun path round the block', 'set_display', { highlight: [[0, 1], [0.5, 2]], sunAround: ['/Site/Block'] },
+    (r) => JSON.stringify(r.json?.highlight) === '[[0,2]]' && r.json?.sunAround?.length > 0);
+  await step('set_display highlight and sunAround null clear them', 'set_display', { highlight: null, sunAround: null }, (r) => r.json?.highlight === null && r.json?.sunAround === null);
+
+  // sets: the setup now saved and run in the background, its kept results quoted, a combined view previewed, saved and quoted
+  const set = await tool('save_set', { name: 'Smoke sun' }), setId = set.json?.saved?.id;
+  check('save_set -> a set of A and B', !set.err && set.json?.saved?.models?.length === 2, brief(set.text));
+  const ranSet = await again('run_set', { id: setId }, (r) => r.json?.status === 'running');
+  check('run_set -> A and B done', !ranSet.err && ranSet.json?.models?.every((m) => m.status === 'done'), brief(ranSet.text));
+  const kept = await tool('results', { set: setId, column: 'sunhours_front' }), [ka, kb] = kept.json?.models ?? [];
+  check('results with set -> both models, B differs from A', !kept.err && ka?.whole?.mean > 0 && kb?.whole?.diff !== undefined, brief(kept.text));
+  const view = { name: 'Smoke score', op: 'mean', unit: 'h', inputs: [{ set: setId, column: 'sunhours_front' }] };
+  await step('save_combined preview -> shown, not saved', 'save_combined', { ...view, preview: true }, (r) => r.json?.preview?.id === 'draft' && r.json?.tab === 'combined');
+  const cv = await tool('save_combined', view), cvId = cv.json?.saved?.id;
+  check('save_combined -> saved', !cv.err && !!cvId, brief(cv.text));
+  const combined = await tool('results', { analysis: 'combined', id: cvId }), [ca] = combined.json?.models ?? [];
+  check('results with analysis combined -> the set\'s mean', !combined.err && ca?.whole?.mean === ka?.whole?.mean, `${ca?.whole?.mean} against ${ka?.whole?.mean}; ${brief(combined.text)}`);
+  await step('delete_set the combined view', 'delete_set', { id: cvId }, (r) => r.json?.kind === 'combined');
+  await step('delete_set the set', 'delete_set', { id: setId }, (r) => r.json?.kind === 'set');
+  await step('set_display back to the Daylight tab', 'set_display', { analysis: 'daylight' });
 
   // reports: guide 'report''s two examples, saved and generated as they are
   const guide = await tool('guide', { topic: 'report' });

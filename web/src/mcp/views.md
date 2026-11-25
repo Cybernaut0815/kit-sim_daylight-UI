@@ -16,8 +16,11 @@ quote numbers only from tool output, name the model, the column in words, the st
 - set_roles analysis 'views': receiver (gets results; blocks rays unless shade false or view.selfOcclude off),
   obstruction (only blocks), target with a group (blocks, and its share of the field becomes the column
   `<group>_front`) or none (ignored: rays pass through it). Several meshes may share a group; at most 16 groups.
-- update_settings view: the fields below. run analysis 'views' runs it (one job per model); results, find_critical,
-  download_result with analysis 'views' read it; set_display and screenshot show it with tab (or analysis) 'views'.
+- update_settings view: the fields below (reset ['view-field'] and the like put a section back; the reply gives the
+  field in numbers: grid, rays per eye, azimuth and elevation). run with analysis 'views' runs it (one job per model);
+  results, find_critical, download_result with analysis 'views' read it; set_display and screenshot show it with
+  analysis 'views'. fieldPreview {show, scale, density, around} draws the field each eye traces on the receivers, as
+  the View settings panel's preview: check fov, cell and gaze with a screenshot before a long run.
 - Problem ranges and colour scales are per quantity name (update_settings viz quantity 'sky', 'distance_min', a
   group's name, ...); find_critical and the results shares use them as for Daylight.
 

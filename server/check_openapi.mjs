@@ -1,7 +1,7 @@
 // Drift check: every route registered in src/server.cpp is described in openapi.json and vice versa, every operation
 // is documented well enough for a person or an agent (operationId, summary, description, responses with a schema or an
-// example), and every MCP tool in mcp.json is named in the mcpMessage description. Run: node check_openapi.mjs (ctest
-// runs it as openapi_drift). Exit 1 lists every problem.
+// example), llms.txt names every operationId, and every MCP tool in mcp.json is named in the mcpMessage description.
+// Run: node check_openapi.mjs (ctest runs it as openapi_drift). Exit 1 lists every problem.
 import { readFileSync } from 'node:fs';
 
 const here = new URL('.', import.meta.url);
@@ -9,7 +9,8 @@ const src = readFileSync(new URL('src/server.cpp', here), 'utf8');
 const spec = JSON.parse(readFileSync(new URL('openapi.json', here), 'utf8'));
 const problems = [];
 
-// svr.Get("/health", ...) and svr.Put(R"(/mesh/([A-Za-z0-9-]{1,64}))", ...): a capture group becomes {id}
+// svr.Get("/health", ...) and svr.Put(R"(/mesh/([A-Za-z0-9-]{1,64}))", ...): a capture group becomes {id}, and so
+// does every path parameter of openapi.json ({tool} too) when the two are compared
 const routes = new Set();
 for (const m of src.matchAll(/svr\.(Get|Post|Put|Delete)\(\s*(?:R"\((.*?)\)"|"([^"]*)")/g)) {
   const path = (m[2] ?? m[3]).replace(/\([^)]*\)(\{[^}]*\})?/g, '{id}');
@@ -21,7 +22,7 @@ for (const [path, item] of Object.entries(spec.paths ?? {}))
   for (const [method, op] of Object.entries(item)) {
     if (!['get', 'put', 'post', 'delete', 'patch'].includes(method)) continue;
     const key = `${method} ${path}`;
-    ops.add(key);
+    ops.add(`${method} ${path.replace(/\{[^}]+\}/g, '{id}')}`);
     for (const field of ['operationId', 'summary', 'description', 'tags']) if (!op[field]) problems.push(`${key}: no ${field}`);
     const responses = Object.entries(op.responses ?? {});
     if (!responses.length) problems.push(`${key}: no responses`);
@@ -36,8 +37,12 @@ for (const [path, item] of Object.entries(spec.paths ?? {}))
   }
 for (const r of routes) if (!ops.has(r)) problems.push(`${r}: served by server.cpp but not in openapi.json`);
 for (const o of ops) if (!routes.has(o)) problems.push(`${o}: in openapi.json but not served by server.cpp`);
-const ids = [...ops].map((k) => { const [m, p] = k.split(' '); return spec.paths[p][m].operationId; });
+const ids = Object.values(spec.paths ?? {}).flatMap((item) => Object.values(item).map((op) => op.operationId).filter(Boolean));
 for (const id of ids) if (ids.indexOf(id) !== ids.lastIndexOf(id)) problems.push(`operationId ${id} is not unique`);
+
+// llms.txt, the agents' first read, names every operation (in backticks)
+const llms = readFileSync(new URL('llms.txt', here), 'utf8');
+for (const id of new Set(ids)) if (!llms.includes(`\`${id}\``)) problems.push(`operationId ${id}: not named in llms.txt`);
 
 // The /docs tool list: each tool POST /mcp answers in tools/list, in backticks
 const tools = JSON.parse(readFileSync(new URL('mcp.json', here), 'utf8')).tools ?? [];

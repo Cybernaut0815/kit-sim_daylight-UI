@@ -6,6 +6,14 @@
 // /redoc (ReDoc) and /llms.txt (a plain-text guide for agents). With --mcp, agents on this machine drive the web app
 // over MCP (POST /mcp): each tool call is relayed to the app's browser tab, or to a hidden instance the server starts;
 // the app keeps its reports here and has a headless browser print them to PDF.
+//
+// Sections, in order (search for "---- <name>"):
+//   state       MeshEntry, Res, Job, Call, Tab, Server: what the process keeps, and which mutex guards it
+//   helpers     ids, hashes, JSON strings, mesh names, the download allowlist, files, responses
+//   jobs        queue positions, status JSON, request parsing (Refusal), the response cache, the GPU worker
+//   agents      --mcp: the tool relay to app tabs, the hidden instance, reports printed to PDF
+//   docs pages  the embedded Swagger UI and ReDoc pages
+//   main        flags, then the routes by openapi.json tag: meta, meshes, weather, jobs, run, sets, agents
 #include "cli.h"
 #include "daylight.h"
 #include <httplib.h>
@@ -51,6 +59,7 @@ using Clock = std::chrono::steady_clock;
 namespace {
 
 // ---------------------------------------------------------------------------------------------------- state
+// An uploaded mesh in the LRU (PUT /mesh/{id}): the parsed mesh, its share of meshCap, and the tick of its last use.
 struct MeshEntry { std::shared_ptr<const SimulationMesh> mesh; size_t bytes = 0; uint64_t used = 0; };
 
 // A finished run's answer, kept once and shared by its job, later identical requests (the response cache) and every
@@ -66,7 +75,9 @@ struct Res {
 constexpr size_t kInlineValues = size_t(4) << 20;   // values a JSON answer carries inline (values_b64) at most
 
 enum class State { Queued, Running, Done, Error, Cancelled };
+// The state as the API spells it (JobStatus.state).
 const char* name(State s) { static const char* n[] = {"queued", "running", "done", "error", "cancelled"}; return n[int(s)]; }
+// No more changes come: done, error or cancelled.
 bool finished(State s) { return s == State::Done || s == State::Error || s == State::Cancelled; }
 
 struct Job {
@@ -95,6 +106,7 @@ struct Job {
 // Agent routes (--mcp), guarded by Server::mcpMu: a tools/call relayed to an app tab (POST /mcp -> GET /bridge/next ->
 // POST /bridge/result/{id}), and the tabs that poll for them (one per page load, X-Client-Id).
 struct Call { std::string id, params, result; bool done = false; };   // params: the raw tools/call params
+// One page load of the app polling GET /bridge/next: its pending calls, and what picks the tab a call goes to.
 struct Tab {
   std::deque<std::shared_ptr<Call>> queue;        // not yet handed out
   Clock::time_point seen, focus;                  // last poll; last poll that said the window has focus (server clock)
@@ -141,11 +153,13 @@ struct Server {
 };
 
 // ---------------------------------------------------------------------------------------------------- helpers
+// 64-bit FNV-1a: cache keys and file names, not security (ids that must be unguessable come from uuid()).
 uint64_t fnv1a(const std::string& s) {
   uint64_t h = 1469598103934665603ull;
   for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
   return h;
 }
+// v as 16 lower-case hex digits.
 std::string hex(uint64_t v) { char b[17]; std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(v)); return b; }
 
 std::string uuid() {   // random v4 UUID: job ids are unguessable, so users cannot read or cancel each other's jobs
@@ -161,6 +175,7 @@ std::string uuid() {   // random v4 UUID: job ids are unguessable, so users cann
   return s;
 }
 
+// t as a quoted JSON ISO 8601 UTC string ("2026-01-02T03:04:05Z"), or the JSON literal null for 0 (not yet).
 std::string iso(std::time_t t) {
   if (!t) return "null";
   std::tm tm{};
@@ -189,6 +204,7 @@ std::string sanitise(const std::string& n) {
   for (char c : n) s += (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-') ? c : '_';
   return s.empty() ? std::string("mesh") : s;
 }
+// A mesh id as the routes take it: 1 to 64 of [A-Za-z0-9-] (a SHA-256 hex, or a client's own id).
 bool valid_id(const std::string& id) {
   if (id.empty() || id.size() > 64) return false;
   for (char c : id) if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-')) return false;
@@ -222,6 +238,7 @@ bool fetch_cached(Server& S, const std::string& url, fs::path& out, bool& hit, s
   return true;
 }
 
+// The whole file as bytes; "" when it cannot be opened (callers check existence first where that matters).
 std::string read_file(const fs::path& p) {
   std::ifstream f(p, std::ios::binary);
   std::ostringstream ss;
@@ -229,6 +246,7 @@ std::string read_file(const fs::path& p) {
   return ss.str();
 }
 
+// Writes body as the whole file (created or truncated); false when the write failed.
 bool write_file(const fs::path& p, const std::string& body) {
   std::ofstream f(p, std::ios::binary);
   f << body;
@@ -250,9 +268,12 @@ bool out_of_memory(std::string e) {
   return e.find("out of memory") != std::string::npos || e.find("out_of_memory") != std::string::npos;
 }
 
+// Answers with status and a plain-text body: every error (ErrorText in openapi.json) and the usage texts.
 void text(httplib::Response& res, int status, const std::string& body) { res.status = status; res.set_content(body, "text/plain; charset=utf-8"); }
+// Answers with status and a body that is already JSON text.
 void json(httplib::Response& res, int status, const std::string& body) { res.status = status; res.set_content(body, "application/json"); }
 
+// Who a request is for the per-client job limit: its X-Client-Id (first 64 bytes), else its remote address.
 std::string client_of(const httplib::Request& req) {
   const std::string h = req.get_header_value("X-Client-Id");
   return h.empty() ? "addr:" + req.remote_addr : "id:" + h.substr(0, 64);
@@ -773,6 +794,7 @@ const char* const kRedoc = R"(<!doctype html>
 
 }  // namespace
 
+// ---------------------------------------------------------------------------------------------------- main
 int main(int argc, char** argv) {
   int port = 8080;
   size_t maxMb = 2048;
@@ -877,6 +899,10 @@ int main(int argc, char** argv) {
   });
   svr.Get("/llms.txt", [](const httplib::Request&, httplib::Response& res) {
     res.set_content(std::string(reinterpret_cast<const char*>(llms_txt), llms_txt_len), "text/plain; charset=utf-8");
+  });
+  // the CLI's -h text: the one list of the flags a job's args take, with defaults and examples
+  svr.Get(R"(/usage/(daylight|views))", [](const httplib::Request& req, httplib::Response& res) {
+    text(res, 200, req.matches[1] == "views" ? views::cli::kUsage : cli::kUsage);
   });
   svr.Get("/docs", [](const httplib::Request&, httplib::Response& res) { res.set_content(kDocs, "text/html; charset=utf-8"); });
   svr.Get("/redoc", [](const httplib::Request&, httplib::Response& res) { res.set_content(kRedoc, "text/html; charset=utf-8"); });

@@ -12,8 +12,10 @@ const TAB = crypto.randomUUID();
 /** The hidden instance: the page the server starts at #headless when no app tab is open. */
 export const HEADLESS = typeof location !== 'undefined' && location.hash === '#headless';
 const ANSWER_MS = 45e3; // every call answers within this of receipt (the server gives up at 55 s)
+/** A pause of `ms` between polls. */
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** A refusal: `text` (a 'field: what to do' sentence) as an isError reply. */
 export const fail = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
 /** Polls for calls and answers each with `handle` until stop(), or until the server says there is no bridge here (a

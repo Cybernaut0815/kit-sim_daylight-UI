@@ -1,28 +1,35 @@
 # daylight_server
 
-> GPU annual daylight and solar simulation on meshes over HTTP (kit-sim_core: OptiX ray tracing,
-> Radiance-derived Perez sky, validated against Ladybug Tools, Radiance and pvlib). Several users share one GPU
-> through a job queue.
+> GPU daylight, solar and view analysis on meshes over HTTP (kit-sim_core: OptiX ray tracing, Radiance-derived Perez
+> sky, validated against Ladybug Tools, Radiance and pvlib). Two tools: daylight (radiation, illuminance, sun hours)
+> and views (what each element sees). Several users share one GPU through a job queue.
 
-The complete, machine-readable description is the OpenAPI 3.1 document at /openapi.json (human views: /docs, /redoc).
-Read it for every parameter, schema, example and error. Operation ids: uploadMesh, meshExists, submitJob, getJob,
-cancelJob, listMyJobs, runSync, proxyDownload, getHealth. Agent routes (--mcp, this machine only): mcpMessage, mcpGet,
-bridgeNext, bridgeResult, readLocalPath, listReports, saveReport, deleteReport, printReport, getReportPdf, getSession,
-putSession, deleteSession.
+The complete, machine-readable description is the OpenAPI 3.1 document at /openapi.json (human views: /docs, /redoc);
+read it for every parameter, schema, example and error. GET /usage/daylight and /usage/views list every CLI flag a job
+takes. Operation ids, by tag:
+
+- meshes: `uploadMesh`, `meshExists`, `meshesMissing`
+- jobs: `submitJob`, `listMyJobs`, `getJob`, `cancelJob`, `getJobValues`
+- run: `runSync`
+- weather: `proxyDownload`
+- sets (the web app's saved sets and combined views, every client): `listSets`, `saveSet`, `deleteSet`
+- meta: `getHealth`, `getUsage`, `getOpenApi`, `getLlmsTxt`, `getDocs`, `getRedoc`
+- agents (--mcp, this machine only): `mcpMessage`, `mcpGet`, `bridgeNext`, `bridgeResult`, `readLocalPath`,
+  `listReports`, `saveReport`, `deleteReport`, `printReport`, `getReportPdf`, `getSession`, `putSession`,
+  `deleteSession`
 
 ## Workflow
 
-1. PUT /mesh/{id} with one .dmesh image per mesh (layout in uploadMesh, optionally with one uint16 optics slot per face,
-   header flags bit 0). Upload once; meshes stay cached and are shared. ?name= names it in results, --optics and
-   --no-occlude (one name per id, the last PUT's; a job makes repeats unique: name, name_2, ...). Ids: a UUID of your
-   own, or content ids as the daylight-mesh client makes them: unnamed, the SHA-256 hex of the bytes with ?name= the id;
-   named, sha256(that hex + "\0name\0" + name), so that ids with other names never share a stored name. With content-hash ids, POST /meshes/missing
-   {"ids": [...]} first says which ones to upload, so equal meshes and reloads upload nothing.
+1. PUT /mesh/{id} with one .dmesh image per mesh (layout in uploadMesh; header flags bit 0 adds one uint16 optics slot
+   per face). Upload once; meshes stay cached and are shared. ?name= names it in results, --optics, --no-occlude and
+   --target (one name per id, the last PUT's; a job makes repeats unique: name, name_2, ...). Ids: a UUID of your own,
+   or content ids as the bindings make them (unnamed: the SHA-256 hex of the bytes; named: sha256(that hex + "\0name\0"
+   + name)). With content ids, POST /meshes/missing {"ids": [...]} first says which ones to upload.
 2. POST /jobs (multipart/form-data): `sensors` = receiving mesh ids (repeat the field), `context` = shading-only mesh
    ids, `args` = CLI flags, one token per field (e.g. --lat 52.52 --lon 13.41 --tz 1 --quantity radiation,sunhours),
    weather = an `epw` file part, an `epw_url`, or the --clear-sky flag. 404 {"missing": [...]}: upload those, resubmit.
-   View analysis: `tool` = views, the views CLI flags in `args` (--fov, --target NAME=GROUP, --reach en17037, ...;
-   table in RunRequest.tool), no weather; `context` = meshes that only block rays.
+   View analysis: `tool` = views, the views flags in `args` (--fov, --target NAME=GROUP, --reach en17037, ...), no
+   weather; `context` = meshes that only block rays.
 3. GET /jobs/{id}?wait=25 until `state` is done, error or cancelled (each call returns early when something changes).
 4. done: GET /jobs/{id}/values = float32 little-endian, column-major: column 0 for every row, then column 1, ...
    (rows = sum(meshes[].count), ?col=k for one column); rows of mesh k are meshes[k].first .. first+count-1, one per
@@ -34,62 +41,52 @@ putSession, deleteSession.
 ## Conventions
 
 - Mesh coordinates: metres, Z up, right-handed winding; the face normal is the front side.
-- Columns `<quantity>_<side>` (sides inner). Views: `<name>_<side>`: shares sky, ground, obstruction, one per target
-  group (summing to 1), with obstruction_total (all that is not sky: 1 - sky) after obstruction, glazing, then volume m3 or
-  area m2 (the isovist), distance and distance_min m, reach_<D>.
-- Units: radiation, direct, diffuse kWh/m2 over the period; irradiance W/m2 mean; illuminance lux mean; sunhours h.
-  direct = beam x transmittance; sunhours = equivalent full-sun hours (an hour behind tau 0.6 counts 0.6; an exact
-  count while every surface is opaque, the default). With --bounces > 0, radiation, diffuse, irradiance and
-  illuminance include the light reflected by the model; direct and sunhours never do.
+- Columns `<quantity>_<side>` (sides inner), e.g. radiation_front. Views: shares sky, ground, obstruction,
+  obstruction_total (1 - sky) and one per target group (sky, ground, obstruction and the groups sum to 1), glazing,
+  then volume m3 or area m2 (the isovist), distance and distance_min m, reach_<D>.
+- Units: radiation, direct, diffuse kWh/m2 over the period; irradiance W/m2 mean; illuminance lux mean; sunhours h
+  (equivalent full-sun hours behind translucent surfaces). With --bounces > 0, radiation, diffuse, irradiance and
+  illuminance include the light the model reflects; direct and sunhours never do.
 - Surfaces: opaque and black by default; numbers only, no materials. --optics NAME[/SLOT]=RHO[,TAU[,glass|porous]]
-  (repeatable, ';' packs several in one token, * = every mesh; NAME/SLOT > NAME > * > built-in rho 0.2 tau 0; 0..1,
-  rho + tau <= 1, glass: rho 0 and 0 < tau <= 0.918; porous when tau > 0 unless glass). --transmission on (physical
-  mode only; ladybug refuses it) lets tau through; --fresnel off makes glass pass tau at every angle and, with
-  --bounces, mirror nothing (default on: both by angle).
-- Reflected light: --bounces N (0..20, default 0 = none; physical mode only, ladybug refuses N > 0) adds up to N
-  diffuse reflections by each slot's rho (unused without it: every surface black); 1 for outdoor studies, 5-8 for
-  interiors. --bounce-samples M (64..65536, default 1024) paths per sensor: time linear in M (at 1024 about 2 s more
-  per million sensors on a city-like model, RTX 2060), noise ~1 / sqrt(M) (at 1024 annual facade values 0.5 % median,
-  2.3 % p95; a single --time instant 2.3 % / 14 %: use 4096-16384 for instants and small differences).
-- cache.scene: reused = the scene was still on the GPU. A scene = the sensors ids then the context ids, in order,
-  --no-self-occlude, the --no-occlude set (receiving meshes that are analysed but cast no shade and reflect nothing;
-  it counts only without --no-self-occlude, under which none does), and the layout of the slots that cast shade: the
-  set that transmits (tau > 0 with --transmission on), else with --bounces > 0 and a quantity other than direct /
-  sunhours whether their rho or glass differ (with --fresnel off none is glass; a hit record per slot). New --optics
-  values reuse it while that layout stays; a slot that starts or stops transmitting, or --bounces switched on or off
-  (with such a quantity) for a model whose slots differ (none transmitting), is another scene (built, then kept).
-- Columns: <quantity>_<side>, e.g. radiation_front.
+  gives a mesh or slot its reflectance and transmittance, --transmission on lets TAU through, --bounces N (0..20) adds
+  N diffuse reflections with --bounce-samples paths per sensor. Ranges and defaults: GET /usage/daylight.
 - Time (standard time, no DST): annual by default; --time MM-DDTHH:MM one instant; --from TS --to TS --step MIN a
-  range (the sun at the middle of each step); add --hours HH:MM-HH:MM for only those hours of every day (e.g.
-  09:00-17:00 from 06-01 to 08-31). --tz is the clock of these times (default: the EPW's zone); an EPW keeps its own
-  zone and the times are moved into it, so send the site's civil standard offset.
-- Weather: needed for every quantity except sunhours. Nearest measured station: GET /proxy with the EnergyPlus index
-  URL (see proxyDownload); any location: a PVGIS TMY URL as epw_url.
+  range; --hours HH:MM-HH:MM only those hours of every day. --tz is the clock of these times (default: the EPW's zone).
+- Weather: needed for every daylight quantity except sunhours. Nearest measured station: GET /proxy with the
+  EnergyPlus index URL (see proxyDownload); any location: a PVGIS TMY URL as epw_url.
+- cache.scene: reused = the scene (the mesh ids, occlusion flags and the slots that transmit or reflect) was still on
+  the GPU; new --optics values reuse it while that layout stays.
 
 ## Limits
 
 - Errors are text/plain, first line "error: <cause>"; 400 = usage (with the CLI usage text), 500 = runtime, 507 = out of
-  memory (the job fails, the server keeps running), 413 = a result over 134,217,728 values (rows x columns). An
-  --optics row naming no mesh of the run (or several), a slot out of range or a row given twice, and a --no-occlude
-  NAME that is unknown, ambiguous or a context mesh (views: also a --target NAME), fail the job (state error, status
-  500), not the submission.
+  memory (the job fails, the server keeps running), 413 = a result over 134,217,728 values (rows x columns). Names in
+  --optics, --no-occlude and --target that the run's meshes do not resolve fail the job (state error, status 500),
+  not the submission.
 - Send X-Client-Id to identify your client: at most 2 jobs queued or running per client (429), 32 in the queue (503),
-  both with Retry-After. Finished jobs are kept 15 minutes (the oldest go first
-  beyond 1 GB of results). Identical requests are answered from a result cache.
+  both with Retry-After. Finished jobs are kept 15 minutes (the oldest go first beyond 1 GB of results). Identical
+  requests are answered from a result cache.
 - No authentication; job ids are random UUIDs only their submitter knows.
+
+## Sets
+
+GET /sets lists the web app's saved analysis sets (one analysis' whole setup: roles by USD prim path per model,
+settings, the column shown and its colours) and combined views (sets' results weighed into one value per element),
+each as a JSON string; PUT /sets/{id} stores one (AnalysisSet or CombinedView in /openapi.json, at most 256 KB, 500
+sets), DELETE removes it. Shared by every client, no --mcp needed; the app checks what it reads.
 
 ## Agents (MCP)
 
-With --mcp, an agent on this machine works with the web app itself instead of the routes above: it opens models by
-path, sets roles, settings and cameras, runs, reads results and critical areas, takes screenshots of any size, sections
-the views with clipping planes and boxes (view only: runs use the whole model), edits charts, writes PDF reports (one
-option, or 2-4 compared) and discusses what the results mean.
+With --mcp, an agent on this machine works with the web app itself instead of the routes above: it opens models (A-D)
+by path, picks USD variants, sets roles, settings and cameras, runs the Daylight and the View analysis, reads results
+and critical areas, saves and runs analysis sets, combines them on the Combined tab, takes screenshots, sections the
+views, edits charts, writes PDF reports (one option, or 2-4 compared) and discusses what the results mean.
 - Endpoint: POST /mcp (mcpMessage), JSON-RPC over HTTP, revisions 2025-11-25, 2025-06-18 and 2025-03-26, JSON answers
   (no SSE). Claude Code: claude mcp add --transport http daylight http://127.0.0.1:8080/mcp (if it does not connect,
   set MCP_PROTOCOL_NEGOTIATION=legacy). Claude Desktop: the stdio relay server/mcp-stdio.mjs, with an absolute node.exe
   path in claude_desktop_config.json.
-- Start with the app_state tool; tools/list describes every tool. Each call answers within 55 s: "running" or
-  "generating" means call it again.
+- Start with the app_state tool; tools/list describes every tool, the guide tool the workflows. Each call answers
+  within 55 s: "running" or "generating" means call it again.
 - Calls run in the app's browser tab (keep it open) or, with none open, in a hidden instance the server starts (--web
   or --app-url); opening the app picks that session up.
 - Agent routes answer only requests from this machine (403) and are off without --mcp (404).

@@ -440,6 +440,7 @@ export default function App() {
   analyses.current = [D, V];
   // the Combined tab: the combined view shown, from the saved sets' results (sets/useCombined.ts), last
   const C = useCombined({ state, saved: sets.saved, runs, visible: combined, viz: s.viz, preview: cvPreview });
+  useEffect(() => { if (!combined) setCvPreview(null); }, [combined]); // leaving the tab cancels a preview, the editor's or the agent's
   // T: the tab's analysis that runs (daylight's on the Combined tab, whose inputs panels hide); A: what the screen shows
   const T = views ? V : D, A = combined ? C : T, viz = combined ? C.viz : s.viz;
   const colourBy = combined ? state.combined.colourBy : views ? state.viewAnalysis.colourBy : state.colourBy;
@@ -520,12 +521,14 @@ export default function App() {
       onRun: X.onRun, onDownload: downloadOf(X), busy: () => X.busy.current, held: () => X.held.current, cancel: () => X.abort.current?.abort(),
     });
     ctl.current = {
-      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, section, setSection: (s) => onSection(s, null), views: savedViews, setViews: setSavedViews,
+      state, dispatch, panes, ui, setUi, theme: mode, setTheme, sunScale, setSunScale, sunAround, setSunAround, section, setSection: (s) => onSection(s, null), views: savedViews, setViews: setSavedViews,
+      field: { shown: fieldShown, scale: fieldScale, density: fieldDensity, around: fieldAround },
+      setField: (f) => { if (f.shown !== undefined) setFieldShown(f.shown); if (f.scale !== undefined) setFieldScale(f.scale); if (f.density) setFieldDensity(f.density); if (f.around) setFieldAround(f.around); },
       optics: D.optics, materialsReady: D.materialsReady, per: D.per, shown: D.shown, scale: D.scale, domain: D.domain,
       exporting, exportError, onFiles, onRemove, onVariant, onSubdiv, onRefine, onRun: D.onRun, onDownload: downloadOf(D), meshOf,
       busy: () => D.busy.current, held: () => D.held.current, cancel: () => D.abort.current?.abort(), viewer,
       variants, reports, refreshReports, generate: (id) => generate(id, () => ctl.current), generation, fileOf: (slot) => model.current[slot]?.picked.root,
-      sets, runs, combined: C, openSet: onOpenSet, analysis: (tool) => analysisOf(tool === 'views' ? V : D, tool),
+      sets, runs, combined: C, previewCombined: setCvPreview, openSet: onOpenSet, analysis: (tool) => analysisOf(tool === 'views' ? V : D, tool),
     };
     settled();
   });

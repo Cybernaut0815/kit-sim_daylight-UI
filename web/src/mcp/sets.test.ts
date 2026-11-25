@@ -1,8 +1,8 @@
 // The agent's set and combined-view tools (sets.ts) against a controller of two models opened from one file: a set
 // saved from the app with roles and settings of its own (the app unchanged), the refusals naming their field, run_set's
-// numbers per model, a combined view's results with what a model misses, and set_display's tab.
+// numbers per model, a set's kept results and a combined view's through results, a preview, and set_display's tab.
 import { describe, expect, it, vi } from 'vitest';
-import { isCombined, isSet, type AnalysisSet, type Saved } from '../sets/model';
+import { isCombined, isSet, type AnalysisSet, type CombinedView, type Saved } from '../sets/model';
 import type { SetModelStatus } from '../sets/runs';
 import { initialState, reducer, type Action, type ObjectRow, type RunResult, type State } from '../store';
 import { TOOLS, check } from './schema';
@@ -12,7 +12,7 @@ import { HANDLERS, roleActions, type Ctl } from './tools';
 const rows = (): ObjectRow[] => ['/Site/Wall', '/Site/Roof', '/Site/Tree'].map((path) => ({ id: path.slice(6).toLowerCase(), name: path.slice(6), path, tris: 2, verts: 4, role: 'none' }));
 /** A result on the wall, a row per value of 1 m², in column `col`. */
 const res = (col: string, values: number[]): RunResult => ({
-  data: [Float32Array.from(values)], weights: new Float32Array(values.length).fill(1), columns: [col], receivers: ['wall'], on: 'faces', key: `${col} ${values}`, elapsed: 0,
+  data: [Float32Array.from(values)], weights: new Float32Array(values.length).fill(1), columns: [col], receivers: ['wall'], on: 'faces', key: JSON.stringify([[col, String(values)], null, 'wall']), elapsed: 0,
   manifest: { columns: [col], meshes: [{ name: 'Wall', first: 0, count: values.length }] } as unknown as RunResult['manifest'],
 });
 
@@ -25,6 +25,7 @@ function app(status: (set: AnalysisSet) => SetModelStatus[] = () => []) {
   let saved: Saved[] = [], ui = { tab: 'daylight', labels: false };
   const run = vi.fn(async () => {}), opened: AnalysisSet[] = [], dispatch = (a: Action) => { state = reducer(state, a); };
   const c = () => ({
+    sunAround: {}, field: { shown: false, scale: 1, density: 'some', around: {} },
     state, dispatch, ui, setUi: (f: (u: typeof ui) => typeof ui) => { ui = f(ui); }, panes: { 0: { loading: false }, 1: { loading: false } }, meshOf: () => undefined,
     analysis: (tool: string) => ({ tool, models: state.models, shown: tool === 'views' ? null : 'sunhours_front', column: state.column, colourBy: state.colourBy, scale: null, dispatch }),
     sets: { saved, error: null, refresh: async () => {}, put: async (x: Saved) => { saved = [...saved.filter((k) => k.id !== x.id), x]; return true; }, remove: async (id: string) => { saved = saved.filter((k) => k.id !== id); return true; } },
@@ -128,18 +129,19 @@ describe('open_set and run_set', () => {
     expect((await json(c, 'copy_set', { id: copy.id, to: 'A', name: 'Mine' })).saved).toMatchObject({ name: 'Mine', from: 'B', to: 'A' }); // one entry: no from needed
   });
 
-  it('rename_set gives a set another name, its id and all it keeps as they are; a blank name and a combined view are refused', async () => {
+  it('rename_set gives a set or a combined view another name, its id and all it keeps as they are; a blank name is refused', async () => {
     const { c, saved } = app();
     await call(c, 'save_set', { name: 'Walls' });
     const set = saved()[0] as AnalysisSet;
-    expect(await json(c, 'rename_set', { id: set.id, name: ' South walls ' })).toEqual({ renamed: { id: set.id, from: 'Walls', name: 'South walls' } });
+    expect(await json(c, 'rename_set', { id: set.id, name: ' South walls ' })).toEqual({ renamed: { id: set.id, kind: 'set', from: 'Walls', name: 'South walls' } });
     const renamed = saved()[0] as AnalysisSet;
     expect(renamed).toEqual({ ...set, name: 'South walls', updated: renamed.updated });
     expect(await call(c, 'rename_set', { id: set.id, name: '   ' })).toBe('name: 1 to 80 characters');
-    expect(await call(c, 'rename_set', { id: 'nope', name: 'X' })).toMatch(/^id: no set nope \(walls-\w{4}\)$/);
+    expect(await call(c, 'rename_set', { id: 'nope', name: 'X' })).toMatch(/^id: no set or combined view nope \(sets: walls-\w{4}; combined views: none\)$/);
     await call(c, 'save_combined', { name: 'Score', op: 'mean', inputs: [{ set: set.id, column: 'sunhours_front' }] });
     const view = saved().find(isCombined)!;
-    expect(await call(c, 'rename_set', { id: view.id, name: 'X' })).toBe(`id: ${view.id} is a combined view; save_combined with its id and a new name renames it`);
+    expect(await json(c, 'rename_set', { id: view.id, name: 'Facade score' })).toEqual({ renamed: { id: view.id, kind: 'combined', from: 'Score', name: 'Facade score' } });
+    expect(saved().find(isCombined)).toEqual({ ...view, name: 'Facade score', updated: saved().find(isCombined)!.updated });
     expect(saved().find(isCombined)!.inputs[0].set).toBe(set.id); // the view still takes the renamed set
   });
 
@@ -152,7 +154,10 @@ describe('open_set and run_set', () => {
     expect(r.models[0]).toMatchObject({ model: 'A', status: 'done', column: 'sunhours_front', mean: 2 });
     expect(r.models[1]).toEqual({ model: 'B', status: 'not run' });
     expect(await call(c, 'run_set', { id: set.id, models: ['C'] })).toBe('models[0]: no model with a file in slot C (A, B)');
-    expect(setsOf(c())).toEqual([{ id: set.id, name: 'Sun', analysis: 'daylight', column: 'sunhours_front', models: ['A', 'B'], updated: set.updated, summary: expect.any(Array), status: [{ model: 'A', status: 'done' }, { model: 'B', status: 'not run' }] }]);
+    expect((await json(c, 'run_set', { id: set.id, wait: 0 })).models).toHaveLength(2); // answers at once
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(await call(c, 'run_set', { id: set.id, wait: 41 })).toBe('wait: 0 to 40');
+    expect(setsOf(c())).toEqual([{ id: set.id, name: 'Sun', analysis: 'daylight', column: 'sunhours_front', models: ['A', 'B'], updated: set.updated, summary: expect.any(Array), status: [{ model: 'A', status: 'done', seconds: 0 }, { model: 'B', status: 'not run' }] }]);
     expect(setsOf(c())[0].summary.slice(0, 3)).toEqual(['Model A: block.usdz: 1 receiver, 0 shades, no material edits', 'Model B: block.usdz: 0 receivers, 0 shades, no material edits', 'Location: London, United Kingdom (51.5, -0.128), north 0°']);
   });
 });
@@ -181,22 +186,59 @@ describe('combined views', () => {
     expect(combinedOf(c())).toMatchObject([{ id: saved.saved.id, name: 'Score', shown: false, missing: ['B: no result of Sky'] }]);
   });
 
-  it('combined_results combines per model without changing the app, runs the missing inputs first, and differences to the first', async () => {
-    const { c, run, sky, saved } = await scored(), id = saved.saved.id;
-    const r = await json(c, 'combined_results', { id, thresholds: [1.5] });
+  it('results with analysis combined combines per model without changing the app, runs the missing inputs first, and differences to the first', async () => {
+    const { c, run, sun, sky, saved } = await scored(), id = saved.saved.id;
+    const r = await json(c, 'results', { analysis: 'combined', id, thresholds: [1.5] });
     expect(run).toHaveBeenCalledWith(sky, [1]); // B's Sky first (it stays not run here)
     const [a, b] = r.models;
-    expect([r.column, a.model, a.inputs, a.whole.mean, a.whole.thresholds[0].atOrAbove]).toEqual([`combined_${id}`, 'A', '2 of 2', 1.25, 50]); // (1 + 0.5) / 2, (3 + 0.5) / 2
+    expect([r.analysis, r.column, a.model, a.inputs, a.whole.mean, a.whole.thresholds[0].atOrAbove]).toEqual(['combined', `combined_${id}`, 'A', '2 of 2', 1.25, 50]); // (1 + 0.5) / 2, (3 + 0.5) / 2
     expect([b.model, b.missing, b.inputs, b.whole.mean, b.whole.diff.mean]).toEqual(['B', ['B: no result of Sky'], '1 of 2', 2, 0.75]);
     expect(a.rows).toEqual([expect.objectContaining({ mesh: '/Site/Wall', mean: 1.25 })]);
     expect(c().state.column).toBe(initialState().column);
-    expect(await call(c, 'combined_results', { id: 'nope' })).toMatch(/^id: no combined view nope/);
-    await json(c, 'delete_set', { id: sky.id }).then((d) => expect(d.note).toBe('combined views that took it as an input now miss it: Score'));
-    expect((await json(c, 'combined_results', { id, wait: false })).models[0].missing).toEqual([`A: the set ${sky.id} is deleted`]);
-    expect(await json(c, 'delete_combined', { id })).toEqual({ deleted: id, combined: [] });
+    expect(await call(c, 'results', { analysis: 'combined', id: 'nope' })).toMatch(/^id: no combined view nope/);
+    expect(await call(c, 'results', { analysis: 'combined', id, column: 'sky_front' })).toBe('column: a combined view has one column of its own; leave column out');
+    expect(await call(c, 'results', { analysis: 'combined', id, set: sun.id })).toMatch(/^set: quotes a saved set's kept results/);
+    await json(c, 'delete_set', { id: sky.id }).then((d) => expect([d.kind, d.note]).toEqual(['set', 'combined views that took it as an input now miss it: Score']));
+    run.mockClear();
+    expect((await json(c, 'results', { analysis: 'combined', id, wait: 0 })).models[0].missing).toEqual([`A: the set ${sky.id} is deleted`]);
+    expect(run).not.toHaveBeenCalled(); // wait 0: quotes what there is
+    expect(await json(c, 'delete_set', { id })).toEqual({ deleted: id, kind: 'combined', sets: [sun.id], combined: [] });
   });
 
-  it("combined_results by 'facing' reads the sides against its first input run's north", async () => {
+  it("results with set quotes a saved set's kept results without opening it, the first model the reference", async () => {
+    const { c, sun, sky } = await scored();
+    const r = await json(c, 'results', { set: sun.id, thresholds: [2] }), [a, b] = r.models;
+    expect([r.set, r.column, r.unit, r.problemRange]).toEqual([{ id: sun.id, name: 'Sun', analysis: 'daylight' }, 'sunhours_front', 'h', { lo: null, hi: null }]);
+    expect([a.model, a.whole.mean, a.whole.thresholds[0].atOrAbove, a.run.seconds, b.model, b.whole.mean, b.whole.diff.mean]).toEqual(['A', 2, 50, 0, 'B', 2, 0]);
+    const s = await json(c, 'results', { set: sky.id, models: ['A', 'B'] });
+    expect([s.set.analysis, s.column, s.models[1]]).toEqual(['views', 'sky_front', { model: 'B', name: 'block.usdz', status: 'not run', result: null }]);
+    expect(await call(c, 'results', { set: sun.id, column: 'sky_front' })).toBe("column: model A's kept result has no sky_front (sunhours_front)");
+    expect(await call(c, 'results', { set: sun.id, analysis: 'views' })).toBe(`analysis: set ${sun.id} is a daylight set; leave analysis out`);
+    expect(await call(c, 'results', { set: 'nope' })).toMatch(/^set: no set nope/);
+    expect(c().state.column).toBe(initialState().column); // nothing opened
+  });
+
+  it('save_combined with preview shows a draft on the Combined tab without storing it; a save shows the saved view instead', async () => {
+    const { c, sun } = await scored();
+    let shown = null as CombinedView | null; // the preview the Combined tab shows, as App keeps it
+    const x = () => { const y = c(); return { ...y, combined: { ...y.combined, view: shown }, previewCombined: (v: CombinedView | null) => { shown = v; } } as unknown as Ctl; };
+    const draft = { name: 'Best of', op: 'max', inputs: [{ set: sun.id, column: 'sunhours_front' }] };
+    const p = await json(x, 'save_combined', { ...draft, preview: true });
+    expect(p.preview).toMatchObject({ id: 'draft', name: 'Best of', op: 'max', inputs: 1 });
+    expect([p.tab, x().ui.tab, shown?.name, x().sets.saved.filter(isCombined).length]).toEqual(['combined', 'combined', 'Best of', 1]);
+    expect(combinedOf(x()).at(-1)).toMatchObject({ id: 'draft', name: 'Best of', shown: true, preview: true });
+    const s = await json(x, 'save_combined', draft);
+    expect([shown, x().sets.saved.filter(isCombined).length, s.saved.name]).toEqual([null, 2, 'Best of']);
+    expect(await call(x, 'save_combined', { ...draft, inputs: [{ set: 'nope', column: 'sky_front' }], preview: true })).toMatch(/^1 problem: inputs\[0\]\.set: /);
+  });
+
+  it("set_display shows a combined view by id on the Combined tab", async () => {
+    const { c, saved } = await scored(), id = saved.saved.id;
+    expect((await json(c, 'set_display', { analysis: 'combined', id, colourBy: 'value' })).analysis).toBe('combined');
+    expect([c().ui.tab, c().state.combined.column, c().state.combined.colourBy]).toEqual(['combined', `combined_${id}`, 'value']);
+  });
+
+  it("results with analysis combined by 'facing' reads the sides against its first input run's north", async () => {
     const results: Record<string, SetModelStatus[]> = {};
     const x = app((set) => results[set.name] ?? []);
     await call(x.c, 'save_set', { name: 'Sun' });
@@ -204,7 +246,7 @@ describe('combined views', () => {
     const id = (await json(x.c, 'save_combined', { name: 'Sun only', op: 'mean', inputs: [{ set: (x.saved()[0] as AnalysisSet).id, column: 'sunhours_front' }] })).saved.id;
     const wall = { positions: Float32Array.from([0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]) }; // two triangles facing -Y
     const c = () => ({ ...x.c(), meshOf: () => wall }) as unknown as Ctl;
-    const r = await json(c, 'combined_results', { id, by: 'facing', models: ['A'] });
+    const r = await json(c, 'results', { analysis: 'combined', id, by: 'facing', models: ['A'] });
     expect(r.models[0].rows).toEqual([expect.objectContaining({ facing: 'W', elements: 2, mean: 2 })]); // north 90°: the model's -Y faces west
   });
 });
@@ -220,12 +262,12 @@ describe('roles and the display by analysis', () => {
     expect(() => roleActions(m, { paths: ['/Site/Roof'], role: 'shade', group: 'g' }, 'daylight')).toThrow(/^group: only with role 'target'$/);
   });
 
-  it("set_display switches the tab as a click does, shows a combined view by id, and the labels", async () => {
+  it("set_display switches the tab as a click does, refuses an id off the Combined tab, and the labels", async () => {
     const { c } = app();
-    const d = await json(c, 'set_display', { tab: 'views', labels: true });
-    expect([d.tab, d.labels, c().ui.tab]).toEqual(['views', true, 'views']);
-    expect(await call(c, 'set_display', { combined: 'nope' })).toBe('combined: no combined view nope (none saved; save_combined first)');
-    expect(await call(c, 'set_display', { tab: 'views', combined: 'nope' })).toMatch(/^combined: a combined view shows on the Combined tab/);
-    expect(await call(c, 'set_display', { tab: 'combined', column: 'sunhours_front' })).toBe("column: the Combined tab shows a combined view; give combined (its id) instead, or analysis for an analysis' column");
+    const d = await json(c, 'set_display', { analysis: 'views', labels: true });
+    expect([d.analysis, d.labels, c().ui.tab]).toEqual(['views', true, 'views']);
+    expect(await call(c, 'set_display', { id: 'nope' })).toBe('id: no combined view nope (none saved; save_combined first)');
+    expect(await call(c, 'set_display', { analysis: 'views', id: 'nope' })).toBe("id: a combined view shows on the Combined tab; give analysis 'combined'");
+    expect(await call(c, 'set_display', { analysis: 'combined', column: 'sunhours_front' })).toBe("column: the Combined tab shows a combined view's own column; give its id instead");
   });
 });

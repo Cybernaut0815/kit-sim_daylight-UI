@@ -9,6 +9,7 @@ import { TAGGED, defaultSettings, initialState, reducer, swapModel, type Action,
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
+import setsGuide from './sets.md?raw';
 import viewsGuide from './views.md?raw';
 import { SECTION, TOOLS, WORDS, check } from './schema';
 import { HANDLERS, bySide, connect, difference, publicSettings, settingsActions, shotSize, stableKey, type Ctl } from './tools';
@@ -26,6 +27,8 @@ const call = async (c: () => Ctl, name: string, args: Record<string, unknown>) =
     return (e as Error).message;
   }
 };
+/** What App adds to the store for the display and app_state: no sun path fit, the field preview off, no variant chosen. */
+const LOOK = { sunAround: {}, setSunAround: () => {}, field: { shown: false, scale: 1, density: 'some', around: {} }, setField: () => {}, variants: () => ({}), fileOf: () => undefined };
 
 describe('the tool list', () => {
   it('every tool of mcp.json has its handler, and only those', () => {
@@ -33,15 +36,18 @@ describe('the tool list', () => {
     expect(new Set(names).size).toBe(names.length);
     expect(Object.keys(HANDLERS).sort()).toEqual([...names].sort());
   });
-  it('the instructions and each description stay under 4096 characters', () => {
-    expect(mcp.instructions.length).toBeLessThan(4096);
-    for (const t of mcp.tools) expect(t.description.length, t.name).toBeLessThan(4096);
+  it('stays short: the instructions under 2000 characters, each description under 1000, the whole list minified at most 62 KB', () => {
+    expect(mcp.instructions.length).toBeLessThan(2000);
+    for (const t of mcp.tools) expect(t.description.length, t.name).toBeLessThan(1000);
+    expect(JSON.stringify(mcp).length).toBeLessThanOrEqual(62e3);
   });
-  it("screenshot's section is set_display's, or null; a report's view block takes set_display's", () => {
-    const shot = schema('screenshot').properties!.section;
-    expect(shot.type).toEqual(['object', 'null']);
-    expect({ ...shot, type: 'object', description: '' }).toEqual({ ...SECTION, description: '' });
-    expect(SECTION).toBe(schema('set_display').properties!.section);
+  it("screenshot's look fields are set_display's (the same types, values and items); its section is set_display's form, or null", () => {
+    const strip = (v: unknown): unknown => (Array.isArray(v) ? v.map(strip) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'description').map(([k, x]) => [k, strip(x)])) : v);
+    const shot = schema('screenshot').properties!, shown = schema('set_display').properties!;
+    for (const k of ['analysis', 'id', 'column', 'colourBy', 'labels', 'display', 'highlight', 'sunPath', 'sunAround', 'fieldPreview']) expect(strip(shot[k]), k).toEqual(strip(shown[k]));
+    expect(shot.section.type).toEqual(['object', 'null']);
+    expect(shot.section.properties).toBeUndefined(); // the handler checks it against SECTION
+    expect(SECTION).toBe(shown.section);
   });
   it('each inputSchema is a closed object whose fields say what they take', () => {
     const fields = (s: Record<string, unknown>, at: string): string[] => {
@@ -65,8 +71,8 @@ describe('the tool list', () => {
 describe('the guides', () => {
   it('name only tools and update_settings fields that exist, in glyphs the report fonts have', () => {
     const names = new Set(mcp.tools.map((t) => t.name)), us = schema('update_settings').properties as Record<string, { properties?: Record<string, unknown> }>;
-    for (const text of [guide, reportGuide, viewsGuide]) {
-      expect((text.match(/\b(?:app_state|site_info|model_tree|(?:update|open|remove|set|get|edit|find|save|delete|generate|download)_[a-z_]+)\b/g) ?? []).filter((w) => !names.has(w))).toEqual([]);
+    for (const text of [guide, reportGuide, viewsGuide, setsGuide]) {
+      expect((text.match(/\b(?:app_state|site_info|model_tree|combined_results|(?:update|open|remove|set|get|edit|find|save|delete|generate|download|run|rename|copy)_[a-z_]+)\b/g) ?? []).filter((w) => !names.has(w))).toEqual([]);
       expect((text.match(/\b(?:sim|time|weather|viz|site|view)\.[a-zA-Z]+\b/g) ?? []).filter((d) => { const [g, k] = d.split('.'); return !us[g]?.properties?.[k]; })).toEqual([]);
       expect([...new Set(text)].filter(glyphs)).toEqual([]); // what the report's fonts draw: agents copy it
     }
@@ -75,14 +81,19 @@ describe('the guides', () => {
 
 describe('check', () => {
   it('passes what the schema allows, names the field of the rest', () => {
-    expect(check(schema('update_settings'), { time: { step: 30, from: { hour: '07:30' } }, viz: { min: null, below: 2 }, charts: [{ id: 'c', kind: 'histogram', range: [0, 8], bins: 'auto' }] })).toBe('');
+    expect(check(schema('update_settings'), { time: { step: 30, from: { hour: '07:30' } }, viz: { min: null, lo: 2 }, charts: [{ id: 'c', kind: 'histogram', range: [0, 8], bins: 'auto' }] })).toBe('');
     expect(check(schema('set_display'), { highlight: null })).toBe('');
+    expect(check(schema('set_display'), { highlight: [[0, 1], [2, 3]] })).toBe('');
+    expect(check(schema('set_display'), { highlight: [[1]] })).toBe('highlight[0]: 2 items');
+    expect(check(schema('update_settings'), { viz: { below: 2 } })).toMatch(/^viz\.below: not an argument here/);
+    expect(check(schema('update_settings'), { reset: ['nope'] })).toMatch(/^reset\[0\]: one of /);
+    expect(check(schema('set_display'), { tab: 'views' })).toMatch(/^tab: not an argument here/);
     expect(check(schema('update_settings'), { time: { step: 7 } })).toBe('time.step: one of 10, 15, 30, 60');
     expect(check(schema('update_settings'), { time: { from: { hour: '7:30' } } })).toBe("time.from.hour: a time, 'HH:MM'");
     expect(check(schema('update_settings'), { charts: [{ id: 'c', range: 'log' }] })).toBe('charts[0].range: one of relative, absolute');
     expect(check(schema('update_settings'), { charts: [{ id: 'c', range: [1] }] })).toBe('charts[0].range: 2 items');
     expect(check(schema('update_settings'), { weather: { turbidity: 9 } })).toBe('weather.turbidity: 2 to 7');
-    expect(check(schema('set_roles'), { role: 'receiver' })).toBe('paths: required');
+    expect(check(schema('download_result'), {})).toBe('format: required');
     expect(check(schema('set_roles'), { paths: ['Roof'], role: 'receiver' })).toBe('paths[0]: a prim path, starting with /');
     expect(check(schema('app_state'), { verbose: true })).toBe('verbose: not an argument here (none)');
     expect(check(schema('set_geometry'), { subdivision: { level: 4 } })).toBe('subdivision.level: one of -1, 0, 1, 2, 3, model');
@@ -217,7 +228,7 @@ describe('sections', () => {
       three: { objectsFor: (p: string) => (p === '/Site/Block' ? [block] : []), overlay: { children: [] } },
     };
     let x = {
-      state: { active: 0, models: [{ slot: 0, name: 'block', objects: [{ id: 'b', path: '/Site/Block' }] }], colourBy: 'plain', bin: null, settings: { sim: { north: 0 } } },
+      ...LOOK, state: { active: 0, models: [{ slot: 0, name: 'block', objects: [{ id: 'b', path: '/Site/Block' }] }], colourBy: 'plain', bin: null, bins: [], settings: { sim: { north: 0 } } },
       panes: { 0: { loading: false } }, ui: { tab: 'daylight' }, section: NONE, dispatch: () => {}, setUi: () => {}, viewer: () => ({ el }),
       setSection: (s: Section) => { x = { ...x, section: s }; el.section = toStage(s, 1, 'Z'); },
       analysis: () => ({ models: x.state.models, column: '', colourBy: 'plain', shown: null, scale: null, dispatch: () => {} }),
@@ -291,7 +302,7 @@ describe('receivers that cast no shade', () => {
     const kids: Record<string, unknown[]> = { '/': [prim('/Room', true)], '/Room': rows.map((o) => prim(o.path)) }, el = { usd: { children: async (p: string) => kids[p] ?? [] }, session: { isLocked: () => false } };
     let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'room' });
     return () => ({
-      state, dispatch: (a: Action) => { state = reducer(state, a); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), ui: { tab: 'daylight' }, views: [], reports: null, generation: () => ({}),
+      ...LOOK, state, dispatch: (a: Action) => { state = reducer(state, a); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), ui: { tab: 'daylight' }, views: [], reports: null, generation: () => ({}),
       per: state.models.map((m) => ({ m, receivers: m.objects.filter((o) => o.role === 'receiver'), shades: [], key: '' })),
       analysis: (tool: Tool) => {
         const models = tool === 'views' ? state.models.map(swapModel) : state.models;
@@ -315,6 +326,21 @@ describe('receivers that cast no shade', () => {
     expect(tree).toEqual([['/Room', 'mixed', 'mixed'], ['/Room/Grid', 'receiver', false], ['/Room/Floor', 'receiver', undefined], ['/Room/Walls', 'shade', undefined]]);
     vi.stubGlobal('document', { visibilityState: 'visible' });
     expect((await json(c, 'app_state', {})).models[0].meshes).toEqual({ receiver: 2, shade: 1, none: 0, noShade: 1 });
+  });
+
+  it('set_roles reset puts every role back first; edit_material reset alone takes back every edit of the model', async () => {
+    const c = app();
+    await call(c, 'set_roles', { paths: ['/Room'], role: 'receiver' });
+    const r = await json(c, 'set_roles', { reset: true, paths: ['/Room/Grid'], role: 'receiver' });
+    expect([r.reset, r.meshes, r.changed]).toEqual([true, { receiver: 1, shade: 0, none: 2 }, ['/Room/Floor', '/Room/Walls']]);
+    expect((await json(c, 'set_roles', { reset: true })).meshes).toEqual({ receiver: 0, shade: 0, none: 3 });
+    expect(await call(c, 'set_roles', {})).toBe('paths: required (or reset: true alone)');
+    expect(await call(c, 'set_roles', { reset: true, role: 'shade' })).toBe('role: goes with paths');
+    expect(await call(c, 'set_roles', { paths: ['/Room'] })).toBe('role: required with paths');
+    c().dispatch({ type: 'OPTICS_EDIT', slot: 0, key: '/Looks/Brick', edit: { rho: 0.3, tau: 0, kind: 'opaque' } });
+    expect(await json(c, 'edit_material', { reset: true })).toEqual({ model: 'A', reset: 1, note: '1 edited row back to the derived or default values' });
+    expect(c().state.models[0].optics).toEqual({});
+    expect(await call(c, 'edit_material', { rho: 0.5 })).toBe('material: required, unless reset alone resets every edit of the model');
   });
 
   it('with sim.selfOcclude off, set_roles says the flag waits for it; a run key names the meshes by path, the same after a re-read', async () => {
@@ -342,7 +368,8 @@ describe('the View analysis (analysis views)', () => {
    *  run lands RESULT (or the problem without a receiver). Also the tabs the app was set to and the downloads. */
   function app() {
     const rows = ['/Site/Facade', '/Site/Park', '/Site/Block'].map((path): ObjectRow => ({ id: path.slice(6).toLowerCase(), name: path.slice(6), path, tris: 2, verts: 4, role: 'none' }));
-    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = { tab: 'daylight' as Tab, labels: false };
+    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = { tab: 'daylight' as Tab, labels: false, display: 'shaded' };
+    let sunAround: Ctl['sunAround'] = {}, field: Ctl['field'] = { shown: false, scale: 1, density: 'some', around: {} };
     const tabs: Tab[] = [], downloads: unknown[] = [], dispatch = (a: Action) => { state = reducer(state, a); };
     const views = (a: Action) => dispatch(TAGGED.has(a.type) ? ({ ...a, tab: 'views' } as Action) : a);
     const el = { stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, -20, 3], target: [5, 0, 3], fov: 45, projection: 'perspective', height: 1 }, three: { objectsFor: () => [], overlay: { children: [] } } };
@@ -361,7 +388,8 @@ describe('the View analysis (analysis views)', () => {
       };
     };
     const c = () => ({
-      state, dispatch, ui, setUi: (f: (u: typeof ui) => typeof ui) => { ui = f(ui); tabs.push(ui.tab); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), section: NONE,
+      ...LOOK, sunAround, setSunAround: (s: Ctl['sunAround']) => { sunAround = s; }, field, setField: (p: Partial<Ctl['field']>) => { field = { ...field, ...p }; },
+      state, dispatch, ui, setUi: (f: (u: typeof ui) => typeof ui) => { const t = ui.tab; ui = f(ui); if (ui.tab !== t) tabs.push(ui.tab); }, panes: { 0: { loading: false, meshes: new Map() } }, viewer: () => ({ el }), section: NONE,
       views: [], reports: null, generation: () => ({}), exporting: false, analysis, per: analysis('daylight').per, shown: null, sets: { saved: [] }, runs: { statusOf: () => [] }, combined: { views: [], models: [] },
       meshOf: () => ({ positions: [0, 0, 0, 10, 0, 0, 10, 0, 6, 0, 0, 6], indices: [0, 1, 2, 0, 2, 3] }),
     }) as unknown as Ctl;
@@ -388,7 +416,7 @@ describe('the View analysis (analysis views)', () => {
     const s = await json(c, 'app_state', {});
     expect(s.models[0].meshes).toEqual({ receiver: 0, shade: 0, none: 3 }); // Daylight's as they were
     expect(s.viewAnalysis).toEqual({
-      settings: defaultSettings().viewSim, column: null, colourBy: 'plain', problems: {},
+      settings: defaultSettings().viewSim, field: { grid: '60 x 60', rays: 3600, azimuth: [-60, 60], elevation: [-70, 50], gaze: 'level' }, column: null, colourBy: 'plain', problems: {},
       models: [{ model: 'A', meshes: { receiver: 1, obstruction: 1, targets: { park: 1 }, none: 0 }, run: 'idle', result: null }],
     });
   });
@@ -402,28 +430,75 @@ describe('the View analysis (analysis views)', () => {
     expect(m.run).toEqual({ elements: 'faces', args: JSON.parse(KEY)[0], seconds: 2 }); // no period or weather
     const d = await json(c, 'results', { analysis: 'views', column: 'distance_min_front' });
     expect([d.unit, d.meaning, d.models[0].whole.mean]).toEqual(['m', 'The nearest thing in view, m (Far when the whole field is open). Front side: where the face normal points.', 10]);
-    expect(await call(c, 'results', { analysis: 'views', column: 'sunhours_front' })).toBe("column: model A's result has no sunhours_front (sky_front, park_front, distance_min_front); run analysis views again");
+    expect(await call(c, 'results', { analysis: 'views', column: 'sunhours_front' })).toBe("column: model A's result has no sunhours_front (sky_front, park_front, distance_min_front); run with analysis 'views' again");
     expect(await call(c, 'results', {})).toBe('models: no model has a Daylight result yet; run first');
-    expect(await call(c, 'find_critical', { analysis: 'views' })).toMatch(/^below: the problem range of sky is empty; give below or above/);
-    expect(await json(c, 'find_critical', { analysis: 'views', below: 0.5 })).toMatchObject({ model: 'A', column: 'sky_front', below: 0.5, groups: [{ mesh: '/Site/Facade', facing: 'S', elements: 1 }] });
-    expect(await call(c, 'find_critical', { below: 0.5 })).toBe('model: model A has no Daylight result; run first');
-    expect(settingsActions({ viz: { below: 2 } }, c().state, 'distance_min_front')).toEqual([{ type: 'VIZ', quantity: 'distance_min', patch: { lo: 2 } }]); // a view quantity's name holds '_'
+    expect(await call(c, 'results', { analysis: 'views', id: 'score' })).toBe("id: goes with analysis 'combined' (a combined view's results)");
+    expect(await call(c, 'results', { wait: 0 })).toBe("wait: goes with analysis 'combined' (a combined view's results)");
+    expect(await call(c, 'results', { analysis: 'combined' })).toBe("id: analysis 'combined' quotes a combined view; give its id (app_state combined)");
+    expect(await call(c, 'find_critical', { analysis: 'views' })).toMatch(/^lo: the problem range of sky is empty; give lo or hi/);
+    expect(await json(c, 'find_critical', { analysis: 'views', lo: 0.5 })).toMatchObject({ model: 'A', column: 'sky_front', lo: 0.5, hi: null, groups: [{ mesh: '/Site/Facade', facing: 'S', elements: 1 }] });
+    expect(await call(c, 'find_critical', { lo: 0.5 })).toBe('model: model A has no Daylight result; run first');
+    expect(settingsActions({ viz: { lo: 2 } }, c().state, 'distance_min_front')).toEqual([{ type: 'VIZ', quantity: 'distance_min', patch: { lo: 2 } }]); // a view quantity's name holds '_'
+    c().dispatch({ type: 'VIZ', quantity: 'sky', patch: { lo: 0.3, hi: 0.55 } });
+    expect((await json(c, 'results', { analysis: 'views' })).problemRange).toEqual({ lo: 0.3, hi: 0.55 });
   });
 
   it('set_display, screenshot and download_result show and save its result, the tab put back after a shot', async () => {
     const { c, tabs, downloads } = app();
     await ran(c);
-    const d = await json(c, 'set_display', { analysis: 'views', column: 'park_front', colourBy: 'value' });
-    expect([d.tab, d.column, d.viewAnalysis, c().state.column]).toEqual(['daylight', null, { column: 'park_front', colourBy: 'value' }, '']);
-    expect(await call(c, 'set_display', { analysis: 'views', column: 'sunhours_front' })).toBe('column: not in the result (sky_front, park_front, distance_min_front)');
+    const d = await json(c, 'set_display', { analysis: 'views', column: 'park_front', colourBy: 'value' }); // shows that tab, as a click does
+    expect([d.analysis, d.column, d.colourBy, c().ui.tab, c().state.viewAnalysis.column, c().state.column]).toEqual(['views', 'park_front', 'value', 'views', 'park_front', '']);
+    expect(await call(c, 'set_display', { analysis: 'views', column: 'sunhours_front' })).toBe('column: not in the View analysis result (sky_front, park_front, distance_min_front)');
+    expect((await json(c, 'set_display', { analysis: 'daylight' })).analysis).toBe('daylight');
     expect(await call(c, 'set_display', { column: 'sky_front' })).toBe('column: no Daylight result yet; run first');
     const shot = await call(c, 'screenshot', { analysis: 'views', column: 'sky_front' });
     expect(shot).toMatch(/^Model A \(site\): 1280 x 800 px/);
-    expect([tabs, c().ui.tab, c().state.viewAnalysis.column]).toEqual([['views', 'daylight'], 'daylight', 'park_front']); // shown for the shot, then put back
-    expect(await call(c, 'screenshot', { tab: 'daylight', analysis: 'views' })).toBe('analysis: the shot shows one tab; give tab daylight or analysis views, not both');
+    expect([tabs, c().ui.tab, c().state.viewAnalysis.column]).toEqual([['views', 'daylight', 'views', 'daylight'], 'daylight', 'park_front']); // shown for the shot, then put back
+    expect(await call(c, 'screenshot', { analysis: 'views', id: 'score' })).toBe("id: a combined view shows on the Combined tab; give analysis 'combined'");
     expect(await json(c, 'download_result', { analysis: 'views', format: 'glb' })).toMatchObject({ model: 'A', analysis: 'views', format: 'glb', column: 'park_front' });
     expect(downloads).toEqual([['views', 'glb', 'replace']]);
     expect(await call(c, 'download_result', { format: 'glb' })).toBe('model: model A has no Daylight result; run first');
+  });
+
+  it('set_display: value ranges merged, the display mode, the sun path round prims, the field preview on receivers; a shot shows its own and puts them back', async () => {
+    const { c } = app();
+    await ran(c);
+    const all = ['/Site/Facade', '/Site/Park', '/Site/Block'];
+    const d = await json(c, 'set_display', { highlight: [[0.5, 0.7], [0, 0.2], [0.1, 0.3]], display: 'plain-wire', sunAround: ['/Site'], fieldPreview: { show: true, scale: 2, density: 'many', around: ['/Site'] } });
+    expect([d.highlight, c().state.bins, d.display, c().ui.display]).toEqual([[[0, 0.3], [0.5, 0.7]], [[0, 0.3], [0.5, 0.7]], 'plain-wire', 'plain-wire']);
+    expect([d.sunAround, c().sunAround]).toEqual([all, { 0: all }]);
+    expect(d.fieldPreview).toEqual({ show: true, scale: 2, density: 'many', around: ['/Site/Facade'] }); // the View analysis' receivers under /Site
+    expect(await call(c, 'set_display', { highlight: [[1, 1]] })).toBe('highlight[0]: [lo, hi] with lo < hi');
+    expect(await call(c, 'set_display', { sunAround: ['/Nope'] })).toBe('sunAround: no mesh at or under /Nope in model A; find prims with model_tree');
+    expect(await call(c, 'set_display', { fieldPreview: { around: ['/Site/Park'] } })).toBe('fieldPreview.around: no View analysis receiver at or under /Site/Park in model A; find prims with model_tree');
+    expect(await call(c, 'set_display', { fieldPreview: { scale: 9 } })).toMatch(/^fieldPreview\.scale: /);
+    expect(await call(c, 'set_display', { display: 'xray' })).toMatch(/^display: one of shaded, /);
+    await call(c, 'screenshot', { highlight: null, display: 'wire', sunAround: null, fieldPreview: { show: false } });
+    expect([c().state.bins, c().ui.display, c().sunAround, c().field.shown]).toEqual([[[0, 0.3], [0.5, 0.7]], 'plain-wire', { 0: all }, true]); // the shot's own, then the app's back
+    const off = await json(c, 'set_display', { highlight: null, sunAround: null, fieldPreview: { show: false, around: null } });
+    expect([off.highlight, off.sunAround, off.fieldPreview.show, off.fieldPreview.around, c().state.bins, c().sunAround]).toEqual([null, null, false, null, [], {}]);
+  });
+
+  it('update_settings: reset puts a section back, the gradient library is put, picked and removed, and the reply gives the field in numbers', async () => {
+    const { c } = app();
+    const r = await json(c, 'update_settings', { view: { fov: [360, -30, 30], cell: 5 }, viz: { library: [{ key: 'mine', label: 'Mine', stops: ['#000000', '#ff0000', '#ffffff'] }], quantity: 'sky', gradient: 'mine' } });
+    expect(r.field).toEqual({ grid: '72 x 12', rays: 864, azimuth: [0, 360], elevation: [-30, 30] }); // all round: no gaze
+    expect([c().state.settings.viz.library.mine.label, c().state.settings.viz.gradients.sky, r.settings.viz.library]).toEqual(['Mine', 'mine', [expect.objectContaining({ key: 'mine', label: 'Mine' })]]);
+    const back = await json(c, 'update_settings', { reset: ['view-field'], viz: { library: [{ key: 'mine', remove: true }] } });
+    expect([back.field.grid, c().state.settings.viewSim.fov, c().state.settings.viz.library]).toEqual(['60 x 60', [120, -70, 50], {}]);
+    expect(await call(c, 'update_settings', { viz: { library: [{ key: 'x', remove: true, label: 'X' }] } })).toBe('viz.library[0].label: not with remove');
+    expect(await call(c, 'update_settings', { viz: { library: [{ key: 'x', stops: ['#000000', '#ffffff'], positions: [0.5, 0.2] }] } })).toBe('viz.library[0].positions: one per stop, ascending within 0 to 1');
+    expect(await call(c, 'update_settings', { site: { locate: true, lat: 1 } })).toBe('site.locate: give one of query, locate, or lat and lon');
+  });
+
+  it('app_state: per model its file and the variant choices made since it opened; the field each eye traces in numbers', async () => {
+    const { c } = app();
+    vi.stubGlobal('document', { visibilityState: 'visible' });
+    const choices = { '/Site/Block': { height: ['low', 'high'] as const, roof: ['flat', 'flat'] as const } };
+    const x = () => ({ ...c(), variants: () => choices, fileOf: () => 'site/site.usda' }) as unknown as Ctl;
+    const [m] = (await json(x, 'app_state', {})).models;
+    expect([m.file, m.variants]).toEqual(['site/site.usda', { '/Site/Block': { height: 'high' } }]); // the ones changed only
+    expect((await json(c, 'app_state', {})).models[0]).not.toHaveProperty('variants');
   });
 });
 

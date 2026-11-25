@@ -1,25 +1,23 @@
 // The agent's tools for analysis sets and combined views (server/mcp.json), as the Sets menu and the Combined tab's
 // panels offer them: a set saved from an analysis' setup now (with roles and settings of its own, applied to a copy of
-// the app, not to it), opened, copied to another model (a new set, by USD path), renamed (its id stays), run in the
-// background (sets/runs.ts) and deleted; a combined view (sets/combine.ts)
-// saved, deleted and quoted per model as results quotes a column. tools.ts spreads them into HANDLERS, passing in the
-// helpers of its own they use: this module imports only its types (no import cycle).
+// the app, not to it), opened, copied to another model (a new set, by USD path), run in the background (sets/runs.ts);
+// a combined view (sets/combine.ts) saved or previewed; either kind renamed (its id stays) or deleted. results quotes a
+// set's kept results and a combined view through setResults and combinedResults, as it quotes an analysis' last runs.
 import { flushSync } from 'react-dom';
 import { dataOf } from '../lib/charts';
-import { roundNum, roundPct, unitFor } from '../lib/result';
+import { roundNum, roundPct, splitColumn, unitFor } from '../lib/result';
 import { idsUnder } from '../lib/tree';
 import { boundsOf, columnOf, combine, inputRange, type InputRun } from '../sets/combine';
-import { LETTERS, applyReport, captureSet, checkView, copyName, copySet, copyText, isSet, levelText, notOpen, renameSet, setSummary, viewHelp, type AnalysisSet, type CombinedView } from '../sets/model';
+import { applyReport, captureSet, checkView, copyName, copySet, copyText, isSet, levelText, notOpen, renameSet, setSummary, viewHelp, type AnalysisSet, type CombinedView, type Saved } from '../sets/model';
 import type { SetModelStatus } from '../sets/runs';
 import { inputStatus, missingOf } from '../sets/useCombined';
 import { reducer, type Action, type State, type Tool } from '../store';
 import { exclusive } from './bridge';
 import { TOOLS, check } from './schema';
-import type { Args, Ctl, Handler } from './tools';
-
-/** What the handlers take of tools.ts. */
-type Helpers = Pick<typeof import('./tools'), 'difference' | 'loadedOf' | 'ok' | 'quoted' | 'roleActions' | 'settingsActions' | 'summaries'>;
-const letter = (slot: number) => LETTERS[slot];
+import { letter, loadedOf, ok, type Args, type Ctl, type Handler } from './tools/common';
+import { roleActions } from './tools/model';
+import { settingsActions } from './tools/settings';
+import { columnFacts, compared, provenance, rowArgs, summaries, viewProvenance } from './tools/stats';
 
 /** save_set's settings blocks take update_settings' schemas (checked in the handler: mcp.json gives them once). */
 const SETTINGS = TOOLS.find((t) => t.name === 'update_settings')!.inputSchema.properties!;
@@ -40,38 +38,63 @@ function viewOf(x: Ctl, id: string, field = 'id'): CombinedView {
   if (!v) throw new Error(`${field}: no combined view ${id} (${ids(x.combined.views, 'none saved; save_combined first')})`);
   return v;
 }
+/** Saved set or combined view `id` (rename_set, delete_set). */
+function savedOf(x: Ctl, id: string): Saved {
+  const s = x.sets.saved.find((k) => k.id === id);
+  if (!s) throw new Error(`id: no set or combined view ${id} (sets: ${ids(savedSets(x), 'none')}; combined views: ${ids(x.combined.views, 'none')})`);
+  return s;
+}
 const live = (st: SetModelStatus) => st.state === 'queued' || st.state === 'running';
+/** The open models `named` (letters; their argument `field`) among a set's or a view's per-model lines, else `fallback`. */
+function picked<T extends { model: string }>(lines: readonly T[], named: readonly string[] | undefined, field: string, fallback: () => T[]): T[] {
+  return named?.map((l, i) => {
+    const k = lines.find((s) => s.model === l);
+    if (!k) throw new Error(`${field}[${i}]: no model with a file in slot ${l} (${lines.map((s) => s.model).join(', ') || 'none open'})`);
+    return k;
+  }) ?? fallback();
+}
 
-/** Set `set`'s status per open model with a file: done with its column's mean, P10 and P90 (in the column's unit). */
+/** Set `set`'s status per open model with a file: done with its column's mean, P10 and P90 (in the column's unit) and
+ *  run time. */
 function statusLines(x: Ctl, set: AnalysisSet) {
   return x.runs.statusOf(set).map((st) => {
     const m = x.state.models.find((k) => k.slot === st.slot), r = st.result, col = r ? r.columns.indexOf(set.column) : -1, sum = r && m && col >= 0 ? dataOf(r, col, m.objects).markers : null;
     return {
       model: st.model, status: STATE[st.state], ...(st.progress !== undefined ? { progress: roundPct(st.progress) } : {}), ...(st.message ? { error: st.message } : {}), ...levelNote(st),
+      ...(r ? { seconds: roundNum(r.elapsed) } : {}),
       ...(sum ? { column: set.column, unit: unitFor(set.column).value, mean: roundNum(sum.mean), p10: roundNum(sum.p10), p90: roundNum(sum.p90) } : r ? { note: `its result has no ${set.column}` } : {}),
     };
   });
 }
-/** The saved sets as app_state lists them: each with what it keeps in words and its status per open model. */
+/** The saved sets as app_state lists them: each with what it keeps in words and its status per open model (done: the
+ *  run time of the result kept this session). */
 export const setsOf = (x: Ctl) => savedSets(x).map((s) => ({
   id: s.id, name: s.name, analysis: s.tool, column: s.column, models: s.models.map((m) => m.model), updated: s.updated,
   summary: setSummary(s).map((l) => `${l.label}: ${l.value}`),
-  status: x.runs.statusOf(s).map((st) => ({ model: st.model, status: STATE[st.state], ...(st.message ? { error: st.message } : {}) })),
+  status: x.runs.statusOf(s).map((st) => ({ model: st.model, status: STATE[st.state], ...(st.result ? { seconds: roundNum(st.result.elapsed) } : {}), ...(st.message ? { error: st.message } : {}) })),
 }));
-/** The combined views as app_state lists them: what each misses per open model (the one shown: the meshes it skipped). */
-export const combinedOf = (x: Ctl) => x.combined.views.map((v) => {
-  const inputs = inputStatus(v, savedSets(x), x.runs), shown = x.combined.view?.id === v.id;
-  const missing = x.state.models.filter((m) => m.name).flatMap((m) => missingOf(m.slot, inputs));
-  const mismatches = shown ? x.combined.models.flatMap((m) => (m.result?.manifest.combined?.mismatches ?? []).map((s) => `${letter(m.slot)}: ${s}`)) : [];
-  return { id: v.id, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.length, meaning: viewHelp(v, savedSets(x)), shown, ...(missing.length ? { missing } : {}), ...(mismatches.length ? { mismatches } : {}) };
-});
+/** The combined views as app_state lists them: what each misses per open model (the one shown: the meshes it skipped);
+ *  last, a preview the Combined tab shows (save_combined's or the editor's draft: not saved), under its view's id or
+ *  'draft'. */
+export const combinedOf = (x: Ctl) => {
+  const view = x.combined.view, draft = view && !x.combined.views.includes(view) ? view : null;
+  return [...x.combined.views, ...(draft ? [draft] : [])].map((v) => {
+    const inputs = inputStatus(v, savedSets(x), x.runs), shown = view === v;
+    const missing = x.state.models.filter((m) => m.name).flatMap((m) => missingOf(m.slot, inputs));
+    const mismatches = shown ? x.combined.models.flatMap((m) => (m.result?.manifest.combined?.mismatches ?? []).map((s) => `${letter(m.slot)}: ${s}`)) : [];
+    return {
+      id: v.id, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.length, meaning: viewHelp(v, savedSets(x)), shown, ...(v === draft ? { preview: true } : {}),
+      ...(missing.length ? { missing } : {}), ...(mismatches.length ? { mismatches } : {}),
+    };
+  });
+};
 
 /** The app state `s` with save_set's roles and settings (each checked, a problem naming its path) for analysis `tool`. */
 function setupOf(x: Ctl, s: State, a: Args, tool: Tool): State {
   for (const [i, r] of ((a.roles ?? []) as Args[]).entries()) {
-    const at = `roles[${i}]`, m = h.loadedOf(x, r.model, `${at}.model`), objects = tool === 'views' ? m.viewAnalysis.objects : m.objects;
+    const at = `roles[${i}]`, m = loadedOf(x, r.model, `${at}.model`), objects = tool === 'views' ? m.viewAnalysis.objects : m.objects;
     if (!idsUnder(r.paths, objects).length) throw new Error(`${at}.paths: no mesh at or under them in model ${letter(m.slot)}; find prims with model_tree`);
-    for (const act of h.roleActions(m, r, tool, at)) s = reducer(s, act);
+    for (const act of roleActions(m, r, tool, at)) s = reducer(s, act);
   }
   if (a.settings) {
     const wrong = tool === 'views' ? ['sim', 'time'].find((k) => a.settings[k] !== undefined) : a.settings.view !== undefined ? 'view' : undefined;
@@ -79,7 +102,7 @@ function setupOf(x: Ctl, s: State, a: Args, tool: Tool): State {
     for (const k of ['sim', 'time', 'view']) { const why = a.settings[k] === undefined ? '' : check(SETTINGS[k], a.settings[k], `settings.${k}`); if (why) throw new Error(why); }
     let acts: Action[];
     try {
-      acts = h.settingsActions(a.settings, s, null);
+      acts = settingsActions(a.settings, s, null);
     } catch (e) {
       throw new Error(`settings.${(e as Error).message}`); // 'time.date: ...'
     }
@@ -106,6 +129,8 @@ const settled = (runs: readonly Promise<void>[], end: number) => {
 };
 /** The render after a run's end: its status reads done or failed (the runner's last setState commits). */
 const after = async (busy: () => boolean, end: number) => { for (let k = 0; k < 40 && busy() && Date.now() < end; k++) await new Promise((r) => setTimeout(r, 25)); };
+/** A wait argument (seconds, default 40) as the budget's end it gives, within the call's own. */
+const until = (wait: number | undefined, end: number) => Math.min(end, Date.now() + 1000 * (wait ?? 40));
 
 /** View `v` combined for model `m` against every open model's input results (the normalise bounds span them all), as
  *  the Combined tab combines the view it shows. */
@@ -117,17 +142,57 @@ function combinedFor(x: Ctl, v: CombinedView) {
   }));
   const pathOf = models.map((m) => { const p = new Map(m.objects.map((o) => [o.id, o.path])); return (id: string) => p.get(id); });
   const bounds = v.inputs.map((i, k) => boundsOf(i, inputRange(i, runsOf.map((r) => r[k]), pathOf)));
-  return models.map((m, mi) => ({ m, missing: missingOf(m.slot, inputs), ...combine(v, runsOf[mi], bounds, pathOf[mi]) }));
+  return models.map((m, mi) => ({ m, model: letter(m.slot), missing: missingOf(m.slot, inputs), ...combine(v, runsOf[mi], bounds, pathOf[mi]) }));
 }
 
-let h: Helpers; // tools.ts's, given once as it builds HANDLERS
-/** The handlers, with tools.ts's helpers. */
-export function setHandlers(helpers: Helpers): Record<string, Handler> {
-  h = helpers;
-  return HANDLERS;
+// ---------------------------------------------------------------------------------------------- results' other sources
+/** results with set: saved set `set`'s results kept this session, per open model (default those it has one for), quoted
+ *  as results quotes an analysis' last runs; its column and problem range the set's own unless given. */
+export async function setResults(a: Args, c: () => Ctl) {
+  return exclusive(() => {
+    const x = c(), set = setOf(x, a.set, 'set');
+    if (a.analysis !== undefined && a.analysis !== set.tool) throw new Error(`analysis: set ${set.id} is a ${set.tool} set; leave analysis out`);
+    const st = x.runs.statusOf(set), pick = picked(st, a.models, 'models', () => st.filter((s) => s.result));
+    if (!pick.some((s) => s.result)) throw new Error(`set: ${set.name} has no result kept this session for ${a.models ? (a.models as string[]).join(', ') : 'an open model'}; run_set it first (${st.map((s) => `${s.model} ${STATE[s.state]}`).join(', ') || 'no model open'})`);
+    const column: string = a.column ?? set.column, lacks = pick.find((s) => s.result && !s.result.columns.includes(column));
+    if (lacks) throw new Error(`column: model ${lacks.model}'s kept result has no ${column} (${lacks.result!.columns.join(', ')})`);
+    const { paths, by, th, limit } = rowArgs(a), look = set.looks?.quantities[splitColumn(column)[0]] ?? set.look ?? {}, lo = look.lo ?? null, hi = look.hi ?? null;
+    const each = pick.map((s) => {
+      const m = x.state.models.find((k) => k.slot === s.slot)!, r = s.result, run = r && (set.tool === 'views' ? viewProvenance(r, m.objects) : provenance(r, m.objects));
+      return { head: { model: s.model, name: m.name, ...(r ? { run } : { status: STATE[s.state], ...levelNote(s) }) }, sums: r ? summaries(x, { objects: m.objects, result: r }, column, by, paths, lo, hi, th) : null };
+    });
+    return ok({ set: { id: set.id, name: set.name, analysis: set.tool }, ...columnFacts(column), problemRange: { lo, hi }, by, models: compared(each, th, lo !== null || hi !== null, limit) });
+  });
 }
 
-const HANDLERS: Record<string, Handler> = {
+/** results with analysis 'combined': combined view `id` per open model, quoted as results quotes a column; first, unless
+ *  wait is 0, its input sets missing a result run (up to wait seconds), as the Combined tab runs them. */
+export async function combinedResults(a: Args, c: () => Ctl, end: number) {
+  if (a.id === undefined) throw new Error("id: analysis 'combined' quotes a combined view; give its id (app_state combined)");
+  if (a.column !== undefined) throw new Error("column: a combined view has one column of its own; leave column out");
+  viewOf(c(), a.id);
+  let running = false;
+  if (a.wait !== 0) {
+    const jobs = await exclusive(() => runMissing(c(), viewOf(c(), a.id))), by = until(a.wait, end);
+    if (jobs.length && !(running = !(await settled(jobs, by)))) await after(() => savedSets(c()).some((s) => c().runs.statusOf(s).some(live)), by);
+  }
+  return exclusive(() => {
+    const x = c(), v = viewOf(x, a.id), column = columnOf(v), all = combinedFor(x, v).filter(({ m }) => m.name), pick = picked(all, a.models, 'models', () => all);
+    const { paths, by, th, limit } = rowArgs(a), range = x.state.settings.viz.ranges[column], lo = range ? range.lo : v.look?.lo ?? null, hi = range ? range.hi : v.look?.hi ?? null;
+    const each = pick.map(({ m, model, missing, info, result }) => ({
+      head: { model, name: m.name, ...(missing.length ? { missing } : {}), ...(info.mismatches.length ? { mismatches: info.mismatches } : {}), ...(result ? { inputs: `${info.used} of ${info.of}` } : {}) },
+      sums: result ? summaries(x, { objects: m.objects, result }, column, by, paths, lo, hi, th) : null,
+    }));
+    return ok({
+      analysis: 'combined', id: v.id, name: v.name, column, unit: v.unit, meaning: viewHelp(v, savedSets(x)), problemRange: { lo, hi }, by, models: compared(each, th, lo !== null || hi !== null, limit),
+      ...(running ? { status: 'running', note: 'input sets are still running in the background; call results again to quote them' } : {}),
+    });
+  });
+}
+
+let previewed: CombinedView | null = null; // save_combined's preview: the agent takes it back on a save, unless the editor replaced it
+
+export const SET_HANDLERS: Record<string, Handler> = {
   async save_set(a, c) {
     return exclusive(async () => {
       const x = c(), name: string = a.name.trim(), was = a.id === undefined ? undefined : setOf(x, a.id);
@@ -144,7 +209,7 @@ const HANDLERS: Record<string, Handler> = {
       const set = captureSet(s, tool, name, { shown: a.column ?? x.analysis(tool).shown ?? was?.column, was, subdiv: x.ui.subdiv });
       const saved: AnalysisSet = { ...set, ...(a.colourBy ? { colourBy: a.colourBy } : {}) };
       if (!(await x.sets.put(saved))) throw new Error(`id: not saved (${c().sets.error ?? 'the server refused it'})`);
-      return h.ok({ saved: { id: saved.id, name, analysis: tool, column: saved.column, colourBy: saved.colourBy, models: saved.models.map((m) => ({ model: m.model, file: m.file, roles: m.roles.length })), updated: saved.updated }, status: statusLines(c(), saved) });
+      return ok({ saved: { id: saved.id, name, analysis: tool, column: saved.column, colourBy: saved.colourBy, models: saved.models.map((m) => ({ model: m.model, file: m.file, roles: m.roles.length })), updated: saved.updated }, status: statusLines(c(), saved) });
     });
   },
 
@@ -152,7 +217,7 @@ const HANDLERS: Record<string, Handler> = {
     return exclusive(() => {
       const x = c(), set = setOf(x, a.id), lines = applyReport(x.state.models, set), waiting = notOpen(x.state.models, set);
       flushSync(() => x.openSet(set));
-      return h.ok({
+      return ok({
         opened: { id: set.id, name: set.name, analysis: set.tool, column: set.column }, tab: c().ui.tab,
         models: lines.map((l) => ({ model: l.model, ...(l.match ? { entry: l.match.entry.model, how: l.match.how, matched: l.match.matched, of: l.match.total } : { entry: null }), text: l.text })),
         ...(waiting.length ? { notOpen: waiting } : {}),
@@ -162,7 +227,7 @@ const HANDLERS: Record<string, Handler> = {
 
   async copy_set(a, c) {
     return exclusive(async () => {
-      const x = c(), set = setOf(x, a.id), to = h.loadedOf(x, a.to, 'to'), L = letter(to.slot), entries = set.models.map((e) => `${e.model} ${e.file}`).join(', ');
+      const x = c(), set = setOf(x, a.id), to = loadedOf(x, a.to, 'to'), L = letter(to.slot), entries = set.models.map((e) => `${e.model} ${e.file}`).join(', ');
       const from = a.from === undefined ? (set.models.length === 1 ? set.models[0] : undefined) : set.models.find((e) => e.model === a.from);
       if (!from) throw new Error(a.from !== undefined ? `from: set ${set.name} has no entry ${a.from} (${entries || 'none'})` : set.models.length ? `from: set ${set.name} has several entries (${entries}); name the one to copy` : `id: set ${set.name} has no entry to copy`);
       const name = ((a.name as string | undefined) ?? copyName(set, to.name)).trim();
@@ -171,7 +236,7 @@ const HANDLERS: Record<string, Handler> = {
       if (!(await x.sets.put(copy))) throw new Error(`id: not saved (${c().sets.error ?? 'the server refused it'})`);
       const text = copyText(L, counts);
       flushSync(() => c().openSet(copy, { model: L, text }));
-      return h.ok({
+      return ok({
         saved: { id: copy.id, name: copy.name, analysis: copy.tool, from: from.model, to: L, file: to.name }, tab: c().ui.tab, text,
         roles: { matched: counts.roles, of: counts.rolesOf }, meshesWithoutRole: counts.bare, materialEdits: { matched: counts.edits, of: counts.editsOf },
       });
@@ -180,11 +245,9 @@ const HANDLERS: Record<string, Handler> = {
 
   async rename_set(a, c) {
     return exclusive(async () => {
-      const x = c();
-      if (x.combined.views.some((v) => v.id === a.id)) throw new Error(`id: ${a.id} is a combined view; save_combined with its id and a new name renames it`);
-      const set = setOf(x, a.id), renamed = renameSet(set, a.name);
-      if (!(await x.sets.put(renamed))) throw new Error(`id: not renamed (${c().sets.error ?? 'the server refused it'})`);
-      return h.ok({ renamed: { id: set.id, from: set.name, name: renamed.name } });
+      const item = savedOf(c(), a.id), renamed = renameSet(item, a.name);
+      if (!(await c().sets.put(renamed))) throw new Error(`id: not renamed (${c().sets.error ?? 'the server refused it'})`);
+      return ok({ renamed: { id: item.id, kind: isSet(item) ? 'set' : 'combined', from: item.name, name: renamed.name } });
     });
   },
 
@@ -202,71 +265,43 @@ const HANDLERS: Record<string, Handler> = {
       if (slots.length) flushSync(() => { jobs.push(x.runs.run(set, slots)); });
       return { set, jobs };
     });
-    const ended = a.wait === false || !jobs.length ? !jobs.length : await settled(jobs, end);
-    if (ended) await after(() => c().runs.statusOf(set).some(live), end);
+    const by = until(a.wait, end), ended = a.wait === 0 || !jobs.length ? !jobs.length : await settled(jobs, by);
+    if (ended) await after(() => c().runs.statusOf(set).some(live), by);
     const models = statusLines(c(), set), running = models.some((m) => m.status === 'queued' || m.status === 'running');
-    return h.ok({
+    return ok({
       set: { id: set.id, name: set.name, analysis: set.tool }, models,
-      ...(running ? { status: 'running', note: 'it goes on in the background; call run_set again with wait (it runs nothing twice) or app_state to see it end' } : {}),
+      ...(running ? { status: 'running', note: 'it goes on in the background; call run_set again (it runs nothing twice) or app_state to see it end' } : {}),
     });
   },
 
   async delete_set(a, c) {
     return exclusive(async () => {
-      const x = c(), set = setOf(x, a.id), users = x.combined.views.filter((v) => v.inputs.some((i) => i.set === set.id)).map((v) => v.name);
-      if (!(await x.sets.remove(set.id))) throw new Error(`id: not deleted (${c().sets.error ?? 'the server refused it'})`);
-      return h.ok({ deleted: set.id, sets: savedSets(c()).map((s) => s.id), ...(users.length ? { note: `combined views that took it as an input now miss it: ${users.join(', ')}` } : {}) });
+      const x = c(), item = savedOf(x, a.id), users = isSet(item) ? x.combined.views.filter((v) => v.inputs.some((i) => i.set === item.id)).map((v) => v.name) : [];
+      if (!(await x.sets.remove(item.id))) throw new Error(`id: not deleted (${c().sets.error ?? 'the server refused it'})`);
+      return ok({
+        deleted: item.id, kind: isSet(item) ? 'set' : 'combined', sets: savedSets(c()).map((s) => s.id), combined: c().combined.views.map((v) => v.id),
+        ...(users.length ? { note: `combined views that took it as an input now miss it: ${users.join(', ')}` } : {}),
+      });
     });
   },
 
   async save_combined(a, c) {
     return exclusive(async () => {
-      const x = c(), sets = savedSets(x);
+      const x = c(), sets = savedSets(x), { preview, ...view } = a;
       if (a.id !== undefined && sets.some((s) => s.id === a.id)) throw new Error(`id: ${a.id} is a set; give a combined view's id, or leave id out to save a new view`);
-      const was = a.id === undefined ? undefined : x.combined.views.find((v) => v.id === a.id), v = checkView(a, sets, was);
+      const was = a.id === undefined ? undefined : x.combined.views.find((v) => v.id === a.id), v = checkView(preview ? { ...view, id: a.id ?? 'draft' } : view, sets, was);
       if (Array.isArray(v)) throw new Error(`${v.length} problem${v.length > 1 ? 's' : ''}: ${v.join('; ')}`);
+      if (preview) { // shown on the Combined tab, as the editor shows its draft: nothing stored
+        flushSync(() => { if (x.ui.tab !== 'combined') x.setUi((u) => ({ ...u, tab: 'combined' })); x.previewCombined(v); });
+        previewed = v;
+        const missing = x.state.models.filter((m) => m.name).flatMap((m) => missingOf(m.slot, inputStatus(v, sets, c().runs)));
+        return ok({ preview: { id: v.id, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.length }, tab: 'combined', meaning: viewHelp(v, sets), ...(missing.length ? { missing } : {}), note: 'not saved: save_combined without preview stores it; leaving the Combined tab drops it' });
+      }
       if (!(await x.sets.put(v))) throw new Error(`id: not saved (${c().sets.error ?? 'the server refused it'})`);
+      if (previewed && c().combined.view === previewed) flushSync(() => c().previewCombined(null)); // the saved view shows instead
+      previewed = null;
       const missing = combinedOf(c()).find((k) => k.id === v.id)?.missing;
-      return h.ok({ saved: { id: v.id, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.length, column: columnOf(v), updated: v.updated }, meaning: viewHelp(v, sets), ...(missing ? { missing } : {}) });
-    });
-  },
-
-  async delete_combined(a, c) {
-    return exclusive(async () => {
-      const x = c(), v = viewOf(x, a.id);
-      if (!(await x.sets.remove(v.id))) throw new Error(`id: not deleted (${c().sets.error ?? 'the server refused it'})`);
-      return h.ok({ deleted: v.id, combined: c().combined.views.map((k) => k.id) });
-    });
-  },
-
-  async combined_results(a, c, end) {
-    viewOf(c(), a.id);
-    let running = false;
-    if (a.wait !== false) { // the input sets that miss a result run first, as the Combined tab runs them
-      const jobs = await exclusive(() => runMissing(c(), viewOf(c(), a.id)));
-      if (jobs.length && !(running = !(await settled(jobs, end)))) await after(() => savedSets(c()).some((s) => c().runs.statusOf(s).some(live)), end);
-    }
-    return exclusive(() => {
-      const x = c(), v = viewOf(x, a.id), column = columnOf(v), all = combinedFor(x, v).filter(({ m }) => m.name);
-      const pick = (a.models as string[] | undefined)?.map((l, i) => { const e = all.find(({ m }) => letter(m.slot) === l); if (!e) throw new Error(`models[${i}]: no model with a file in slot ${l} (${all.map(({ m }) => letter(m.slot)).join(', ') || 'none open'})`); return e; }) ?? all;
-      const paths: string[] | undefined = a.paths, by: 'mesh' | 'parts' | 'facing' = a.by ?? (paths ? 'parts' : 'mesh'), th: number[] = a.thresholds ?? [], limit: number = a.limit ?? 50;
-      if (by === 'parts' && !paths) throw new Error("paths: by 'parts' takes the prim paths (model_tree)");
-      const range = x.state.settings.viz.ranges[column], lo = range ? range.lo : v.look?.lo ?? null, hi = range ? range.hi : v.look?.hi ?? null, ranged = lo !== null || hi !== null;
-      const each = pick.map((e) => ({ ...e, sums: e.result ? h.summaries(x, { objects: e.m.objects, result: e.result }, column, by, paths, lo, hi, th) : null }));
-      const ref = each.find((e) => e.sums)?.sums, refRows = new Map(ref?.rows.map((row) => [row.key, row.u]) ?? []);
-      return h.ok({
-        id: v.id, name: v.name, column, unit: v.unit, meaning: viewHelp(v, savedSets(x)), problemRange: { below: lo, above: hi }, by,
-        models: each.map(({ m, missing, info, sums }) => ({
-          model: letter(m.slot), name: m.name, ...(missing.length ? { missing } : {}), ...(info.mismatches.length ? { mismatches: info.mismatches } : {}),
-          ...(sums ? {
-            inputs: `${info.used} of ${info.of}`,
-            whole: { ...h.quoted(sums.whole, th, ranged), ...(sums !== ref ? { diff: h.difference(sums.whole, ref!.whole, th, ranged) } : {}) },
-            rows: sums.rows.slice(0, limit).map((row) => { const u = sums !== ref ? refRows.get(row.key) : undefined; return { ...row.head, ...h.quoted(row.u, th, ranged), ...(u ? { diff: h.difference(row.u, u, th, ranged) } : {}) }; }),
-            ...(sums.rows.length > limit ? { moreRows: sums.rows.length - limit } : {}),
-          } : { result: null }),
-        })),
-        ...(running ? { status: 'running', note: 'input sets are still running in the background; call combined_results again to quote them' } : {}),
-      });
+      return ok({ saved: { id: v.id, name: v.name, unit: v.unit, op: v.op, inputs: v.inputs.length, column: columnOf(v), updated: v.updated }, meaning: viewHelp(v, sets), ...(missing ? { missing } : {}) });
     });
   },
 };

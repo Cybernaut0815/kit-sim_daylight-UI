@@ -1,7 +1,8 @@
 # daylight_server
 
-The `daylight` CLI over HTTP for several users at once. The core (`../kit-sim_daylight`, a git submodule) is linked
-in-process; OptiX needs the RTX box, so the server runs there and browsers and scripts on the LAN talk to it.
+The core's two tools over HTTP for several users at once: `daylight` (sun and sky) and `views` (what each element
+sees), chosen per job (`tool`). The core (`../kit-sim_daylight`, a git submodule) is linked in-process; OptiX needs the
+RTX box, so the server runs there and browsers and scripts on the LAN talk to it.
 
 ```
 cmake --preset vs2022 && cmake --build --preset release && ctest --preset release   # build/RelWithDebInfo/daylight_server.exe
@@ -21,13 +22,24 @@ in front of the server (a TLS reverse proxy) or a port forward to their own loca
 | `/redoc` | ReDoc: the same as a reference page |
 | `/openapi.json` | OpenAPI 3.1, the machine-readable source; agents should read this |
 | `/llms.txt` | a short plain-text guide for agents (workflow, units, limits) pointing at `/openapi.json` |
+| `/usage/daylight`, `/usage/views` | each tool's CLI usage text: every flag a job's `args` take, with defaults |
+
+The routes by tag, as operation ids:
+
+- **meshes:** `uploadMesh`, `meshExists`, `meshesMissing`
+- **jobs:** `submitJob`, `listMyJobs`, `getJob`, `cancelJob`, `getJobValues`; **run:** `runSync`
+- **weather:** `proxyDownload`
+- **sets:** `listSets`, `saveSet`, `deleteSet`
+- **meta:** `getHealth`, `getUsage`, `getOpenApi`, `getLlmsTxt`, `getDocs`, `getRedoc`
+- **agents** (`--mcp`): `mcpMessage`, `mcpGet`, `bridgeNext`, `bridgeResult`, `readLocalPath`, `listReports`,
+  `saveReport`, `deleteReport`, `printReport`, `getReportPdf`, `getSession`, `putSession`, `deleteSession`
 
 The description lives in [openapi.json](openapi.json), the guide in [llms.txt](llms.txt) and the MCP tools in
 [mcp.json](mcp.json); all three are embedded into the exe at build time. `ctest` runs [check_openapi.mjs](check_openapi.mjs),
 which fails when a route in `src/server.cpp` is missing from the description (or the reverse), an operation lacks an
-id, summary, description or documented responses, or a tool in `mcp.json` is not named in the `mcpMessage`
-description. `npx @redocly/cli lint openapi.json` (config [redocly.yaml](redocly.yaml)) validates it against the spec.
-Change an endpoint: edit `server.cpp` and `openapi.json` together.
+id, summary, description or documented responses, `llms.txt` does not name an operation id, or a tool in `mcp.json`
+is not named in the `mcpMessage` description. `npx @redocly/cli lint openapi.json` (config [redocly.yaml](redocly.yaml))
+validates it against the spec. Change an endpoint: edit `server.cpp` and `openapi.json` together.
 
 ## Several users
 
@@ -50,21 +62,15 @@ Change an endpoint: edit `server.cpp` and `openapi.json` together.
   the client uploads those and resubmits (`runRemote` in `bindings/ts` does this).
 - Identical request (same mesh ids, args, weather): answered from the result cache at once (`cache.response: hit`).
 - Scenes: the acceleration structures of the last `--gpu-scenes` (default 4) scenes stay on the GPU, so users who
-  alternate between models do not rebuild each other's (`cache.scene: reused`). A scene is the job's `sensors` ids and
-  then its `context` ids, in order, its `--no-self-occlude`, its `--no-occlude` set (the receiving meshes that cast no
-  shade and reflect nothing; without `--no-self-occlude` only, under which none does), and the layout of the slots that
-  cast shade: the set of those that transmit, else (with `--bounces` above 0 and a quantity other than direct /
-  sunhours) whether their RHO or glass differ (with `--fresnel off` none is glass), which gives the scene a hit record
-  per slot (~20 % more acceleration-structure (GAS) memory). New `--optics` values or `--fresnel` reuse it while that
-  layout stays; a slot that starts or stops transmitting, or `--bounces` switched on or off (with such a quantity) for
-  a model whose slots differ (none transmitting), is another scene (`built`, then kept like the others). The report is
-  the core's own (`Result::sceneReused`).
+  alternate between models do not rebuild each other's (`cache.scene: reused`; what makes a scene: `CacheReport` in
+  `/docs`). New `--optics` values reuse a scene while the layout of its transmitting and reflecting slots stays. The
+  report is the core's own (`Result::sceneReused`).
 - Weather: every `/proxy` download stays on disk under `--cache` (delete the file to refresh); parsed EPWs stay in RAM.
 
 ## Simulation flags
 
-A job's `args` go to the core's CLI parser unchanged (the table in `/docs`, `submitJob`), so the server stays agnostic
-of materials: `.dmesh` uploads may carry a uint16 optics slot per face (header flags bit 0), `--optics` gives meshes and
+A job's `args` go to the core's CLI parser unchanged (`daylight` or, with `tool=views`, `views`; every flag in
+`/usage/{tool}`, the same text as the CLI's `-h`), so the server stays agnostic of materials: `.dmesh` uploads may carry a uint16 optics slot per face (header flags bit 0), `--optics` gives meshes and
 slots their numbers by mesh name (`PUT /mesh/{id}?name=`, else the id), `--transmission on` and `--fresnel off` switch
 the glass and porous paths, and `--bounces N` (0..20, default 0) adds the light the model reflects (up to N diffuse
 reflections by each slot's RHO) to diffuse, radiation, irradiance and illuminance, never to direct or sun hours.
@@ -93,7 +99,8 @@ data licence), and PVGIS (European Commission JRC; 30 requests per second per IP
 ## Analysis sets
 
 The web app saves its analysis sets (one analysis' roles by prim path per model, its settings and the shown result) and
-its combined views (weighted combinations of sets' results) here, one JSON object each in `<cache>\sets\<id>.json`:
+its combined views (weighted combinations of sets' results) here, one JSON object each in `<cache>\sets\<id>.json`
+(their fields: `AnalysisSet` and `CombinedView` in `/docs`):
 `GET /sets` lists them, `PUT /sets/{id}` stores one (at most 256 KB, one JSON object, written to a temporary file and
 renamed; at most 500 sets, a new one past that is `409`), `DELETE /sets/{id}` removes one. These routes need no
 `--mcp` and answer every client: every browser that reaches the server sees and edits the same sets, with no owner and
@@ -101,10 +108,12 @@ no version check (the last write wins), and the agent reaches them through the a
 
 ## Agents (MCP)
 
-`--mcp` lets agents on this machine work with the web app over MCP: Claude Code or Claude Desktop opens models, sets
-roles, settings and cameras, runs, reads results, takes screenshots of any shape, sections the views with clipping
-planes and boxes (view only: runs use the whole model), edits the Results charts, writes PDF reports in the kit-ui
-`kit-report` layout (one option, or 2 to 4 compared) and talks through what the results mean. The app has no chat: the
+`--mcp` lets agents on this machine work with the web app over MCP: Claude Code or Claude Desktop opens models (A to
+D, USD variants included), sets roles, settings and cameras, runs the Daylight and the View analysis, reads results,
+saves, opens and runs analysis sets and weighs them into combined views (the Combined tab), takes screenshots of any
+shape, sections the views with clipping planes and boxes (view only: runs use the whole model), edits the Results
+charts, writes PDF reports in the kit-ui `kit-report` layout (one option, or 2 to 4 compared) and talks through what
+the results mean. The app has no chat: the
 agent drives the open app tab and everything it changes shows there. `POST /mcp` answers the handshake and the tool
 list from [mcp.json](mcp.json) and relays each tool call to the tab (`web/src/mcp`); `/docs` documents the routes (tag
 `agents`) and lists the tools under `mcpMessage`.

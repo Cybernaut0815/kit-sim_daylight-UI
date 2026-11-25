@@ -2,9 +2,9 @@
   "openapi": "3.1.0",
   "info": {
     "title": "daylight_server",
-    "version": "1.1.0",
-    "summary": "GPU annual daylight and solar simulation on meshes, over HTTP.",
-    "description": "Runs the [kit-sim_core](https://github.com/Cybernaut0815/kit-sim_core) daylight simulation (OptiX ray tracing, Radiance-derived Perez sky, validated against Ladybug Tools, Radiance and pvlib) for several users at once. One GPU worker runs queued jobs one after another; uploads, validation, cached answers and status polls never wait for it.\n\n## Workflow\n\n1. **Upload each mesh once** as a `.dmesh` image: `PUT /mesh/{id}` with an id you choose: a UUID, or a content id as the daylight-mesh client makes it (unnamed: the SHA-256 hex of the bytes, with `?name=` the id; named: sha256(hex + \"\\0name\\0\" + name)), so equal meshes and reloads upload nothing (`POST /meshes/missing` says which to send). Meshes stay cached in server RAM, so later runs only name them.\n2. **Submit a job**: `POST /jobs` (multipart) with the receiving meshes in `sensors`, the shading-only meshes in `context`, CLI flags in `args`, and weather as an `epw` file, an `epw_url`, or `--clear-sky`. A view analysis instead: `tool=views` with the `views` CLI flags in `args` and no weather (`RunRequest`). A `404` with `{\"missing\": [...]}` lists ids the server does not have: upload those and submit again.\n3. **Wait**: `GET /jobs/{id}?wait=25` returns as soon as the state or the queue position changes (long poll). Repeat while `state` is `queued` or `running`.\n4. **Read the result** when `state` is `done`: `values_b64` is base64 of float64 little-endian values, row-major `[rows x columns.length]`, rows = sum of `meshes[].count`. Rows of mesh *k* are `first .. first + count - 1`, one per face (or per vertex with `--on vertices`) in the uploaded order.\n5. **Cancel** with `DELETE /jobs/{id}` when the result is no longer needed; the GPU moves on to the next job.\n\n`POST /run` does steps 2 to 4 in one blocking call and answers the result object directly.\n\n## Example\n\n```sh\ncurl -T box.dmesh \"http://localhost:8080/mesh/3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11?name=roof\"\ncurl -F sensors=3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11 -F args=--lat -F args=52.52 -F args=--lon -F args=13.41 -F args=--tz -F args=1 \\\n     -F args=--quantity -F args=radiation,sunhours -F args=--clear-sky http://localhost:8080/jobs\ncurl \"http://localhost:8080/jobs/<id from the answer>?wait=25\"\n```\n\nDecoding in Python: `numpy.frombuffer(base64.b64decode(r['values_b64']), '<f8').reshape(-1, len(r['columns']))`. In JavaScript: `new Float64Array(Uint8Array.from(atob(r.values_b64), c => c.charCodeAt(0)).buffer)`.\n\n## Units and conventions\n\nCoordinates in `.dmesh` are metres, Z up, right-handed winding (the face normal points to the front side). `radiation`, `direct`, `diffuse`: kWh/m² over the evaluated period; `irradiance`: W/m² mean; `illuminance`: lux mean; `sunhours`: hours (equivalent full-sun hours with `--transmission on`). Columns are named `<quantity>_<side>` (`radiation_front`, `sunhours_back`).\n\nSurfaces are opaque and black by default (the only reflection is the `--ground` plane beyond the model). The server takes numbers, no materials: a `.dmesh` may give each face an optics slot, `--optics` gives a mesh or a slot its reflectance and transmittance, `--transmission on` lets light through glass and porous slots, `--fresnel` picks angle-dependent or flat glass, and `--bounces N` adds the light the model reflects, up to N diffuse reflections traced with `--bounce-samples` paths per sensor (see `args`).\n\n## Errors and limits\n\nErrors are `text/plain`, first line `error: <cause>`; usage errors are `400` and include the CLI usage text. `--optics` rows are checked twice: grammar and ranges at submission (`400`, as are `--bounces` and `--bounce-samples` out of range and the switches ladybug mode refuses), names and slots against the run's meshes when the job runs (the job ends in `error`, status 500). `429`: this client already has `--client-jobs` (default 2) jobs queued or running; identify a client with the `X-Client-Id` header (else the network address). `503`: the queue holds `--max-queue` (default 32) jobs. Both carry `Retry-After`. Finished jobs are kept 15 minutes. There is no authentication; job ids are random UUIDs that only their submitter knows.\n\n## Agents (MCP)\n\nWith `--mcp`, agents on this machine (Claude Code, Claude Desktop) work with the web app over MCP: they open models, set roles and settings, run, read results, set cameras, take screenshots, edit charts and write PDF reports, and talk about what the results mean. `POST /mcp` (`mcpMessage`, tag `agents`) is their endpoint; its description covers the protocol, how to connect and the tools. The other `agents` routes serve the app itself, and all of them answer only requests from this machine.",
+    "version": "2.0.0",
+    "summary": "GPU daylight, solar and view analysis on meshes, over HTTP.",
+    "description": "Runs both tools of [kit-sim_core](https://github.com/Cybernaut0815/kit-sim_core) on uploaded meshes for several users at once: `daylight` (radiation, illuminance and sun hours over a year, a period or an instant; OptiX ray tracing, Perez sky, validated against Ladybug Tools, Radiance and pvlib) and `views` (what each element sees: sky, ground, obstruction and target shares, distances, isovists). One GPU worker runs queued jobs in turn; uploads, validation, cached answers and polls never wait for it.\n\n## Workflow\n\n1. **Upload each mesh once**: `PUT /mesh/{id}` with a `.dmesh` image under an id you choose (content ids make equal meshes upload nothing; `POST /meshes/missing` says which to send).\n2. **Submit**: `POST /jobs` (multipart, `RunRequest`): receiving meshes in `sensors`, shading-only ones in `context`, the tool's CLI flags in `args` (`GET /usage/{tool}` lists them), weather as `epw`, `epw_url` or `--clear-sky` (views takes none). A `404 {missing}` lists the ids to upload before submitting again.\n3. **Wait**: `GET /jobs/{id}?wait=25` (long poll) while `state` is `queued` or `running`.\n4. **Read** when `done`: `getJobValues` streams the values (float32, column-major), `inline=1` adds them as `values_b64`. Rows follow `meshes[]` (`first`, `count`): one per face, or per point with `--on vertices`.\n5. **Cancel** with `DELETE /jobs/{id}` when the result is no longer needed.\n\n`POST /run` does steps 2 to 4 in one blocking call.\n\n## Example\n\n```sh\ncurl -T box.dmesh \"http://localhost:8080/mesh/3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11?name=roof\"\ncurl -F sensors=3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11 -F args=--lat -F args=52.52 -F args=--lon -F args=13.41 -F args=--tz -F args=1 \\\n     -F args=--quantity -F args=radiation,sunhours -F args=--clear-sky http://localhost:8080/jobs\ncurl \"http://localhost:8080/jobs/<id from the answer>?wait=25\"\n```\n\nDecoding `values_b64` (float64 little-endian, row-major): Python `numpy.frombuffer(base64.b64decode(r['values_b64']), '<f8').reshape(-1, len(r['columns']))`, JavaScript `new Float64Array(Uint8Array.from(atob(r.values_b64), c => c.charCodeAt(0)).buffer)`.\n\n## Units\n\n`.dmesh` coordinates are metres, Z up, right-handed winding (the normal points to the front side). Daylight: `radiation`, `direct`, `diffuse` kWh/m² over the period, `irradiance` W/m² mean, `illuminance` lux mean, `sunhours` hours. Views: shares 0..1, distances m, `volume` m³. Columns are `<quantity>_<side>` (`radiation_front`). Surfaces are opaque and black unless `--optics`, `--transmission on` and `--bounces` say otherwise.\n\n## Errors and limits\n\nErrors are `text/plain` (`ErrorText`); a usage error is a `400` with the CLI usage appended. Names in `--optics`, `--no-occlude` and `--target` are resolved when the job runs (an `error` job, status 500). `429`: this client has `--client-jobs` (default 2) jobs queued or running (the `X-Client-Id` header names a client, else its network address); `503`: the queue holds `--max-queue` (default 32). Both carry `Retry-After`. Finished jobs are kept 15 minutes. No authentication: job ids are random UUIDs only their submitter knows.\n\n## Web app and agents\n\n`/sets` stores the web app's analysis sets and combined views for every client. With `--mcp`, agents on this machine drive the app over MCP (`mcpMessage`, tag `agents`); the other `agents` routes serve the app.",
     "license": { "name": "Apache-2.0 AND LicenseRef-Commons-Clause-1.0", "url": "https://github.com/Cybernaut0815/kit-sim_core/blob/main/LICENSE" }
   },
   "servers": [{ "url": "/", "description": "this server" }],
@@ -15,8 +15,8 @@
     { "name": "run", "description": "The one-call blocking variant." },
     { "name": "weather", "description": "Weather files through the server's download cache." },
     { "name": "sets", "description": "The web app's saved analysis sets (roles, settings, result choices) and combined views, shared by every client of this server: no `--mcp` needed, no local-only gate." },
-    { "name": "agents", "description": "MCP for agents on this machine (`--mcp`): `mcpMessage` is the agents' endpoint; the other routes serve the web app (its side of the tool-call relay, model files opened by path, reports and their PDFs, the hidden instance's session). Without `--mcp` every route here answers `404`; a request that does not come from this machine gets `403`." },
-    { "name": "meta", "description": "Health and this documentation." }
+    { "name": "agents", "description": "MCP for agents on this machine (`--mcp`): `mcpMessage` is their endpoint; the other routes serve the web app (the tool-call relay, model files by path, reports and their PDFs, the hidden instance's session). Without `--mcp` each answers `404`; a request from another machine gets `403`." },
+    { "name": "meta", "description": "Health, the tools' flags and this documentation." }
   ],
   "paths": {
     "/mesh/{id}": {
@@ -25,9 +25,9 @@
         "tags": ["meshes"],
         "operationId": "uploadMesh",
         "summary": "Upload one mesh",
-        "description": "Stores one mesh in the server's RAM cache under the id you chose (least recently used meshes are evicted when the cache is full; a later job naming an evicted id gets a `404 {missing}` and you upload it again). Uploading an existing id replaces it. The body is one `.dmesh` image, little-endian, no padding:\n\n| offset | type | content |\n|---|---|---|\n| 0 | char[4] | `DLM1` |\n| 4 | uint32 | flags: bit 0 = a slot block follows the indices; other bits must be 0 |\n| 8 | uint64 | n_points |\n| 16 | uint64 | n_faces |\n| 24 | uint64 | n_indices |\n| 32 | float64[3 n_points] | xyz, metres, Z up |\n| | int32[n_faces] | vertices per face (>= 3), right-handed winding |\n| | int32[n_indices] | 0-based point indices, sum(counts) = n_indices |\n| | uint16[n_faces] | only with flags bit 0: the optics slot of each face, which `--optics NAME/SLOT=...` addresses (without the block every face is slot 0) |\n\nAnother flag bit or a short slot block is a `400`. The TypeScript binding writes it with `toDmesh(mesh)` (the slot block when `ObjMesh.slots` is set), the Python binding with `daylight.to_dmesh(...)`.",
+        "description": "Stores one mesh in the server's RAM cache under your id, replacing one stored before (the least recently used are evicted when the cache is full: a job naming an evicted id gets `404 {missing}`). The body is one `.dmesh` image, little-endian, no padding:\n\n| offset | type | content |\n|---|---|---|\n| 0 | char[4] | `DLM1` |\n| 4 | uint32 | flags: bit 0 = a slot block follows the indices; other bits 0 |\n| 8 | uint64 | n_points |\n| 16 | uint64 | n_faces |\n| 24 | uint64 | n_indices |\n| 32 | float64[3 n_points] | xyz, metres, Z up |\n| | int32[n_faces] | vertices per face (>= 3), right-handed winding |\n| | int32[n_indices] | 0-based point indices, sum(counts) = n_indices |\n| | uint16[n_faces] | flags bit 0 only: each face's optics slot (`--optics NAME/SLOT=...`; without the block all are slot 0) |\n\nAnother flag bit or a short slot block is a `400`. The bindings write it: `toDmesh(mesh)` (TypeScript), `daylight.to_dmesh(...)` (Python).",
         "parameters": [
-          { "name": "name", "in": "query", "required": false, "description": "Display name, echoed back in result `meshes[].name` (sanitised to `[A-Za-z0-9._-]`, made unique per run: a second `roof` in one run, ignoring case, is `roof_2`). Defaults to the id. It is the NAME that `--optics` rows and `--no-occlude` address.", "schema": { "type": "string" }, "example": "roof" }
+          { "name": "name", "in": "query", "required": false, "description": "Display name, echoed in `meshes[].name` and the NAME that `--optics`, `--no-occlude` and `--target` address: sanitised to `[A-Za-z0-9._-]`, made unique per run ignoring case (a second `roof` is `roof_2`). Defaults to the id.", "schema": { "type": "string" }, "example": "roof" }
         ],
         "requestBody": {
           "required": true,
@@ -54,11 +54,11 @@
         "tags": ["meshes"],
         "operationId": "meshesMissing",
         "summary": "Which mesh ids the server lacks",
-        "description": "One call before uploading a model: the ids (for example content hashes of the .dmesh bytes) the server does not hold, in request order; upload only those with `putMesh`. The ids it holds count as used for its mesh cache (LRU), so they stay for the run that follows.",
+        "description": "One call before uploading a model: the ids (for example content hashes of the .dmesh bytes) the server does not hold, in request order; upload only those with `uploadMesh`. The ids it holds count as used for its mesh cache (LRU), so they stay for the run that follows.",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["ids"], "properties": { "ids": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" } } } }, "example": { "ids": ["3f2a9c", "77b0e1"] } } } },
         "responses": {
           "200": { "description": "The ids to upload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Missing" }, "example": { "missing": ["77b0e1"] } } } },
-          "400": { "description": "Not `{\"ids\": [...]}`, or a bad id.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: bad mesh id \"a b\"\n" } } }
+          "400": { "description": "Not `{\"ids\": [...]}`, or a bad id.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } }
         }
       }
     },
@@ -98,7 +98,7 @@
         "tags": ["jobs"],
         "operationId": "getJob",
         "summary": "Get a job, optionally waiting for a change",
-        "description": "The job's state and queue position; when `done` it carries the result fields (`columns`, `meshes`, `rows`, `cols`, and `values`: where to fetch the values, `getJobValues`; the values themselves inline as `values_b64` only with `inline=1` and up to 4,194,304 values), when `error` or `cancelled` the message and `status`. With `wait=S` the call returns as soon as the state or the position changes, at the latest after S seconds (long poll; poll again while `queued` or `running`).",
+        "description": "The job's state and queue position. When `done` it carries the result fields (`columns`, `meshes`, `rows`, `cols`, and `values`: where `getJobValues` serves them; `values_b64` only with `inline=1`), when `error` or `cancelled` the message and `status`. With `wait=S` it returns as soon as the state or the position changes, at the latest after S seconds.",
         "parameters": [
           { "name": "wait", "in": "query", "required": false, "description": "Seconds to wait for a change, 0 to 30.", "schema": { "type": "integer", "minimum": 0, "maximum": 30, "default": 0 }, "example": 25 },
           { "$ref": "#/components/parameters/Inline" }
@@ -135,9 +135,9 @@
         ],
         "responses": {
           "200": { "description": "The values.", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" }, "example": "(rows x cols float32 little-endian, column-major)" } } },
-          "400": { "description": "`col` out of range.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: col must be 0..5\n" } } },
+          "400": { "description": "`col` out of range.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "404": { "$ref": "#/components/responses/NoSuchJob" },
-          "409": { "description": "The job is not `done` (queued, running, error or cancelled).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the job is running, not done\n" } } }
+          "409": { "description": "The job is not `done` (queued, running, error or cancelled).", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } }
         }
       }
     },
@@ -153,16 +153,16 @@
           "200": { "description": "The result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunResult" }, "example": { "columns": ["sunhours_front"], "duration_h": 1, "dirs": { "sky": 145, "ground": 145, "sun": 1 }, "meshes": [{ "name": "roof", "first": 0, "count": 2 }], "values_b64": "AAAAAAAA8D8AAAAAAADwPw==", "run_s": 0.012, "total_s": 0, "cache": { "response": "miss", "scene": "reused", "weather": "none" } } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/Missing" },
-          "409": { "description": "Cancelled while it ran (`DELETE /jobs/{id}` from another request).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cancelled\n" } } },
+          "409": { "description": "Cancelled while it ran (`DELETE /jobs/{id}` from another request).", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "413": { "$ref": "#/components/responses/TooLarge" },
           "429": { "$ref": "#/components/responses/TooManyJobs" },
-          "500": { "description": "The simulation failed (runtime error from the core), also when an `--optics` row does not resolve against the run's meshes (a NAME no mesh has, or several have; a slot the mesh does not have; a row given twice), or a `--no-occlude` NAME that is unknown, ambiguous or a context mesh.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+          "500": { "description": "The run failed: a runtime error from the core, or a name in `--optics`, `--no-occlude` or `--target` that the run's meshes do not resolve (unknown, ambiguous, a context mesh, a slot it lacks, a row given twice).", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "examples": {
             "weather": { "value": "error: weather (--epw) required for radiation/irradiance/illuminance\n" },
             "optics": { "value": "error: --optics roof/3: slot out of range (the mesh has slots 0..1)\n" }
           } } } },
           "502": { "$ref": "#/components/responses/DownloadFailed" },
           "503": { "$ref": "#/components/responses/QueueFull" },
-          "507": { "description": "The server ran out of memory for this run (host RAM, or GPU memory for the scene): the job fails, the server keeps running. Use fewer receivers or quantities, or free memory on the machine.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: out of memory: the server ran out of host memory for this run (17244108 rows x 6 columns; 1.3 GB RAM free, 2.1 GB commit free now)\n" } } }
+          "507": { "description": "Out of host or GPU memory for this run; the server keeps running. Use fewer receivers or quantities.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: out of memory: the server ran out of host memory for this run (17244108 rows x 6 columns; 1.3 GB RAM free, 2.1 GB commit free now)\n" } } }
         }
       }
     },
@@ -171,13 +171,13 @@
         "tags": ["weather"],
         "operationId": "proxyDownload",
         "summary": "Download a weather resource through the server cache",
-        "description": "Fetches one of a fixed set of public weather resources once and serves it from disk afterwards (browsers cannot fetch them directly: no CORS). The same URLs work as `epw_url` in a run. Allowed prefixes:\n\n- `https://raw.githubusercontent.com/NREL/EnergyPlus/develop/weather/master.geojson`: the EnergyPlus weather station index (GeoJSON; each feature's `properties.epw` is an HTML anchor whose `href` is the station's EPW)\n- `https://energyplus-weather.s3.amazonaws.com/`: EnergyPlus weather files (EPW)\n- `https://re.jrc.ec.europa.eu/api/v5_3/tmy?`: PVGIS typical meteorological year, e.g. `...tmy?lat=52.52&lon=13.41&outputformat=epw` (modelled, any location, 30 requests per second per IP)",
+        "description": "Fetches an allowed public weather resource once and serves it from disk afterwards (browsers cannot fetch them: no CORS). The same URLs work as `epw_url`. Allowed prefixes:\n\n- `https://raw.githubusercontent.com/NREL/EnergyPlus/develop/weather/master.geojson`: the EnergyPlus station index (GeoJSON; each feature's `properties.epw` is an anchor whose `href` is the station's EPW)\n- `https://energyplus-weather.s3.amazonaws.com/`: EnergyPlus weather files\n- `https://re.jrc.ec.europa.eu/api/v5_3/tmy?`: PVGIS typical year for any location, e.g. `...tmy?lat=52.52&lon=13.41&outputformat=epw`",
         "parameters": [
           { "name": "url", "in": "query", "required": true, "description": "The resource URL, URL-encoded (its own `&` must not split the query).", "schema": { "type": "string", "format": "uri" }, "example": "https://re.jrc.ec.europa.eu/api/v5_3/tmy?lat=52.52&lon=13.41&outputformat=epw" }
         ],
         "responses": {
           "200": { "description": "The bytes.", "headers": { "X-Daylight-Cache": { "description": "`hit` (served from disk) or `miss` (downloaded now).", "schema": { "type": "string", "enum": ["hit", "miss"] } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "LOCATION,unknown,-,unknown,ECMWF/ERA,unknown,52.520000,13.410000,1,47\n..." }, "application/geo+json": { "schema": { "type": "object" } } } },
-          "400": { "description": "Not an allowed URL.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: url not in the allowlist\n" } } },
+          "400": { "description": "Not an allowed URL.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "502": { "$ref": "#/components/responses/DownloadFailed" }
         }
       }
@@ -187,7 +187,7 @@
         "tags": ["sets"],
         "operationId": "listSets",
         "summary": "List the stored analysis sets (app)",
-        "description": "Every set and combined view the app stored with `saveSet`, each as a JSON string (the app parses and checks each one by itself, so a damaged file cannot break the list). Each lives in `<cache>/sets/<id>.json` (`--cache`, default `%LOCALAPPDATA%\\daylight_server`). Every client sees the same list; agents reach it through the app's `app_state`, `save_set`, `save_combined` and related tools.",
+        "description": "Every set and combined view stored with `saveSet`, each as a JSON string (parsed one by one, so a damaged file cannot break the list), from `<cache>/sets/<id>.json` (`--cache`, default `%LOCALAPPDATA%\\daylight_server`). Every client sees the same list; agents reach it through the app's set tools (`app_state` lists them).",
         "responses": {
           "200": { "description": "The sets, possibly none.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SetEntry" } }, "example": [{ "id": "facade-sun-k3f9", "spec": "{\"kind\":\"set\",\"id\":\"facade-sun-k3f9\",\"name\":\"Facade sun\",\"tool\":\"daylight\",...}" }] } } }
         }
@@ -199,14 +199,14 @@
         "tags": ["sets"],
         "operationId": "saveSet",
         "summary": "Store an analysis set or combined view (app)",
-        "description": "Creates or replaces `<id>.json` with the body: one JSON object of at most 256 KB, an analysis set (`kind: set`: the roles by prim path per model, one analysis' settings, the shown column and colouring) or a combined view (`kind: combined`: its inputs, weights and functions), which the app checks; the server stores it as it comes. Written to a temporary file and renamed, so a crash never leaves half a set. The server keeps at most 500. No owner and no version check: the last write wins.",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" }, "example": { "kind": "set", "id": "facade-sun-k3f9", "name": "Facade sun", "created": "2026-11-24T09:00:00.000Z", "updated": "2026-11-24T09:00:00.000Z", "tool": "daylight", "models": [{ "model": "A", "file": "building", "roles": [{ "path": "/Site/Block/Facade_S", "role": "receiver" }, { "path": "/Site/Neighbour", "role": "shade" }] }], "settings": { "sim": { "mode": "physical", "quantities": ["sunhours"] }, "time": { "mode": "annual" } }, "column": "sunhours_front", "colourBy": "value" } } } },
+        "description": "Creates or replaces `<id>.json` with the body (at most 256 KB): an `AnalysisSet` or a `CombinedView`, stored as it comes (written to a temporary file and renamed, so a crash never leaves half a set). At most 500 sets; no owner or version check: the last write wins.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SavedSet" }, "example": { "kind": "set", "id": "facade-sun-k3f9", "name": "Facade sun", "created": "2026-11-24T09:00:00.000Z", "updated": "2026-11-24T09:00:00.000Z", "tool": "daylight", "models": [{ "model": "A", "file": "building", "roles": [{ "path": "/Site/Block/Facade_S", "role": "receiver" }, { "path": "/Site/Neighbour", "role": "shade" }] }], "settings": { "sim": { "mode": "physical", "quantities": ["sunhours"] }, "time": { "mode": "annual" } }, "column": "sunhours_front", "colourBy": "value" } } } },
         "responses": {
           "204": { "description": "Stored." },
-          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one JSON object (the set)\n" } } },
-          "409": { "description": "A new set while 500 are stored.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the server keeps at most 500 sets: delete some first\n" } } },
-          "413": { "description": "Over 256 KB.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: a set is at most 256 KB\n" } } },
-          "500": { "description": "The file could not be written (disk full, no access).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cannot store C:\\Users\\jane\\AppData\\Local\\daylight_server\\sets\\facade-sun-k3f9.json\n" } } }
+          "400": { "$ref": "#/components/responses/NotObject" },
+          "409": { "description": "A new set while 500 are stored.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "413": { "description": "Over 256 KB.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "500": { "$ref": "#/components/responses/NotStored" }
         }
       },
       "delete": {
@@ -216,8 +216,8 @@
         "description": "Removes `<id>.json`. Combined views that use a deleted set show it as missing.",
         "responses": {
           "204": { "description": "Deleted." },
-          "404": { "description": "No such set.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: no such set\n" } } },
-          "500": { "description": "The file could not be removed.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cannot delete C:\\Users\\jane\\AppData\\Local\\daylight_server\\sets\\facade-sun-k3f9.json\n" } } }
+          "404": { "description": "No such set.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "500": { "$ref": "#/components/responses/NotStored" }
         }
       }
     },
@@ -250,6 +250,18 @@
         "responses": { "200": { "description": "The guide.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "# daylight_server\n..." } } } }
       }
     },
+    "/usage/{tool}": {
+      "get": {
+        "tags": ["meta"],
+        "operationId": "getUsage",
+        "summary": "A tool's flags (CLI usage text)",
+        "description": "The `daylight` or `views` CLI's `-h` text, the one list of the flags a job's `args` take: grouped by topic, with values, defaults and examples. `RunRequest.args` names the ones refused over HTTP.",
+        "parameters": [
+          { "name": "tool", "in": "path", "required": true, "description": "The tool, as `RunRequest.tool`.", "schema": { "type": "string", "enum": ["daylight", "views"] }, "example": "views" }
+        ],
+        "responses": { "200": { "description": "The usage text.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "usage: views <mesh>... [flags]\n..." } } } }
+      }
+    },
     "/docs": {
       "get": {
         "tags": ["meta"],
@@ -273,7 +285,7 @@
         "tags": ["agents"],
         "operationId": "mcpMessage",
         "summary": "MCP endpoint for agents",
-        "description": "The web app's MCP server for agents on this machine, such as Claude Code and Claude Desktop. It answers the handshake and the tool list itself and relays each tool call to the app open in a browser tab (`bridgeNext`), which carries it out with everything its UI offers and shows it live: models, roles, settings, runs, results, cameras, screenshots, charts and reports. With no app tab open, the server starts the app hidden in headless Chrome (with `--web` or `--app-url`) and the agent works there; opening the app later picks that session up.\n\n## Protocol\n\nMCP Streamable HTTP, the revisions with the `initialize` handshake: 2025-11-25, 2025-06-18 and 2025-03-26. One JSON-RPC message per POST, answered as `application/json`: no SSE stream (`mcpGet` answers 405), no `Mcp-Session-Id`, no batches, no prompts or resources.\n\n| message | answer |\n|---|---|\n| `initialize` | `protocolVersion` (the one asked for when supported, else `2025-11-25`), `capabilities: {tools: {}}`, `serverInfo`, `instructions` (how to work with the app) |\n| `ping` | `{}` |\n| `tools/list` | every tool, in one page |\n| `tools/call` | the app's `CallToolResult` (`arguments` may be left out) |\n| a notification (no `id`) | `202`, no body; `notifications/cancelled` too: hanging up cancels a call |\n| anything else (`prompts/list`, `resources/list`, `server/discover`, ...) | error `-32601` |\n\nJSON-RPC errors come with HTTP 200 and echo the request's `id` as sent; a `tools/call` of a tool `tools/list` does not name gets `-32602` (`Unknown tool`). A body that is not one JSON object gets `400` with `-32700` (`-32600` for a batch, a body without a `method`, or an `id` that is not a string or a number). A request other than `initialize` whose `MCP-Protocol-Version` header names another revision gets `400 text/plain`, so a client probing for 2026-07-28 falls back to `initialize`.\n\n**Every call answers within 55 s** (Claude Desktop ends tool calls at about 60 s, and Claude Code waits 60 s for an HTTP answer by default). Long steps (a run, a big model, a PDF) go on in the app and the reply says `running` or `generating`: call the tool again. What the agent can act on comes back as an `isError` result: no app tab open (ask the user to open the app and keep its tab open), or no answer within 55 s (the step may still be running in the app: call `app_state`).\n\n## Connect\n\nStart `daylight_server --web ..\\web\\dist --mcp` (`--web` serves the app at http://localhost:8080/ and lets the server start the hidden instance), then:\n\n- **Claude Code** (HTTP): `claude mcp add --transport http daylight http://127.0.0.1:8080/mcp`; `/mcp` in Claude Code lists the tools. If it does not connect, start Claude Code with the environment variable `MCP_PROTOCOL_NEGOTIATION=legacy` (no probe for 2026-07-28).\n- **Claude Desktop** (stdio only: its connectors run in Anthropic's cloud and cannot reach this machine): merge the entry below into `%APPDATA%\\Claude\\claude_desktop_config.json` with absolute paths (`where node` shows node.exe) and restart Claude Desktop. `server/mcp-stdio.mjs` (Node 18 or later, no packages) relays each message to `http://127.0.0.1:8080/mcp`; a URL after the script path picks another address.\n\n```json\n{ \"mcpServers\": { \"daylight\": { \"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"args\": [\"F:\\\\Github\\\\kit-sim_daylight_frontend\\\\server\\\\mcp-stdio.mjs\"] } } }\n```\n\n## Tools\n\nModels by letter A-D, building parts by USD prim path, times in local standard time; `tools/list` gives each tool's description and input schema.\n\n- **App and knowledge:** `app_state` (call it first), `guide` (`daylight`, `views`, `report`, `kit-ui`), `site_info`\n- **Models and inputs:** `open_model`, `remove_model`, `model_tree`, `set_roles` (receiver, shade, none; the View analysis: receiver, obstruction, target with a group, none), `set_visibility`, `set_geometry`, `get_materials`, `edit_material`, `update_settings` (site, time, simulation, the View analysis, weather, colour scales, charts)\n- **Runs and results:** `run`, `results`, `find_critical`, `download_result` (Daylight, or the View analysis with `analysis: views`, as `set_roles`, `set_display` and `screenshot` take it)\n- **Views and images:** `set_display`, `set_camera`, `save_view`, `screenshot` (any width and height; never moves the user's camera)\n- **Reports:** `get_report`, `save_report`, `delete_report`, `generate_report` (one option, or 2 to 4 compared; a PDF in the kit-ui kit-report layout whose charts and cameras the user can edit in the app)\n- **Sets and combined views:** `save_set`, `open_set`, `copy_set` (a new set of one for another model, by prim path), `rename_set` (its id stays), `run_set` (in the background, without changing what the app shows), `delete_set`, `save_combined`, `delete_combined`, `combined_results` (results of sets combined per element, the Combined tab's)",
+        "description": "The web app's MCP server for agents on this machine (Claude Code, Claude Desktop). It answers the handshake and `tools/list` itself and relays each `tools/call` to the app open in a browser tab (`bridgeNext`), which carries it out live. With no tab open it starts the app hidden in headless Chrome (`--web` or `--app-url`); an app tab opened later picks that session up.\n\n## Protocol\n\nMCP Streamable HTTP, revisions 2025-11-25, 2025-06-18 and 2025-03-26 (the ones with `initialize`). One JSON-RPC message per POST, answered as `application/json`: no SSE (`mcpGet` answers 405), no `Mcp-Session-Id`, no batches, prompts or resources.\n\n| message | answer |\n|---|---|\n| `initialize` | `protocolVersion` (the one asked for when supported, else `2025-11-25`), `capabilities: {tools: {}}`, `serverInfo`, `instructions` |\n| `ping` | `{}` |\n| `tools/list` | every tool, one page |\n| `tools/call` | the app's `CallToolResult` |\n| a notification (no `id`) | `202`; `notifications/cancelled` cancels the call |\n| anything else | error `-32601` |\n\nJSON-RPC errors come with HTTP 200 and echo the request's `id` (`-32602`: an unknown tool). **Every call answers within 55 s** (Claude Desktop ends tool calls at about 60 s): a long step (a run, a big model, a PDF) goes on in the app and the reply says `running` or `generating`, so call again. No app tab, or no answer within 55 s, is an `isError` result that says what to do.\n\n## Connect\n\nStart `daylight_server --web ..\\web\\dist --mcp`, then:\n\n- **Claude Code**: `claude mcp add --transport http daylight http://127.0.0.1:8080/mcp` (if it does not connect, start it with `MCP_PROTOCOL_NEGOTIATION=legacy`).\n- **Claude Desktop** (stdio only): merge the entry below into `%APPDATA%\\Claude\\claude_desktop_config.json` with absolute paths (`where node`) and restart it. `server/mcp-stdio.mjs` (Node 18+, no packages) relays to `http://127.0.0.1:8080/mcp`; a URL after the script picks another address.\n\n```json\n{ \"mcpServers\": { \"daylight\": { \"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"args\": [\"F:\\\\Github\\\\kit-sim_daylight_frontend\\\\server\\\\mcp-stdio.mjs\"] } } }\n```\n\n## Tools\n\nModels by letter A-D, parts by USD prim path, times in local standard time; `tools/list` has each tool's schema, `guide` the workflows.\n\n- **State and knowledge:** `app_state` (first), `guide`, `site_info`\n- **Models:** `open_model`, `remove_model`, `model_tree`, `set_roles`, `set_visibility`, `set_geometry`, `get_materials`, `edit_material`, `update_settings`\n- **Runs and results:** `run`, `results`, `find_critical`, `download_result`\n- **Views:** `set_display`, `set_camera`, `save_view`, `screenshot`\n- **Reports:** `get_report`, `save_report`, `delete_report`, `generate_report`\n- **Sets and combined views:** `save_set`, `open_set`, `copy_set`, `rename_set`, `run_set`, `delete_set`, `save_combined` (`results` quotes a set's kept results and a combined view; `rename_set` and `delete_set` take either kind)",
         "parameters": [
           { "name": "MCP-Protocol-Version", "in": "header", "required": false, "description": "The revision agreed in `initialize`, which clients send on every later request.", "schema": { "type": "string", "enum": ["2025-11-25", "2025-06-18", "2025-03-26"] }, "example": "2025-11-25" }
         ],
@@ -287,19 +299,17 @@
           } } }
         },
         "responses": {
-          "200": { "description": "The JSON-RPC answer: the method's `result`, or an `error` (`-32601` unknown method, `-32602` a `tools/call` without a tool name or of an unknown tool). A tool that could not do its step answers a result with `isError: true` and a text saying what to do.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonRpcResponse" }, "examples": {
-            "initialize": { "value": { "jsonrpc": "2.0", "id": 0, "result": { "protocolVersion": "2025-11-25", "capabilities": { "tools": {} }, "serverInfo": { "name": "daylight_server", "version": "1.0.0" }, "instructions": "This server drives the Daylight app (sun, sky and daylight simulation on 3D building models) in the user's browser tab, ... Start with app_state. ..." } } },
+          "200": { "description": "The JSON-RPC answer: the method's `result`, or an `error` (`-32601` unknown method, `-32602` no or an unknown tool name). A tool that could not do its step answers `isError: true` and a text saying what to do.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JsonRpcResponse" }, "examples": {
+            "initialize": { "value": { "jsonrpc": "2.0", "id": 0, "result": { "protocolVersion": "2025-11-25", "capabilities": { "tools": {} }, "serverInfo": { "name": "daylight_server", "version": "1.0.0" }, "instructions": "This server drives the daylight app in the user's browser tab ... Start with app_state." } } },
             "toolsCall": { "value": { "jsonrpc": "2.0", "id": 2, "result": { "content": [{ "type": "text", "text": "{\"model\":\"A\",\"column\":\"sunhours_front\",\"unit\":\"h\",\"groups\":[{\"mesh\":\"/Site/Block/Facade_S\",\"facing\":\"S\",\"area\":38.4,...}]}" }] } } },
             "noTab": { "value": { "jsonrpc": "2.0", "id": 2, "result": { "content": [{ "type": "text", "text": "No daylight app tab is open on this machine: ask the user to open the app and keep its tab open (LAN tabs cannot be driven), or to start daylight_server with --web or --app-url so it can start a hidden instance itself." }], "isError": true } } },
-            "unknownMethod": { "value": { "jsonrpc": "2.0", "id": 3, "error": { "code": -32601, "message": "Method not found: prompts/list" } } },
             "unknownTool": { "value": { "jsonrpc": "2.0", "id": 4, "error": { "code": -32602, "message": "Unknown tool: render" } } }
           } } } },
           "202": { "description": "A notification (no `id`, e.g. `notifications/initialized`): accepted, no body." },
-          "400": { "description": "Not a message this server takes: an `MCP-Protocol-Version` header naming another revision on a request other than `initialize` (a newer client then falls back to `initialize`; `text/plain`), or a body that is not one JSON object (`-32700`), a batch, a body without a `method`, or an `id` that is not a string or a number (`-32600`).", "content": {
-            "text/plain": { "schema": { "type": "string" }, "example": "error: MCP-Protocol-Version 2026-07-28 is not supported (2025-11-25, 2025-06-18, 2025-03-26)\n" },
+          "400": { "description": "Not a message this server takes: an `MCP-Protocol-Version` header naming another revision on a request other than `initialize` (`text/plain`; a newer client then falls back to `initialize`), a body that is not one JSON object (`-32700`), or a batch, a body without a `method`, or an `id` that is neither string nor number (`-32600`).", "content": {
+            "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: MCP-Protocol-Version 2026-07-28 is not supported (2025-11-25, 2025-06-18, 2025-03-26)\n" },
             "application/json": { "schema": { "$ref": "#/components/schemas/JsonRpcResponse" }, "examples": {
-              "parse": { "value": { "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "Parse error: the body is not one JSON object" } } },
-              "batch": { "value": { "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "Invalid Request: one JSON-RPC message per POST, no batches" } } }
+              "parse": { "value": { "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "Parse error: the body is not one JSON object" } } }
             } }
           } },
           "403": { "$ref": "#/components/responses/Forbidden" },
@@ -312,7 +322,7 @@
         "summary": "No event stream (405)",
         "description": "MCP lets a server offer a `GET` stream for messages to the client; this one opens none (no SSE, no sessions), so `GET /mcp` answers `405` with `Allow: POST`. Send every message with `mcpMessage`.",
         "responses": {
-          "405": { "description": "Not offered.", "headers": { "Allow": { "description": "`POST`", "schema": { "type": "string" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: POST JSON-RPC messages to /mcp; this server opens no SSE stream\n" } } },
+          "405": { "description": "Not offered.", "headers": { "Allow": { "description": "`POST`", "schema": { "type": "string" } } }, "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotEnabled" }
         }
@@ -323,7 +333,7 @@
         "tags": ["agents"],
         "operationId": "bridgeNext",
         "summary": "Next tool call for an app tab (long poll)",
-        "description": "The web app's side of the relay; agents do not call it. Each page load keeps one `wait=25` poll open and gets the next `tools/call` meant for it, its params as the agent sent them; the tab carries it out and answers with `bridgeResult`. `wait=0` is a ping that never hands out a call: it keeps the tab live and, with `focus=1`, marks it as the one the user looked at last. A call goes to a live tab (a poll open, or one seen within 5 s): the user's tabs before the hidden instance (`kind=headless`), then the one focused last, then the one seen last. With none, a tab gets 5 s to come back (a page reloading; an app retrying after a server restart, every 3 s), then the server starts the hidden instance (`--web` or `--app-url`) and gives it up to 30 s to poll; one that has not polled for a minute (its page crashed, or never reached this route) is started again. A poll from a user's tab ends a hidden instance that has no session to hand over and no call on its way. Tabs gone for a minute are forgotten.",
+        "description": "The web app's side of the relay; agents do not call it. Each page load keeps one `wait=25` poll open, gets the next `tools/call` meant for it and answers with `bridgeResult`; `wait=0` is a ping that keeps the tab live (with `focus=1`: the one the user looked at last). A call goes to a live tab (a poll open, or seen within 5 s): the user's tabs before the hidden instance (`kind=headless`), then the one focused last, then the one seen last. With none, a tab gets 5 s to come back, then the server starts the hidden instance (`--web` or `--app-url`) and gives it 30 s to poll (started again after a minute without one). A poll from a user's tab ends a hidden instance that has no session to hand over and no call on its way. Tabs gone for a minute are forgotten.",
         "parameters": [
           { "$ref": "#/components/parameters/TabId" },
           { "name": "wait", "in": "query", "required": false, "description": "Seconds to wait for a call, 0 to 25; 0 is a ping.", "schema": { "type": "integer", "minimum": 0, "maximum": 25, "default": 0 }, "example": 25 },
@@ -333,7 +343,7 @@
         "responses": {
           "200": { "description": "A call for this tab: its id and the `tools/call` params, raw (`arguments` added as `{}` when the agent left it out).", "content": { "application/json": { "schema": { "type": "object", "required": ["id", "params"], "properties": { "id": { "type": "string", "format": "uuid" }, "params": { "type": "object", "description": "`{name, arguments}`." } } }, "example": { "id": "5d0c8a2e-7f13-4b6a-9c41-0e2b7d9f3a10", "params": { "name": "set_camera", "arguments": { "model": "A", "frame": { "paths": ["/Site/Block/Facade_S"] }, "direction": "S", "elevation": 20 } } } } } },
           "204": { "description": "No call within `wait` seconds, or a ping." },
-          "400": { "description": "No `X-Client-Id`, or not 1 to 64 of `[A-Za-z0-9-]`.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: X-Client-Id must be this page load's id ([A-Za-z0-9-], 1-64 characters)\n" } } },
+          "400": { "description": "No `X-Client-Id`, or not 1 to 64 of `[A-Za-z0-9-]`.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotEnabled" }
         }
@@ -349,11 +359,8 @@
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CallToolResult" }, "example": { "content": [{ "type": "text", "text": "{\"view\":{...},\"description\":\"seen from the S (180°), 20° above the horizon, 42 m away\"}" }] } } } },
         "responses": {
           "204": { "description": "Passed on to the agent." },
-          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one CallToolResult object\n" } } },
-          "404": { "description": "No such call (answered already, past its 55 s, or the agent hung up), or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
-            "call": { "value": "error: no such call (answered already, or past its 55 s)\n" },
-            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
-          } } } },
+          "400": { "$ref": "#/components/responses/NotObject" },
+          "404": { "description": "No such call (answered already, past its 55 s, or the agent hung up), or agent routes are off.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
       }
@@ -363,7 +370,7 @@
         "tags": ["agents"],
         "operationId": "readLocalPath",
         "summary": "Read a model file or folder on this machine (app tab)",
-        "description": "How the app opens a model by path (the `open_model` tool): a file's bytes, or a folder's model files, listed recursively for the tab to fetch one after another. Absolute drive-letter paths only (`C:\\...` or `C:/...`; no network share, no device path) and only the Model panel's file types plus weather files: `.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw`. A file is checked as the file it opens (a symlink by its target, an 8.3 short name by its long name) and is at most `--max-mb`. A folder listing skips other files, names starting with a dot, `__MACOSX`, file symlinks and linked folders, and holds at most 2000 files and `--max-mb` in all.",
+        "description": "How the app opens a model by path (`open_model`): a file's bytes, or a folder's model files listed recursively for the tab to fetch. Absolute drive-letter paths only (no network share or device path) and only model, texture and weather files (`.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw`), each checked as the file it opens (a symlink's target, a short name's long name) and at most `--max-mb`. A listing skips other files, dot names, `__MACOSX` and links, and holds at most 2000 files and `--max-mb` in all.",
         "parameters": [
           { "name": "path", "in": "query", "required": true, "description": "Absolute path of a file or folder, URL-encoded.", "schema": { "type": "string" }, "example": "C:\\models\\house" }
         ],
@@ -372,14 +379,13 @@
             "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" }, "example": "#usda 1.0\n(\n    metersPerUnit = 1\n    upAxis = \"Z\"\n)\n..." },
             "application/json": { "schema": { "type": "object", "required": ["path", "files"], "properties": { "path": { "type": "string", "description": "The folder." }, "files": { "type": "array", "items": { "type": "object", "required": ["path", "bytes"], "properties": { "path": { "type": "string" }, "bytes": { "type": "integer" } } } } } }, "example": { "path": "C:\\models\\house", "files": [{ "path": "house.usda", "bytes": 48213 }, { "path": "textures/wall.png", "bytes": 5678 }] } }
           } },
-          "400": { "description": "Not an absolute local path, not a model, texture or weather file, or over the limits.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+          "400": { "description": "Not an absolute local path, not a model, texture or weather file, or over the limits.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "examples": {
             "path": { "value": "error: path must be an absolute local path such as C:\\models\\house.usdz (no network or device paths)\n" },
             "type": { "value": "error: not a model, texture or weather file (.usd .usda .usdc .usdz .glb .gltf .obj .mtl .bin .png .jpg .jpeg .webp .exr .hdr .epw)\n" },
             "size": { "value": "error: C:\\models holds over 2000 model files or 2048 MB: open a subfolder or single files\n" }
           } } } },
-          "404": { "description": "No such file or folder, or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
-            "path": { "value": "error: no such file or folder: C:\\models\\house.usdz\n" },
-            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
+          "404": { "description": "No such file or folder, or agent routes are off.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "examples": {
+            "path": { "value": "error: no such file or folder: C:\\models\\house.usdz\n" }
           } } } },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
@@ -390,7 +396,7 @@
         "tags": ["agents"],
         "operationId": "listReports",
         "summary": "List the stored reports (app)",
-        "description": "The reports the app stored with `saveReport`, each with its spec as a JSON string (the app parses each one by itself, so a damaged file cannot break the list) and whether a PDF exists. Each lives in `<cache>/reports/<id>/` (`--cache`, default `%LOCALAPPDATA%\\daylight_server`): `report.json` (the spec), `index.html` (the page last printed) and `report.pdf`. Agents reach them with the `get_report`, `save_report`, `delete_report` and `generate_report` tools.",
+        "description": "The reports stored with `saveReport`, each spec as a JSON string (parsed one by one, so a damaged file cannot break the list) and whether a PDF exists, from `<cache>/reports/<id>/`: `report.json`, `index.html` (the page last printed) and `report.pdf`. Agents use the report tools.",
         "responses": {
           "200": { "description": "The reports, possibly none.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ReportEntry" } }, "example": [{ "id": "south-facade", "pdf": true, "spec": "{\"id\":\"south-facade\",\"title\":\"Sun on the south facade\",\"updated\":\"2026-10-29T10:12:00Z\",...}" }] } } },
           "403": { "$ref": "#/components/responses/Forbidden" },
@@ -404,13 +410,13 @@
         "tags": ["agents"],
         "operationId": "saveReport",
         "summary": "Store a report spec (app)",
-        "description": "Creates or replaces the report's `report.json` with the body: one JSON object of at most 1 MB, the app's ReportSpec (title, models, stats, summary, blocks of text, charts, views and tables), which the app validates; the server stores it as it comes. Written to a temporary file and renamed, so a crash never leaves half a spec.",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" }, "example": { "id": "south-facade", "title": "Sun on the south facade", "created": "2026-10-29T10:12:00.000Z", "updated": "2026-10-29T10:12:00.000Z", "models": [{ "model": "A", "file": "building", "open": ["C:\\models\\building.usda"], "variants": {}, "receivers": ["/Site/Block/Facade_S"], "shades": ["/Site/Neighbour"], "runKey": "[[\"--lat\",\"51.5074\",\"--lon\",\"-0.1278\",...],null]" }], "ranges": { "sunhours": { "lo": 2, "hi": null } }, "summary": "On 21 March the south facade gets 0.754 h of sun on average.", "blocks": [{ "type": "text", "text": "The neighbour to the south shades it from 10:00." }] } } } },
+        "description": "Creates or replaces the report's `report.json` with the body (at most 1 MB): a `ReportSpec`, stored as it comes (written to a temporary file and renamed, so a crash never leaves half a spec).",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportSpec" }, "example": { "id": "south-facade", "title": "Sun on the south facade", "created": "2026-10-29T10:12:00.000Z", "updated": "2026-10-29T10:12:00.000Z", "models": [{ "model": "A", "file": "building", "open": ["C:\\models\\building.usda"], "variants": {}, "receivers": ["/Site/Block/Facade_S"], "shades": ["/Site/Neighbour"], "runKey": "[[\"--lat\",\"51.5074\",\"--lon\",\"-0.1278\",...],null]" }], "ranges": { "sunhours": { "lo": 2, "hi": null } }, "summary": "On 21 March the south facade gets 0.754 h of sun on average.", "blocks": [{ "type": "text", "text": "The neighbour to the south shades it from 10:00." }] } } } },
         "responses": {
           "204": { "description": "Stored." },
-          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one JSON object (the report spec)\n" } } },
-          "413": { "description": "Over 1 MB.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: a report spec is at most 1 MB\n" } } },
-          "500": { "description": "The file could not be written (disk full, no access).", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: cannot store C:\\Users\\jane\\AppData\\Local\\daylight_server\\reports\\south-facade\\report.json\n" } } },
+          "400": { "$ref": "#/components/responses/NotObject" },
+          "413": { "description": "Over 1 MB.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "500": { "$ref": "#/components/responses/NotStored" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotEnabled" }
         }
@@ -422,11 +428,8 @@
         "description": "Removes the report's folder: spec, page and PDF. A program that holds `report.pdf` open (a PDF viewer that locks it) makes it refuse and the report stays: close the PDF and delete again.",
         "responses": {
           "204": { "description": "Deleted." },
-          "404": { "description": "No such report, or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
-            "report": { "value": "error: no such report\n" },
-            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
-          } } } },
-          "409": { "description": "The PDF is open in another program, or the report is printing.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the report's PDF is open in another program or printing: close it and delete again\n" } } },
+          "404": { "description": "No such report, or agent routes are off.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "409": { "description": "The PDF is open in another program, or the report is printing.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
       }
@@ -437,17 +440,14 @@
         "tags": ["agents"],
         "operationId": "printReport",
         "summary": "Print a report page to PDF (app)",
-        "description": "Saves the body, the report page the app rendered from the spec (self-contained HTML in the kit-ui kit-report layout: CSS, fonts and images inline), as `index.html` behind a Content-Security-Policy that lets it load nothing but inline styles and `data:` images and fonts (no scripts, frames or files), and prints it to `report.pdf` with headless Chrome or Edge (`--browser PATH`, else the one registered under Windows App Paths; its own profile in `<cache>/pdf-profile`), one print at a time, within 30 s. Answers the PDF's path, a URL that opens it (`getReportPdf`), its pages and bytes, and the fonts it embeds: `fallback` lists any that are not kit-ui's (Geist, Geist Mono, Space Mono, Tektur), i.e. characters those fonts lack that the browser drew with a system font (keep report text to Latin letters, digits and common punctuation).",
+        "description": "Saves the body, the report page the app rendered (self-contained HTML in the kit-report layout), as `index.html` behind a Content-Security-Policy that loads nothing but inline styles and `data:` images and fonts, and prints it to `report.pdf` with headless Chrome or Edge (`--browser PATH`, else the registered one), one print at a time, within 30 s. Answers the PDF's path and URL (`getReportPdf`), pages, bytes and embedded fonts; `fallback` lists those that are not kit-ui's, i.e. characters drawn with a system font.",
         "requestBody": { "required": true, "content": { "text/html": { "schema": { "type": "string" }, "example": "<!doctype html>\n<html lang=\"en\" data-kit=\"sim\" data-theme=\"light\" data-density=\"compact\">\n<head><meta charset=\"utf-8\"><style>/* kit-ui.css, its fonts as data URIs */</style></head>\n<body><main class=\"report stack\" id=\"main\">...</main></body></html>\n" } } },
         "responses": {
           "200": { "description": "Printed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrintedReport" }, "example": { "pdf": "C:\\Users\\jane\\AppData\\Local\\daylight_server\\reports\\south-facade\\report.pdf", "url": "http://localhost:8080/reports/south-facade/pdf", "pages": 4, "bytes": 812345, "fonts": ["Tektur-Regular", "Geist-Regular", "GeistMono-Regular", "SpaceMono-Bold"], "fallback": [] } } } },
-          "400": { "description": "The page carries an `http-equiv` tag: a refresh would send the print to another file.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the page carries an http-equiv tag (a refresh would print another file)\n" } } },
-          "404": { "description": "No such report (store its spec first), or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
-            "report": { "value": "error: no such report: save its spec first (PUT /reports/{id})\n" },
-            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
-          } } } },
-          "409": { "description": "`report.pdf` is open in another program (a PDF viewer that locks it); the old PDF stays.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: C:\\Users\\jane\\AppData\\Local\\daylight_server\\reports\\south-facade\\report.pdf is open in another program: close the PDF and generate again\n" } } },
-          "500": { "description": "No browser to print with, or it printed no PDF (it failed, or took over 30 s).", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
+          "400": { "description": "The page carries an `http-equiv` tag: a refresh would send the print to another file.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "404": { "description": "No such report (store its spec first), or agent routes are off.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "409": { "description": "`report.pdf` is open in another program (a PDF viewer that locks it); the old PDF stays.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+          "500": { "description": "No browser to print with, or it printed no PDF (it failed, or took over 30 s).", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "examples": {
             "browser": { "value": "error: no Chrome or Edge found to print the PDF: start daylight_server with --browser PATH\n" },
             "print": { "value": "error: the browser printed no PDF (no PDF within 30 s): C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\n" }
           } } } },
@@ -461,10 +461,7 @@
         "description": "The PDF last printed by `printReport` (its `url` points here), inline so the browser shows it, never cached. Like every route of this tag it answers only on this machine.",
         "responses": {
           "200": { "description": "The PDF.", "headers": { "Content-Disposition": { "description": "`inline; filename=\"<id>.pdf\"`", "schema": { "type": "string" } } }, "content": { "application/pdf": { "schema": { "type": "string", "contentMediaType": "application/pdf" }, "example": "%PDF-1.4\n..." } } },
-          "404": { "description": "No PDF yet, or agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "examples": {
-            "pdf": { "value": "error: no PDF of this report yet: generate it (POST /reports/{id}/pdf)\n" },
-            "off": { "value": "error: agent routes are off (start daylight_server with --mcp)\n" }
-          } } } },
+          "404": { "description": "No PDF yet, or agent routes are off.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
       }
@@ -474,11 +471,11 @@
         "tags": ["agents"],
         "operationId": "getSession",
         "summary": "The hidden instance's session (app)",
-        "description": "Claude-only mode: with no app tab open, the server runs the app hidden in headless Chrome (`--web` or `--app-url`; its profile in `<cache>/agent-profile`) and the agent works there. That instance records here, in memory, its settings (`settings`; `epw`: a weather file it opened by path), its subdivision level (`subdiv`), the state-changing tool calls it made (`steps`) and whether it ran (`ran`). An app tab opening later reads the record, replays it (same models, roles, settings, camera and results) and deletes it (`deleteSession`), which ends the hidden instance.",
+        "description": "With no app tab open, the agent works in the app hidden in headless Chrome (`--web` or `--app-url`), which records here, in memory, its `settings` (`epw`: a weather file opened by path), `subdiv`, the state-changing tool calls it made (`steps`) and whether it ran (`ran`). An app tab opening later replays the record and deletes it (`deleteSession`), which ends the hidden instance.",
         "responses": {
           "200": { "description": "The record, as the hidden instance stored it.", "content": { "application/json": { "schema": { "type": "object" }, "example": { "settings": "{\"site\":{\"lat\":52.52,\"lon\":13.41,\"place\":\"Berlin\"},...}", "subdiv": 0, "epw": "C:\\weather\\berlin.epw", "steps": [{ "name": "open_model", "arguments": { "paths": ["C:\\models\\house.usdz"], "model": "A" } }, { "name": "set_roles", "arguments": { "paths": ["/Site/Block"], "role": "receiver", "model": "A" } }], "ran": true } } } },
           "204": { "description": "No session: no hidden instance, or picked up already (not an error, so an app tab's console stays clean)." },
-          "404": { "description": "Agent routes are off.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: agent routes are off (start daylight_server with --mcp)\n" } } },
+          "404": { "$ref": "#/components/responses/NotEnabled" },
           "403": { "$ref": "#/components/responses/Forbidden" }
         }
       },
@@ -490,7 +487,7 @@
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" }, "example": { "settings": "{\"site\":{\"lat\":52.52,\"lon\":13.41,\"place\":\"Berlin\"},...}", "subdiv": 0, "steps": [], "ran": false } } } },
         "responses": {
           "204": { "description": "Stored." },
-          "400": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the body is one JSON object\n" } } },
+          "400": { "$ref": "#/components/responses/NotObject" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotEnabled" }
         }
@@ -510,7 +507,7 @@
   },
   "components": {
     "parameters": {
-      "MeshId": { "name": "id", "in": "path", "required": true, "description": "Mesh id chosen by the client: 1 to 64 of `[A-Za-z0-9-]`: the SHA-256 hex of the bytes (shared by every client that sends them) or a UUID.", "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "example": "3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11" },
+      "MeshId": { "name": "id", "in": "path", "required": true, "description": "Mesh id chosen by the client, 1 to 64 of `[A-Za-z0-9-]`: a UUID, or a content id as the bindings make it (the SHA-256 hex of the bytes; with `?name=`, sha256(hex + \"\\0name\\0\" + name)), shared by every client that sends the same mesh.", "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "example": "3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11" },
       "Inline": { "name": "inline", "in": "query", "required": false, "description": "`1`: a `done` job also carries its values inline as `values_b64` (up to 4,194,304 values).", "schema": { "type": "integer", "enum": [0, 1] }, "example": 1 },
       "JobId": { "name": "id", "in": "path", "required": true, "description": "Job id from `submitJob`.", "schema": { "type": "string", "format": "uuid" }, "example": "9b2f6c1e-4d0a-4f6e-8a1b-2c3d4e5f6a7b" },
       "ClientId": { "name": "X-Client-Id", "in": "header", "required": false, "description": "Identifies one client (a browser tab, a script) for the per-client job limit and `listMyJobs`. Without it the network address is used.", "schema": { "type": "string", "maxLength": 64 }, "example": "tab-5f0e2b" },
@@ -533,28 +530,31 @@
       }
     },
     "responses": {
-      "BadRequest": { "description": "Invalid request: unknown flag, bad id, unusable weather, ... The text starts with `error: <cause>`; flag errors append the CLI usage.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: unknown flag --nope\nusage: daylight <mesh>... [flags]\n..." } } },
+      "BadRequest": { "description": "Invalid request: unknown flag, bad id, unusable weather, ... The text starts with `error: <cause>`; flag errors append the CLI usage.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: unknown flag --nope\nusage: daylight <mesh>... [flags]\n..." } } },
       "Missing": { "description": "The server does not hold these meshes (never uploaded, or evicted): `PUT /mesh/{id}` each and submit again.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Missing" }, "example": { "missing": ["3f1c0b9e-0d59-4a8e-9a43-1b7a6a0c2e11"] } } } },
-      "TooLarge": { "description": "The result would hold more than 134,217,728 values (rows = sensor faces or points, columns = quantities x sides; views: its columns x sides), more than a browser can take in one piece. Nothing is queued.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: 17244108 rows x 12 columns = 206929296 values, over the 134217728 one run can return; pick fewer quantities, one side or fewer receivers\n" } } },
-      "TooManyJobs": { "description": "This client already has its limit of jobs queued or running.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: 2 jobs of this client are queued or running (limit 2); wait for one to finish or DELETE /jobs/{id}\n" } } },
-      "QueueFull": { "description": "The queue is full.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: the queue is full (32 jobs); retry shortly\n" } } },
-      "DownloadFailed": { "description": "The weather resource could not be downloaded.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: download failed (curl exit 22): https://energyplus-weather.s3.amazonaws.com/...\n" } } },
-      "NoSuchJob": { "description": "Unknown id, or finished more than 15 minutes ago.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: no such job (finished jobs are kept 15 minutes)\n" } } },
-      "Forbidden": { "description": "Agent routes answer only requests from this machine: TCP peer 127.0.0.1 or ::1, `Host` localhost, 127.0.0.1 or [::1] (any port), `Origin` absent or the page's own, `Sec-Fetch-Site` absent, `none` or `same-origin`, no `Forwarded`, `X-Forwarded-*`, `X-Real-IP` or `Via` header (a proxy), and the JSON bodies of `mcpMessage` and `bridgeResult` sent as `Content-Type: application/json`.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: agent routes answer only on this machine (Host localhost, 127.0.0.1 or [::1]; same origin; no proxy; JSON bodies as Content-Type: application/json)\n" } } },
-      "NotEnabled": { "description": "The server runs without `--mcp`, so every agent route is off.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "error: agent routes are off (start daylight_server with --mcp)\n" } } }
+      "TooLarge": { "description": "The result would hold more than 134,217,728 values (rows = sensor faces or points, columns = quantities x sides; views: its columns x sides), more than a browser can take in one piece. Nothing is queued.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: 17244108 rows x 12 columns = 206929296 values, over the 134217728 one run can return; pick fewer quantities, one side or fewer receivers\n" } } },
+      "TooManyJobs": { "description": "This client already has its limit of jobs queued or running.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+      "QueueFull": { "description": "The queue is full.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+      "DownloadFailed": { "description": "The weather resource could not be downloaded.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: download failed (curl exit 22): https://energyplus-weather.s3.amazonaws.com/...\n" } } },
+      "NoSuchJob": { "description": "Unknown id, or finished more than 15 minutes ago.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" } } } },
+      "Forbidden": { "description": "Agent routes answer only requests from this machine: TCP peer 127.0.0.1 or ::1, `Host` localhost, 127.0.0.1 or [::1] (any port), `Origin` absent or the page's own, `Sec-Fetch-Site` absent, `none` or `same-origin`, no `Forwarded`, `X-Forwarded-*`, `X-Real-IP` or `Via` header (a proxy), and the JSON bodies of `mcpMessage` and `bridgeResult` sent as `Content-Type: application/json`.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: agent routes answer only on this machine (Host localhost, 127.0.0.1 or [::1]; same origin; no proxy; JSON bodies as Content-Type: application/json)\n" } } },
+      "NotEnabled": { "description": "The server runs without `--mcp`, so every agent route is off.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: agent routes are off (start daylight_server with --mcp)\n" } } },
+      "NotObject": { "description": "The body is not one JSON object.", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: the body is one JSON object (the set)\n" } } },
+      "NotStored": { "description": "The file could not be written or removed (disk full, no access, held open).", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/ErrorText" }, "example": "error: cannot store C:\\Users\\jane\\AppData\\Local\\daylight_server\\sets\\facade-sun-k3f9.json\n" } } }
     },
     "schemas": {
+      "ErrorText": { "type": "string", "description": "A plain-text error: the first line `error: <cause>`; a usage error appends the CLI usage (`getUsage`)." },
       "RunRequest": {
         "type": "object",
         "required": ["sensors"],
         "properties": {
           "sensors": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "description": "Ids of the receiving meshes (analysed; they also cast shade unless `--no-self-occlude`, or `--no-occlude` names them). Rows of the result follow this order." },
           "context": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,64}$" }, "description": "Ids of meshes that only cast shade (views: only block rays, or are `--target`s)." },
-          "tool": { "type": "string", "enum": ["daylight", "views"], "default": "daylight", "description": "Flags of the `views` CLI (`tool` = `views`), one array element per token (`[\"--target\", \"lake=water\"]`); the full reference is [views.md](https://github.com/Cybernaut0815/kit-sim_core/blob/main/docs/views.md).\n\n| flag | value | default | meaning |\n|---|---|---|---|\n| `--fov` | `H[,LO,HI]` degrees | `120,-70,50` | the field: H wide about each element's normal (0 < H <= 180), or `360` all around (azimuth from north); elevation LO to HI; `H,0,0` one row of horizontal rays (the 2D isovist) |\n| `--gaze` | `normal` \\| `level` | `normal` | H < 360: the field about the normal, or about the normal turned level with elevation about the horizon (as a person looks); faces looking straight up or down keep their normal; at `--offset 0` a level field's directions behind a tilted element's plane are its own surface |\n| `--cell` | degrees | `2` | degrees per ray (at most 2^20 rays per element) |\n| `--jitter` | `on` \\| `off` | `on` | each ray at a seeded random point of its cell |\n| `--target` | `NAME=GROUP[;...]` | none | rays ending on mesh NAME (its `?name=`, made unique per job) count for GROUP: a share column per group (at most 16) |\n| `--distance` | `isovist,mean,min,group` \\| `none` | `isovist` all around, else `mean,min` | distance columns: `volume` (m³; flat field: `area`, m²), `distance` (log mean, m), `distance_min` (m), per group `<g>_distance`, `<g>_distance_min` |\n| `--far` | metres | `1000` | what an open ray counts as; caps every distance and the isovist |\n| `--reach` | `D[,D...]` \\| `en17037` | none | `reach_<D>` columns: the share of the field that sees at least D metres (`en17037` = 6,20,50) |\n| `--virtual-ground` | `on` \\| `off` | `on` | a plane at the lowest point (or `--ground-z Z`) ends downward rays as `ground` |\n| `--on`, `--sides`, `--offset`, `--north`, `--cull-backfaces`, `--no-self-occlude`, `--no-occlude` | | | as for daylight (`--offset`: the eye along the normal, e.g. 1.6 m above a floor grid) |\n| `--optics` + `--transmission on` | | off | rays pass the glass slots; adds `glazing` (the share seen through glass) |\n\nColumns `<name>_<side>`: the shares `sky`, `ground`, `obstruction` and one per target group (they sum to 1), then `glazing`, the isovist, the distances and `reach_<D>`. Over HTTP `--out`, `--dump-rays` and `--bench` are refused; views takes no weather." },
+          "tool": { "type": "string", "enum": ["daylight", "views"], "default": "daylight", "description": "Which CLI runs: `daylight` (sun and sky) or `views` (what each element sees; no weather)." },
           "args": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Flags of the `daylight` CLI, one array element per token (`[\"--quantity\", \"radiation,sunhours\"]`).\n\n| flag | value | default | meaning |\n|---|---|---|---|\n| `--quantity` | `Q[,Q...]` | `radiation` | one column per quantity: `radiation` kWh/m² over the period, `direct` (sun only: beam x transmittance), `diffuse` (sky + ground, x transmittance; with `--bounces` also the light the model reflects, its reflected sun included), `irradiance` mean W/m², `illuminance` mean lux (physical mode), `sunhours` equivalent full-sun hours (an hour behind a surface transmitting 0.6 counts 0.6; with every surface opaque, the default, an exact count of sunlit hours). Transmittance is 1 for open sky and 0 behind an opaque surface; between only with `--transmission on`. With `--bounces` above 0, radiation, diffuse, irradiance and illuminance include the light reflected by the model; direct and sun hours never do |\n| `--on` | `faces` / `vertices` | `faces` | one row per face (sensor at the centroid) or per point |\n| `--sides` | `front` / `back` / `both` | `front` | receiving hemisphere; `both` gives two columns per quantity |\n| `--mode` | `physical` / `ladybug` | `physical` | sky and sun model; `ladybug` reproduces Ladybug Tools RadiationStudy (every surface opaque and black: `--transmission on` and `--bounces` above 0 are refused, `--optics` does nothing) |\n| `--lat` `--lon` | degrees, N and E positive | from the EPW | site; required without weather |\n| `--tz` | hours, E positive | EPW header, else round(lon / 15) | the clock of `--time`, `--from`, `--to`, `--hours`: standard time, no DST. An EPW keeps its own zone and these times are moved into it, so each hour of weather stays with its own sun |\n| `--clear-sky` | flag | off | synthesise a cloudless year (Ineichen-Perez) instead of an EPW |\n| `--turbidity` | Linke turbidity | `3` | atmosphere for `--clear-sky` |\n| `--altitude` | metres | `0` | site elevation for `--clear-sky` |\n| `--time` | `[YYYY-]MM-DDTHH:MM` | annual | one instant; DNI/DHI interpolated between the hours around it |\n| `--from` `--to` | timestamps | annual | the range `[from, to)`, the sun at the middle of each step |\n| `--step` | minutes | `60` | step of `--from/--to`; DNI/DHI interpolated between the hour centres |\n| `--hours` | `HH:MM-HH:MM` | whole day | with `--from/--to`: only these hours of every day (an analysis period, e.g. 09:00-17:00 from 1 Jun to 31 Aug) |\n| `--sky-density` | `1` / `2` / `4` | `1` | 145 / 577 / 2305 sky patches |\n| `--patch-samples` | square number | `1` | stratified rays per sky patch (physical mode) |\n| `--ground` | 0..1 | `0.2` | ground reflectance |\n| `--virtual-ground` | `on` / `off` | `on` | the virtual ground below the horizon: rays escaping downward see a Lambertian ground of reflectance `--ground` (so does the `--bounces` ground bin). `off`: no ground light, the numbers of `--ground 0`. A ground mesh hides the virtual ground from the rays it stops anyway |\n| `--optics` | `SPEC[;SPEC...]`, SPEC = `NAME[/SLOT]=RHO[,TAU[,KIND]]`, repeatable | every slot RHO 0.2, TAU 0 | numbers per mesh or face slot (the `.dmesh` slot block, see `uploadMesh`): RHO diffuse reflectance, TAU transmittance at normal incidence, each 0..1, RHO + TAU <= 1. KIND `porous` (TAU at every angle: screens, trees; the default when TAU > 0) or `glass` (Radiance glass, n 1.52: RHO 0, 0 < TAU <= 0.918; 0.64 = double low-e). NAME = the mesh's `name` from `uploadMesh` (its id by default), `*` = every mesh; `/SLOT` = a trailing `/` and digits (`roof/1` = slot 1 of `roof`); `;` packs several SPECs into one token. Precedence NAME/SLOT > NAME > `*` > built-in. Grammar and ranges are checked at submission (`400`); a NAME no mesh of the run has (or several have), a slot the mesh does not have, or a row given twice fail the job when it runs (`error`, status 500). No effect by itself: TAU needs `--transmission on`, RHO needs `--bounces` (without it every surface is black) |\n| `--transmission` | `off` / `on` | `off` | `on` (physical mode only, `400` with `--mode ladybug`): light passes glass and porous slots, weighted by their transmittance at each crossing (a closed thin solid, e.g. a pane modelled as a 1 cm box, counts once, and so does a double-faced sheet, every face repeated with the opposite winding). Free without a translucent slot (TAU > 0 on faces that cast shade); with one, rays continue through it and visibility takes 8x the memory: slower. `off`: every surface opaque, as before |\n| `--fresnel` | `on` / `off` | `on` | glass transmittance by angle (Radiance `glass`: 0.64 at normal incidence passes 0.54 at 60°, 0.12 at 85°), and with `--bounces` its mirror reflectance by angle; `off`: glass passes TAU at every angle and mirrors nothing |\n| `--bounces` | `0`..`20` | `0` | reflected light (physical mode only, `400` above 0 with `--mode ladybug`): what reaches a sensor after up to N diffuse reflections off the model, each by its slot's RHO. Glass mirrors its angle-dependent reflectance (`--fresnel on`; not counted in N); translucent slots pass light with `--transmission on`, otherwise every slot is opaque and glass mirrors and absorbs the rest. Paths are binned where they escape, into the sky patches (the sun binned into them, as `gendaymtx` does) or the virtual ground (`--ground`), as `rcontrib -ab N+1` daylight coefficients. 1 is the common outdoor setting (Honeybee's exterior studies use `-ab 2`), interiors need 5-8. A ground mesh hides the virtual ground from the rays it stops: without bounces they see a black surface, with them its RHO reflects the sky and sun it receives. Cost: a second pass after the visibility, linear in `--bounce-samples`; at 1024 about 2 s per million sensors on a city-like model (RTX 2060), up to 30x that among densely overlapping geometry; each further reflection adds 5-10 % outdoors (Russian roulette from the second on), more indoors. `0`: no reflection pass (no glass mirror either), as before |\n| `--bounce-samples` | `64`..`65536` | `1024` | paths per sensor for `--bounces`, stratified and deterministic (a run repeats its numbers); time grows linearly with it. Noise falls as 1 / sqrt(M): at 1024 an annual facade value (street canyon, one bounce) is within 0.5 % of the converged one at the median sensor and 2.3 % at the 95th percentile, a single `--time` instant within 2.3 % / 14 % (the sun sits in a few patches); sums over many sensors are unbiased. Raise it (4096-16384) for instants and for small differences between variants |\n| `--north` | degrees ccw from +Y | `0` | model north |\n| `--offset` | metres | `0` | move sensors along their normal |\n| `--cull-backfaces` | flag | off | occluders block only from their front side (with `--transmission on` a closed translucent solid is then crossed once, through its front faces) |\n| `--no-self-occlude` | flag | off | receiving meshes do not cast shade |\n| `--no-occlude` | `NAME[;NAME...]`, repeatable | none | these receiving meshes are analysed but invisible to rays, as every receiving mesh is under `--no-self-occlude`: they cast no shade and reflect nothing (`--bounces`), e.g. a grid of measuring points inside a room gets the room's shade and casts none. NAME as in `--optics` (the mesh's `name` from `uploadMesh`, its id by default); `;` packs several into one token. An empty NAME is a `400`; a NAME no mesh of the run has (or several have), or a `context` mesh's, fails the job when it runs (`error`, status 500) |\n\nRefused over HTTP: mesh file paths, `--context FILE`, `--epw FILE` (use the `epw` part or `epw_url`), `--out`, `--timeseries`, `--dump-*`, `--bench`. Weather is needed for every quantity except `sunhours`.",
+            "description": "The tool's CLI flags, one array element per token (`[\"--quantity\", \"radiation,sunhours\"]`). `GET /usage/{tool}` lists every flag with its default; [daylight.md](https://github.com/Cybernaut0815/kit-sim_core/blob/main/docs/daylight.md) and [views.md](https://github.com/Cybernaut0815/kit-sim_core/blob/main/docs/views.md) explain them. Daylight needs weather for every quantity but `sunhours` (`epw`, `epw_url`, or `--clear-sky` with `--lat` and `--lon`); views takes none. Refused over HTTP: mesh paths, `--context FILE`, `--epw FILE` (send `epw` or `epw_url`), `--out`, `--timeseries`, `--dump-*`, `--bench`. A bad flag or value is a `400` at submission; names in `--optics`, `--no-occlude` and `--target` (a mesh's `?name=`, made unique per run) resolve against the run's meshes when it runs.",
             "examples": [["--lat", "52.52", "--lon", "13.41", "--tz", "1", "--quantity", "radiation,sunhours", "--clear-sky"]]
           },
           "epw": { "type": "string", "contentMediaType": "text/plain", "description": "An hourly EPW weather file (8760 or 8784 rows). Give this, `epw_url` or `--clear-sky`, at most one; none with `tool` views." },
@@ -574,7 +574,7 @@
         "type": "object",
         "properties": {
           "response": { "type": "string", "enum": ["hit", "miss"], "description": "`hit`: an identical request was answered from the result cache, nothing ran." },
-          "scene": { "type": "string", "enum": ["reused", "built"], "description": "`reused`: this run's scene was still on the GPU, so its acceleration structure was not rebuilt; `built`: it was built for this run, and is then kept like any other (`--gpu-scenes`). A scene is the job's `sensors` ids and then its `context` ids, each in their order, its `--no-self-occlude`, its `--no-occlude` set (without `--no-self-occlude`; with it no receiving mesh casts shade anyway), and the layout of the slots that cast shade: the set of those that transmit (TAU > 0 with `--transmission on`), else, with `--bounces` above 0 and a quantity other than `direct` / `sunhours`, whether their RHO or glass differ (with `--fresnel off` none is glass; either gives the scene a hit record per slot, about 20 % more acceleration-structure (GAS) memory). New `--optics` values and `--fresnel` reuse a scene as long as that layout stays; a slot that starts or stops transmitting (a TAU going from 0 to above 0 or back, or `--transmission` itself on a model with translucent slots), or `--bounces` switched on or off (with such a quantity) for a model whose slots differ in RHO or glass while none transmits, is another scene." },
+          "scene": { "type": "string", "enum": ["reused", "built"], "description": "`reused`: the scene was still on the GPU, so its acceleration structure was not rebuilt; `built`: built for this run, then kept like the others (`--gpu-scenes`). A scene is the `sensors` then `context` ids in order, `--no-self-occlude`, the `--no-occlude` set and the layout of the slots that cast shade (which transmit; with `--bounces`, whether their RHO or glass differ). New `--optics` values and `--fresnel` reuse a scene while that layout stays; a slot that starts or stops transmitting, or `--bounces` switched on or off over slots that differ, is another scene." },
           "weather": { "type": "string", "enum": ["hit", "miss", "none"], "description": "`hit`: the parsed weather was cached; `none`: no weather file (clear sky or sun hours)." }
         }
       },
@@ -587,7 +587,7 @@
         "type": "object",
         "description": "The result fields; all present on a `RunResult` and on a `done` job.",
         "properties": {
-          "columns": { "type": "array", "items": { "type": "string" }, "description": "Column names `<quantity>_<side>`, in `--quantity` order, sides inner (views: `<name>_<side>`, see `RunRequest.tool`).", "examples": [["radiation_front", "sunhours_front"], ["sky_front", "ground_front", "obstruction_front", "obstruction_total_front", "water_front", "distance_front", "distance_min_front"]] },
+          "columns": { "type": "array", "items": { "type": "string" }, "description": "Column names `<quantity>_<side>`, in `--quantity` order, sides inner (views: `<name>_<side>`, listed in `/usage/views`).", "examples": [["radiation_front", "sunhours_front"], ["sky_front", "ground_front", "obstruction_front", "obstruction_total_front", "water_front", "distance_front", "distance_min_front"]] },
           "duration_h": { "type": "number", "description": "Daylight: hours represented by the evaluated steps." },
           "dirs": { "type": "object", "description": "Daylight: ray directions traced per sensor.", "properties": { "sky": { "type": "integer" }, "ground": { "type": "integer" }, "sun": { "type": "integer" } } },
           "view": { "type": "object", "description": "Views: the field as run: `fov` [H, LO, HI], `gaze` (`level`, only with `--gaze level` and H < 360), `cell`, `grid` [rows, columns], `jitter`, `north`, `offset`, `far`, `near` (the 0.1 m floor), `virtual_ground`, `ground_z` (the plane's height), `transmission` (only when on), `reach`, `classes` and `image` (the ray order)." },
@@ -688,7 +688,7 @@
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
           "pdf": { "type": "boolean", "description": "Whether a printed PDF exists (`getReportPdf`)." },
-          "spec": { "type": "string", "contentMediaType": "application/json", "description": "`report.json` as stored, as a string: parse it." }
+          "spec": { "type": "string", "contentMediaType": "application/json", "contentSchema": { "$ref": "#/components/schemas/ReportSpec" }, "description": "`report.json` as stored, as a string: parse it." }
         }
       },
       "SetEntry": {
@@ -696,7 +696,7 @@
         "required": ["id", "spec"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
-          "spec": { "type": "string", "contentMediaType": "application/json", "description": "`<id>.json` as stored, as a string: parse it." }
+          "spec": { "type": "string", "contentMediaType": "application/json", "contentSchema": { "$ref": "#/components/schemas/SavedSet" }, "description": "`<id>.json` as stored, as a string: parse it." }
         }
       },
       "PrintedReport": {
@@ -709,6 +709,97 @@
           "bytes": { "type": "integer", "description": "File size." },
           "fonts": { "type": "array", "items": { "type": "string" }, "description": "PostScript names of the embedded fonts, subset tags dropped." },
           "fallback": { "type": "array", "items": { "type": "string" }, "description": "The fonts that are not kit-ui's (Geist, Geist Mono, Space Mono, Tektur): the browser drew some characters with a system font. Empty for a clean report." }
+        }
+      },
+      "Id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "A set's or report's id: the name's slug and a random suffix (`facade-sun-k3f9`)." },
+      "Look": { "type": "object", "description": "A quantity's colours as the Results panel sets them: `gradient` (a built-in or library name), `scaling`, the legend domain `min`/`max` and the problem range `lo`/`hi` (null: open).", "properties": { "gradient": { "type": "string" }, "scaling": { "type": "string" }, "min": { "type": ["number", "null"] }, "max": { "type": ["number", "null"] }, "lo": { "type": ["number", "null"] }, "hi": { "type": ["number", "null"] } } },
+      "AnalysisSet": {
+        "type": "object",
+        "description": "One analysis' whole setup, as the web app saves it (`web/src/sets/apply.ts`). Opening it applies each model entry to its own model only (same letter and file); another model takes it only as a copy. The app checks it; the server stores it as it comes.",
+        "required": ["kind", "id", "name", "created", "updated", "tool", "models", "settings", "column", "colourBy"],
+        "properties": {
+          "kind": { "const": "set" },
+          "id": { "$ref": "#/components/schemas/Id" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "created": { "type": "string", "format": "date-time" },
+          "updated": { "type": "string", "format": "date-time" },
+          "tool": { "type": "string", "enum": ["daylight", "views"], "description": "The analysis (tab) it belongs to." },
+          "models": { "type": "array", "description": "One entry per open model.", "items": { "type": "object", "required": ["model", "file", "roles"], "properties": {
+            "model": { "type": "string", "enum": ["A", "B", "C", "D"] },
+            "file": { "type": "string", "description": "The model's file name." },
+            "roles": { "type": "array", "description": "Receivers and shades by USD prim path; paths not listed are none.", "items": { "type": "object", "required": ["path", "role"], "properties": { "path": { "type": "string" }, "role": { "type": "string", "enum": ["receiver", "shade"] }, "shade": { "const": false, "description": "A receiver that casts no shade." }, "group": { "type": "string", "description": "Views: a shade's target group." } } } },
+            "optics": { "type": "object", "description": "Materials edits by material path, plus the default and glass rows." }
+          } } },
+          "settings": { "type": "object", "description": "Daylight: `{sim, time}`; views: `{viewSim}`, as the app's settings name them." },
+          "column": { "type": "string", "description": "The result column shown." },
+          "colourBy": { "type": "string", "enum": ["plain", "value"] },
+          "north": { "type": "number", "description": "Model north, degrees." },
+          "site": { "type": "object", "description": "Daylight: `{lat, lon, place}`." },
+          "weather": { "type": "object", "description": "Daylight: the source, station or EPW file name, turbidity and altitude." },
+          "looks": { "type": "object", "description": "`quantities`: each quantity's `Look`; `colors`: the problem range's two colours." },
+          "charts": { "type": "array", "items": { "type": "object" }, "description": "The charts, as `update_settings` takes them." },
+          "subdiv": { "type": "integer", "description": "The subdivision level it runs at (-1 auto, 0 off)." }
+        }
+      },
+      "CombinedView": {
+        "type": "object",
+        "description": "Saved sets' results weighed into one value per element, the Combined tab's (`web/src/sets/model.ts`).",
+        "required": ["kind", "id", "name", "created", "updated", "unit", "op", "inputs"],
+        "properties": {
+          "kind": { "const": "combined" },
+          "id": { "$ref": "#/components/schemas/Id" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "created": { "type": "string", "format": "date-time" },
+          "updated": { "type": "string", "format": "date-time" },
+          "unit": { "type": "string", "maxLength": 16, "description": "The combined value's unit ('': a score)." },
+          "op": { "type": "string", "enum": ["mean", "sum", "min", "max", "product"], "description": "How the weighed inputs combine." },
+          "inputs": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "object", "required": ["set", "column", "weight", "fn"], "properties": {
+            "set": { "$ref": "#/components/schemas/Id" },
+            "column": { "type": "string", "description": "A column of that set's result." },
+            "weight": { "type": "number" },
+            "fn": { "type": "string", "enum": ["raw", "normalise", "invert", "log", "threshold", "band"], "description": "The transfer applied first; `lo` and `hi` are its bounds." },
+            "lo": { "type": "number" },
+            "hi": { "type": "number" },
+            "meshes": { "type": "array", "items": { "type": "string" }, "description": "Only the receivers at or under these prim paths (absent: all)." }
+          } } },
+          "look": { "$ref": "#/components/schemas/Look" }
+        }
+      },
+      "SavedSet": {
+        "description": "What `/sets` stores: an analysis set or a combined view.",
+        "oneOf": [{ "$ref": "#/components/schemas/AnalysisSet" }, { "$ref": "#/components/schemas/CombinedView" }],
+        "discriminator": { "propertyName": "kind", "mapping": { "set": "#/components/schemas/AnalysisSet", "combined": "#/components/schemas/CombinedView" } }
+      },
+      "ReportSpec": {
+        "type": "object",
+        "description": "A report as the web app saves it (`web/src/report/spec.ts`): the models and the run each had at save time, statistics, a summary and blocks. The app checks it; the server stores it as it comes.",
+        "required": ["id", "title", "created", "updated", "models", "summary", "blocks"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/Id" },
+          "title": { "type": "string" },
+          "created": { "type": "string", "format": "date-time" },
+          "updated": { "type": "string", "format": "date-time" },
+          "models": { "type": "array", "items": { "type": "object", "required": ["model", "file", "variants", "receivers", "shades", "runKey"], "properties": {
+            "model": { "type": "string", "enum": ["A", "B", "C", "D"] },
+            "file": { "type": "string" },
+            "open": { "type": "array", "items": { "type": "string" }, "description": "The paths `open_model` opened it from." },
+            "variants": { "type": "object", "description": "Prim path -> variant set -> the variant chosen (the file's own are not listed)." },
+            "receivers": { "type": "array", "items": { "type": "string" } },
+            "shades": { "type": "array", "items": { "type": "string" } },
+            "noShade": { "type": "array", "items": { "type": "string" }, "description": "Receivers that cast no shade." },
+            "runKey": { "type": "string", "description": "The run's settings, so a later generation can tell whether the results are still those the text was written on." }
+          } } },
+          "ranges": { "type": "object", "description": "Per quantity shown, its problem range `{lo, hi}` at save." },
+          "setup": { "$ref": "#/components/schemas/AnalysisSet" },
+          "stats": { "type": "array", "items": { "type": "object", "required": ["label", "metric", "column", "model"], "properties": { "label": { "type": "string" }, "metric": { "type": "string", "enum": ["mean", "median", "p10", "p90", "min", "max", "below", "within", "above", "area", "total", "elements"] }, "column": { "type": "string" }, "model": { "type": "string" }, "path": { "type": "string" } } } },
+          "summary": { "type": "string" },
+          "blocks": { "type": "array", "description": "`text` {title?, text}, `chart` {chart, caption}, `view` {name, view, column, caption, section?}, `table` {column, by?, parts?, metrics, caption}.", "items": { "type": "object", "required": ["type"], "properties": {
+            "type": { "type": "string", "enum": ["text", "chart", "view", "table"] }, "title": { "type": "string" }, "text": { "type": "string" }, "caption": { "type": "string" },
+            "chart": { "type": "object", "description": "As `update_settings` takes a chart, models as letters." }, "saved": { "type": "object", "description": "The chart as saved (the app's Reset)." },
+            "name": { "type": "string" }, "view": { "type": "object", "description": "A saved camera." }, "near": { "type": "number" }, "aspect": { "type": "number" }, "section": { "type": "object" },
+            "column": { "type": ["string", "null"] }, "by": { "type": "string", "enum": ["parts", "mesh", "facing"] }, "parts": { "type": "array", "items": { "type": "string" } }, "metrics": { "type": "array", "items": { "type": "string" } }
+          } } },
+          "notes": { "type": "string" }
         }
       }
     }
