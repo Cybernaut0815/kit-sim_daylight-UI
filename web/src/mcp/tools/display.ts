@@ -12,7 +12,7 @@ import { stageView } from '../../lib/views';
 import { columnOf } from '../../sets/combine';
 import type { Model, Tab } from '../../store';
 import { labelScenes, selectionFill } from '../../viewer/Viewer';
-import { boundsOf, type Display } from '../../viewer/Views';
+import { boundsOf, type Display, type Sky } from '../../viewer/Views';
 import { capture, type Shot } from '../../viewer/capture';
 import { labelsOf } from '../../viewer/labels';
 import { exclusive, type CallToolResult } from '../bridge';
@@ -29,7 +29,7 @@ export const display = (x: Ctl) => {
   const t = tabOf(x, x.ui.tab), slot = x.state.active;
   return {
     analysis: x.ui.tab, ...(x.ui.tab === 'combined' ? { id: x.combined.view?.id ?? null } : {}), active: letter(slot), column: t.shown, colourBy: t.colourBy,
-    labels: x.ui.labels, display: x.ui.display, highlight: x.state.bins.length ? x.state.bins : null,
+    labels: x.ui.labels, display: x.ui.display, sky: x.ui.sky, highlight: x.state.bins.length ? x.state.bins : null,
     sunPath: x.ui.sunPath, sunScale: x.sunScale, sunAround: x.sunAround[slot] ?? null,
     fieldPreview: { show: x.field.shown, scale: x.field.scale, density: x.field.density, around: x.field.around[slot] ?? null },
     theme: x.theme, split: x.ui.split, link: x.ui.link, auto: x.ui.auto, section: x.section,
@@ -154,13 +154,21 @@ export function shotSize(width: number, height: number): { width: number; height
 }
 /** One MessageChannel task (not throttled in a hidden tab, unlike timers). */
 const tick = () => new Promise<void>((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(null); });
+/** Waits until each of `els` shows its sky behind the stage: the viewer loads the HDRI after the sky is set, and a shot
+ *  before that would show the plain background. */
+async function skyIn(els: readonly UsdViewerElement[], sky: Sky): Promise<void> {
+  for (const end = performance.now() + 15e3; els.some((el) => !el.three.scene.background);) {
+    if (performance.now() > end) throw new Error(`sky: the ${sky} sky did not load within 15 s`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 /** How the views look for shots: the tab (its analysis' results and colours; left out: the one shown), the column by
- *  name, the colouring, the display mode, highlighted value ranges, the sun path and its fit, the field preview, the
- *  ground grid (the overlay frame() skips), a quantity's colour scale Min and Max (`pin`), no bin highlight and no
+ *  name, the colouring, the display mode, the sky, highlighted value ranges, the sun path and its fit, the field preview,
+ *  the ground grid (the overlay frame() skips), a quantity's colour scale Min and Max (`pin`), no bin highlight and no
  *  selection fill (`clean`), a section of their own (model metres; null: none; left out: the user's). */
 export interface Look {
-  tab?: Tab; column?: string; colourBy?: 'plain' | 'value'; display?: Display; bins?: readonly [number, number][]; sunPath?: boolean; sunAround?: PerSlot; field?: Partial<FieldPreview>;
+  tab?: Tab; column?: string; colourBy?: 'plain' | 'value'; display?: Display; sky?: Sky; bins?: readonly [number, number][]; sunPath?: boolean; sunAround?: PerSlot; field?: Partial<FieldPreview>;
   grid?: boolean; pin?: { quantity: string; min: number; max: number }; clean?: boolean; section?: Section | null;
 }
 let staging = 0; // looks staged now
@@ -179,7 +187,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     const ref = t.models.find((m) => m.result)?.result;
     if (!ref?.columns.includes(look.column)) throw new Error(`column: ${look.column} is not in the first result's columns (${ref?.columns.join(', ') ?? 'no result'}), which the ${tab === 'views' ? 'View analysis' : 'Daylight'} tab shows; run again`);
   }
-  const was = { column: t.column, colourBy: t.colourBy, display: x.ui.display, sunPath: x.ui.sunPath, sunAround: x.sunAround, field: x.field, bin: x.state.bin, bins: x.state.bins, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
+  const was = { column: t.column, colourBy: t.colourBy, display: x.ui.display, sky: x.ui.sky, sunPath: x.ui.sunPath, sunAround: x.sunAround, field: x.field, bin: x.state.bin, bins: x.state.bins, scale: look.pin && x.state.settings.viz.scales[look.pin.quantity], tab: x.ui.tab };
   const grids = look.grid === undefined ? [] : slots.flatMap((k) => x.viewer(k).el.three.overlay.children.filter((o) => o.userData.frame === false).map((o) => [o, o.visible] as const));
   const fill = look.clean && slots.length ? x.viewer(slots[0]).el : null; // the selection fill: one material for every view
   // the shot's section goes straight to its views, without the gizmo (a drag would edit the shot's); after it they get the
@@ -194,6 +202,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (look.column !== undefined) t.dispatch({ type: 'COLUMN', column: look.column });
       if (look.colourBy) t.dispatch({ type: 'COLOUR_BY', colourBy: look.colourBy });
       if (look.display) x.setUi((u) => ({ ...u, display: look.display! }));
+      if (look.sky) x.setUi((u) => ({ ...u, sky: look.sky! }));
       if (look.sunPath !== undefined) x.setUi((u) => ({ ...u, sunPath: look.sunPath! }));
       if (look.sunAround) x.setSunAround(look.sunAround);
       if (look.field) x.setField(look.field);
@@ -209,6 +218,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
     }
     // one MessageChannel task lets Viewer.tsx's effects run (its usd.paint call); capture() then waits for the paint
     await tick();
+    if (look.sky && look.sky !== 'none') await skyIn(slots.map((k) => x.viewer(k).el), look.sky);
     return await fn();
   } finally {
     staging--;
@@ -223,6 +233,7 @@ export async function staged<T>(c: () => Ctl, slots: readonly number[], look: Lo
       if (look.column !== undefined) back({ type: 'COLUMN', column: was.column });
       if (look.colourBy) back({ type: 'COLOUR_BY', colourBy: was.colourBy });
       if (look.display) z.setUi((u) => ({ ...u, display: was.display }));
+      if (look.sky) z.setUi((u) => ({ ...u, sky: was.sky }));
       if (look.sunPath !== undefined) z.setUi((u) => ({ ...u, sunPath: was.sunPath }));
       if (look.sunAround) z.setSunAround(was.sunAround);
       if (look.field) z.setField(was.field);
@@ -251,7 +262,7 @@ export const DISPLAY_HANDLERS: Record<string, Handler> = {
     return exclusive(() => {
       const x = c(), tab = lookTab(x, a), t = tabOf(x, tab), slot = a.active ? modelOf(x, a.active, 'active').slot : x.state.active;
       const bins = a.highlight === undefined ? undefined : binsOf(a.highlight), around = aroundArg(x, [slot], a.sunAround), field = fieldArg(x, [slot], a.fieldPreview);
-      const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto', 'labels', 'display'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
+      const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto', 'labels', 'display', 'sky'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
       const section = a.section && sectionArg(x, a.section, a.active); // a view's look: no run key holds it, results stay fresh
       flushSync(() => {
         if (tab !== x.ui.tab) { // as a tab clicked: the probe and the bin highlight belong to the old tab's column
@@ -321,7 +332,7 @@ export const DISPLAY_HANDLERS: Record<string, Handler> = {
       const words = describe(section === undefined ? x.section : section ?? NONE), labels: boolean = a.labels ?? x.ui.labels;
       // the shot's own look, restored after it
       const look: Look = {
-        tab, column: a.id !== undefined ? columnOf({ id: a.id }) : a.column, colourBy: a.colourBy, display: a.display, sunPath: a.sunPath, grid: a.grid, section,
+        tab, column: a.id !== undefined ? columnOf({ id: a.id }) : a.column, colourBy: a.colourBy, display: a.display, sky: a.sky, sunPath: a.sunPath, grid: a.grid, section,
         bins: a.highlight === undefined ? undefined : binsOf(a.highlight), sunAround: aroundArg(x, slots, a.sunAround), field: fieldArg(x, slots, a.fieldPreview),
       };
       return staged(c, slots, look, async () => {

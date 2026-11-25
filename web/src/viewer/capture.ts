@@ -2,9 +2,10 @@
 // more, through a camera of its own (the given view, or the view's current one, at the shot's aspect), into a render
 // target of its own, and reads it back. The user's camera, canvas and linked views stay as they are, and nothing waits
 // for an animation frame. Tone mapping and sRGB are the screen's (three's output target), so value colours equal the
-// legend's; the transparent background becomes white. Near and far follow the viewer's rule for the shot's eye
-// (USD_WebViewer viewport.ts fitClipPlanes); `near` overrides near: a cutaway that clips what stands in front.
-// `labels`: value labels for the shot's camera (labels.ts), drawn over the image as the views' tooltips look.
+// legend's; the transparent background becomes white, a sky (the Display menu's) stays as the view shows it. Near and far
+// follow the viewer's rule for the shot's eye (USD_WebViewer viewport.ts fitClipPlanes); `near` overrides near: a cutaway
+// that clips what stands in front.
+// `labels`: value labels for the shot's camera (labels.ts), drawn over the image as the views' chips look.
 // No import of ./usd.ts: the node tests import this module.
 import { Box3, OrthographicCamera, PerspectiveCamera, RenderTarget, Sphere } from 'three';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
@@ -15,17 +16,42 @@ export interface Shot {
   width: number; height: number; view?: ViewState; near?: number; type?: 'image/png' | 'image/jpeg'; quality?: number;
   labels?: (camera: PerspectiveCamera | OrthographicCamera) => readonly Label[];
 }
-/** Labels as the views' kit-ui tooltips draw them: small text on the inverse surface, centred on their cells. */
+/** The value labels' font (app.css .value-label): the label size in the primary face. */
+export function labelFont(): string {
+  const style = getComputedStyle(document.documentElement), px = parseFloat(style.getPropertyValue('--fs-label')) || 11;
+  return `${px}px ${style.getPropertyValue('--font-primary').trim() || 'sans-serif'}`;
+}
+let measure: OffscreenCanvasRenderingContext2D | null = null;
+const cells = new Map<string, [number, number]>();
+/** The label grid's cell for values in `unit`, in px: a wide value's chip (padding and hairline as .value-label) and
+ *  room round it; measured once per unit and font. */
+export function labelCell(unit: string): [number, number] {
+  const font = labelFont(), key = `${font}|${unit}`;
+  let cell = cells.get(key);
+  if (!cell) {
+    measure ??= new OffscreenCanvas(1, 1).getContext('2d')!;
+    measure.font = font;
+    cell = [Math.ceil(measure.measureText(unit ? `-8.888 ${unit}` : '-8.888').width) + 10 + 12, 24];
+    cells.set(key, cell);
+  }
+  return cell;
+}
+/** Labels as the views draw them (app.css .value-label): small strong text on the first surface in a hairline, centred
+ *  on their cells. */
 function drawLabels(g: OffscreenCanvasRenderingContext2D, labels: readonly Label[]) {
-  const font = getComputedStyle(document.documentElement).getPropertyValue('--font-primary').trim() || 'sans-serif';
-  g.font = `12px ${font}`;
+  const font = labelFont(), leading = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leading-body')) || 1.2;
+  const h = Math.round(parseFloat(font) * leading) + 4; // the line, 1 px padding and a hairline above and below
+  g.font = font;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  const back = cssVar('--text-strong', '#111'), text = cssVar('--bg-surface-1', '#fff');
+  g.lineWidth = 1;
+  const back = cssVar('--bg-surface-1', '#fff'), edge = cssVar('--border-subtle', '#ccc', '--bg-surface-1'), text = cssVar('--text-strong', '#111');
   for (const l of labels) {
-    const w = g.measureText(l.text).width + 12, h = 20;
+    const w = Math.ceil(g.measureText(l.text).width) + 10, x = Math.round(l.x - w / 2), y = Math.round(l.y - h / 2);
     g.fillStyle = back;
-    g.fillRect(l.x - w / 2, l.y - h / 2, w, h);
+    g.fillRect(x, y, w, h);
+    g.strokeStyle = edge;
+    g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     g.fillStyle = text;
     g.fillText(l.text, l.x, l.y);
   }

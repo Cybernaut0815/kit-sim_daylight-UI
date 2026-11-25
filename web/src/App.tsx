@@ -47,7 +47,7 @@ import { TAGGED, initialState, loadRole, parseSettings, reducer, serializeSettin
 import { Icon, LETTERS, Segmented, Tag, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
-import { DISPLAYS, DisplayMenu, DownloadMenu, ReportsMenu, SectionMenu, ViewsMenu, type Display } from './viewer/Views';
+import { DISPLAYS, DisplayMenu, DownloadMenu, ReportsMenu, SKIES_SHOWN, SectionMenu, ViewsMenu, type Display, type Sky } from './viewer/Views';
 import type { SunView } from './viewer/sunpath';
 import { DENSITY, type Density, type FieldView } from './viewer/viewfield';
 import { viewer } from './viewer/usd';
@@ -55,15 +55,15 @@ import { viewer } from './viewer/usd';
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
 // the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3; every model alike), two or three views
-// side by side or stacked, linked cameras, the analysis shown (its tab), the views' display mode and value labels (the
-// Display menu).
-const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab, display: 'shaded' as Display, labels: false }, MIN_W = 240, MAX_W = 640;
+// side by side or stacked, linked cameras, the analysis shown (its tab), the views' display mode, sky and value labels
+// (the Display menu).
+const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab, display: 'shaded' as Display, sky: 'none' as Sky, labels: false }, MIN_W = 240, MAX_W = 640;
 export type UiPrefs = typeof UI;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
 const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_KEY); return m === 'light' || m === 'dark' ? m : 'auto'; } catch { return 'auto'; } };
-const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' || p.tab === 'combined' ? p.tab : 'daylight', labels: p.labels === true, display: DISPLAYS.some(([d]) => d === p.display) ? p.display : UI.display }; } catch { return UI; } };
+const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' || p.tab === 'combined' ? p.tab : 'daylight', labels: p.labels === true, display: DISPLAYS.some(([d]) => d === p.display) ? p.display : UI.display, sky: SKIES_SHOWN.some(([k]) => k === p.sky) ? p.sky : UI.sky }; } catch { return UI; } };
 
 /** A view's model as the app holds it: the viewer's object per row id, the model's own names by prim path (glb / gltf /
  *  obj), a load in progress or its problem, and the open counter (bumped per opened model: the tree resets and the camera
@@ -630,7 +630,7 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
-                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={ui.tab === 'daylight' ? sunView : null} around={sunAround[m.slot] ?? null} field={views ? fieldView : null} fieldAround={fieldAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display} labels={ui.labels}
+                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={ui.tab === 'daylight' ? sunView : null} around={sunAround[m.slot] ?? null} field={views ? fieldView : null} fieldAround={fieldAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display} sky={ui.sky} labels={ui.labels}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
@@ -649,7 +649,7 @@ export default function App() {
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={savedViews} reports={reports} onSave={(sv) => setSavedViews((l) => [...l, sv])} onRemove={(id) => setSavedViews((l) => l.filter((sv) => sv.id !== id))} onReportView={onReportView} onSection={(sc) => onSection(sc, null)} />
                     <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
-                    <DisplayMenu value={ui.display} onChange={(display) => setUi((u) => ({ ...u, display }))} labels={ui.labels} onLabels={(labels) => setUi((u) => ({ ...u, labels }))} />
+                    <DisplayMenu value={ui.display} onChange={(display) => setUi((u) => ({ ...u, display }))} sky={ui.sky} onSky={(sky) => setUi((u) => ({ ...u, sky }))} labels={ui.labels} onLabels={(labels) => setUi((u) => ({ ...u, labels }))} />
                     {!combined && <SetsMenu tool={tool} sets={tabSets} open={openSet} note={setNote?.tool === tool ? setNote.lines : null} error={sets.error} saving={sets.saving} onShow={sets.refresh} onOpen={onOpenSet} onSave={(name) => onSaveSet(name, tool)} onUpdate={(x) => onSaveSet(x.name, tool, x)} models={openModels} onCopy={onCopySet} />}
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && A.cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports (daylight's); a generation's failure shows as its lastError */}

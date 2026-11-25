@@ -411,7 +411,7 @@
     {
       "name": "set_display",
       "title": "Set the display",
-      "description": "Change what the views show (the app bar, Results panel, Display and Section menus). Only given fields change; none touches a run or makes results stale. analysis: the tab shown and whose column and colourBy change (combined: id picks the view). Also the active model, labels (values on the surfaces), display mode, highlight (value ranges kept bright), sun path (sunPath, sunScale, sunAround), the View analysis' fieldPreview, theme, split, link, auto run, and section: clipping planes and boxes replacing the whole section ({planes: [], boxes: []} clears it). Returns the display, section boxes as footprints.",
+      "description": "Change what the views show (the app bar, Results panel, Display and Section menus). Only given fields change; none touches a run or makes results stale. analysis: the tab shown and whose column and colourBy change (combined: id picks the view). Also the active model, labels (values on the surfaces), display mode, sky, highlight (value ranges kept bright), sun path (sunPath, sunScale, sunAround), the View analysis' fieldPreview, theme, split, link, auto run, and section: clipping planes and boxes replacing the whole section ({planes: [], boxes: []} clears it). Returns the display, section boxes as footprints.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -422,6 +422,7 @@
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "value (result colours) or plain (the model's own look)." },
           "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces (coloured by value only)." },
           "display": { "type": "string", "enum": ["shaded", "shaded-wire", "shaded-selwire", "plain", "plain-wire", "plain-selwire", "wire"], "description": "How the views draw the model: shaded (its materials) or plain grey, with every edge (-wire) or the selection's (-selwire), or wireframe; result colours show in each." },
+          "sky": { "type": "string", "enum": ["none", "blue-sky", "sunset"], "description": "Behind the model: none (the theme's colour; white in shots) or an HDRI sky that also lights it; result colours stay the legend's." },
           "highlight": { "type": ["array", "null"], "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "maxItems": 32, "description": "Value ranges [lo, hi] in the column's unit kept bright, the rest faded (as selected histogram bars); null or [] clears; a run clears it." },
           "sunPath": { "type": "boolean", "description": "Show the sun path around the model." },
           "sunScale": { "type": "number", "minimum": 0.25, "maximum": 4, "description": "Sun path size over the fitted one." },
@@ -615,6 +616,7 @@
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "value (result colours) or plain (the model's own look)." },
           "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces (coloured by value only); default the Display menu's." },
           "display": { "type": "string", "enum": ["shaded", "shaded-wire", "shaded-selwire", "plain", "plain-wire", "plain-selwire", "wire"], "description": "How the views draw the model: shaded (its materials) or plain grey, with every edge (-wire) or the selection's (-selwire), or wireframe; result colours show in each." },
+          "sky": { "type": "string", "enum": ["none", "blue-sky", "sunset"], "description": "Behind the model: none (the theme's colour; white in shots) or an HDRI sky that also lights it; result colours stay the legend's." },
           "highlight": { "type": ["array", "null"], "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "maxItems": 32, "description": "Value ranges [lo, hi] in the column's unit kept bright, the rest faded (as selected histogram bars); null or [] clears; a run clears it." },
           "sunPath": { "type": "boolean", "description": "Draw the sun path; default as shown." },
           "sunAround": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^/" }, "description": "Prims of each model shot the sun path stands on and encloses; null or []: the whole model; default as shown." },

@@ -22,10 +22,12 @@
 /* the sun-path labels over the 3D view (three.js CSS2DRenderer): chart text that never takes the pointer; z-index 0
    keeps the renderer's per-label z-order below the readout and the run bar */
 .viewport__labels { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-/* the value labels over the 3D view (viewer/labels.ts): kit-ui tooltips JS places at their cells, never taking the
-   pointer, below the readout and the run bar */
+/* the value labels over the 3D view (viewer/labels.ts): the floating readout's look, smaller (a value and its unit), JS
+   places each at its cell; never taking the pointer, below the readout and the run bar. capture.ts draws shots' alike. */
 .viewport__values { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-.viewport__values > .tooltip { position: absolute; inset-block-start: 0; inset-inline-start: 0; white-space: nowrap; }
+.value-label { position: absolute; inset-block-start: 0; inset-inline-start: 0; white-space: nowrap; padding: 1px var(--space-1);
+  border: 1px solid var(--border-subtle); background: var(--bg-surface-1); color: var(--text-strong); font-size: var(--fs-label);
+  line-height: var(--leading-body); font-variant-numeric: tabular-nums; }
 .sunpath-label { font-size: var(--fs-small); color: var(--chart-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sunpath-label--strong { color: var(--chart-text-strong); }
 .sunpath-label--at { padding: 0 0 var(--space-1) var(--space-2); } /* anchored by its corner at a handle: up and right of it */

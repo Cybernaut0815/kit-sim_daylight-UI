@@ -44,7 +44,7 @@ describe('the tool list', () => {
   it("screenshot's look fields are set_display's (the same types, values and items); its section is set_display's form, or null", () => {
     const strip = (v: unknown): unknown => (Array.isArray(v) ? v.map(strip) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'description').map(([k, x]) => [k, strip(x)])) : v);
     const shot = schema('screenshot').properties!, shown = schema('set_display').properties!;
-    for (const k of ['analysis', 'id', 'column', 'colourBy', 'labels', 'display', 'highlight', 'sunPath', 'sunAround', 'fieldPreview']) expect(strip(shot[k]), k).toEqual(strip(shown[k]));
+    for (const k of ['analysis', 'id', 'column', 'colourBy', 'labels', 'display', 'sky', 'highlight', 'sunPath', 'sunAround', 'fieldPreview']) expect(strip(shot[k]), k).toEqual(strip(shown[k]));
     expect(shot.section.type).toEqual(['object', 'null']);
     expect(shot.section.properties).toBeUndefined(); // the handler checks it against SECTION
     expect(SECTION).toBe(shown.section);
@@ -368,11 +368,11 @@ describe('the View analysis (analysis views)', () => {
    *  run lands RESULT (or the problem without a receiver). Also the tabs the app was set to and the downloads. */
   function app() {
     const rows = ['/Site/Facade', '/Site/Park', '/Site/Block'].map((path): ObjectRow => ({ id: path.slice(6).toLowerCase(), name: path.slice(6), path, tris: 2, verts: 4, role: 'none' }));
-    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = { tab: 'daylight' as Tab, labels: false, display: 'shaded' };
+    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = { tab: 'daylight' as Tab, labels: false, display: 'shaded', sky: 'none' };
     let sunAround: Ctl['sunAround'] = {}, field: Ctl['field'] = { shown: false, scale: 1, density: 'some', around: {} };
     const tabs: Tab[] = [], downloads: unknown[] = [], dispatch = (a: Action) => { state = reducer(state, a); };
     const views = (a: Action) => dispatch(TAGGED.has(a.type) ? ({ ...a, tab: 'views' } as Action) : a);
-    const el = { stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, -20, 3], target: [5, 0, 3], fov: 45, projection: 'perspective', height: 1 }, three: { objectsFor: () => [], overlay: { children: [] } } };
+    const el = { stage: { metersPerUnit: 1, upAxis: 'Z' }, view: { eye: [12, -20, 3], target: [5, 0, 3], fov: 45, projection: 'perspective', height: 1 }, three: { objectsFor: () => [], overlay: { children: [] }, scene: { background: {} } } }; // a sky in at once
     const analysis = (tool: Tool) => {
       const v = tool === 'views', models = v ? state.models.map(swapModel) : state.models, column = v ? state.viewAnalysis.column : state.column, first = models.find((m) => m.result)?.result;
       return {
@@ -464,8 +464,9 @@ describe('the View analysis (analysis views)', () => {
     const { c } = app();
     await ran(c);
     const all = ['/Site/Facade', '/Site/Park', '/Site/Block'];
-    const d = await json(c, 'set_display', { highlight: [[0.5, 0.7], [0, 0.2], [0.1, 0.3]], display: 'plain-wire', sunAround: ['/Site'], fieldPreview: { show: true, scale: 2, density: 'many', around: ['/Site'] } });
+    const d = await json(c, 'set_display', { highlight: [[0.5, 0.7], [0, 0.2], [0.1, 0.3]], display: 'plain-wire', sky: 'blue-sky', sunAround: ['/Site'], fieldPreview: { show: true, scale: 2, density: 'many', around: ['/Site'] } });
     expect([d.highlight, c().state.bins, d.display, c().ui.display]).toEqual([[[0, 0.3], [0.5, 0.7]], [[0, 0.3], [0.5, 0.7]], 'plain-wire', 'plain-wire']);
+    expect([d.sky, c().ui.sky]).toEqual(['blue-sky', 'blue-sky']);
     expect([d.sunAround, c().sunAround]).toEqual([all, { 0: all }]);
     expect(d.fieldPreview).toEqual({ show: true, scale: 2, density: 'many', around: ['/Site/Facade'] }); // the View analysis' receivers under /Site
     expect(await call(c, 'set_display', { highlight: [[1, 1]] })).toBe('highlight[0]: [lo, hi] with lo < hi');
@@ -473,8 +474,9 @@ describe('the View analysis (analysis views)', () => {
     expect(await call(c, 'set_display', { fieldPreview: { around: ['/Site/Park'] } })).toBe('fieldPreview.around: no View analysis receiver at or under /Site/Park in model A; find prims with model_tree');
     expect(await call(c, 'set_display', { fieldPreview: { scale: 9 } })).toMatch(/^fieldPreview\.scale: /);
     expect(await call(c, 'set_display', { display: 'xray' })).toMatch(/^display: one of shaded, /);
-    await call(c, 'screenshot', { highlight: null, display: 'wire', sunAround: null, fieldPreview: { show: false } });
-    expect([c().state.bins, c().ui.display, c().sunAround, c().field.shown]).toEqual([[[0, 0.3], [0.5, 0.7]], 'plain-wire', { 0: all }, true]); // the shot's own, then the app's back
+    expect(await call(c, 'set_display', { sky: 'night' })).toMatch(/^sky: one of none, blue-sky, sunset/);
+    await call(c, 'screenshot', { highlight: null, display: 'wire', sky: 'sunset', sunAround: null, fieldPreview: { show: false } });
+    expect([c().state.bins, c().ui.display, c().ui.sky, c().sunAround, c().field.shown]).toEqual([[[0, 0.3], [0.5, 0.7]], 'plain-wire', 'blue-sky', { 0: all }, true]); // the shot's own, then the app's back
     const off = await json(c, 'set_display', { highlight: null, sunAround: null, fieldPreview: { show: false, around: null } });
     expect([off.highlight, off.sunAround, off.fieldPreview.show, off.fieldPreview.around, c().state.bins, c().sunAround]).toEqual([null, null, false, null, [], {}]);
   });

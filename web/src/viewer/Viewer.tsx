@@ -13,15 +13,17 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import type { UsdSessionEventMap, UsdViewerElement } from 'usd-viewer';
 import { cssVar } from '../lib/cssVar';
 import { paintOf, type Scale } from '../lib/gradients';
+import { unitFor } from '../lib/result';
 import { drawnValues } from '../lib/topology';
 import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
+import { labelCell } from './capture';
 import { cancelLabels, elementOf, enqueue, sampler, type LabelScene } from './labels';
 import { candidatesOf, sampleEyes } from '../lib/viewfield';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 import { createViewField, type FieldView, type ViewField } from './viewfield';
-import type { Display } from './Views';
+import type { Display, Sky } from './Views';
 
 const solid = (name: string) => cssVar(name, '#000', '--bg-surface-2'); // opaque over the viewport background
 /** The viewers' selection fill (one material for all of them): the accent, fainter over result colours. */
@@ -62,6 +64,7 @@ interface Props {
   section: string | null; // the section shown, in words (null: none)
   analysis?: Tab; // whose roles `objects` carry (the scene info's words)
   display: Display; // the viewer's display mode (the Display menu), with results or without
+  sky?: Sky; // what fills the background (the Display menu's Sky)
   labels?: boolean; // value labels on the painted receivers (the Display menu's "Values on the surfaces")
 }
 
@@ -92,7 +95,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, fieldAround = null, section, analysis, display, labels = false }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, fieldAround = null, section, analysis, display, sky = 'none', labels = false }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -384,6 +387,10 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.highlight = selectionFill(!!byValue);
   }, [!!byValue, theme, display]); // eslint-disable-line react-hooks/exhaustive-deps -- the view, not the result
 
+  // The sky of the Display menu: the viewer's HDRI behind (and lighting) the stage, or its lighting in front of the
+  // transparent background (the page's token colour).
+  useEffect(() => { usd.sky = sky === 'none' ? 'colour' : sky; }, [usd, sky]);
+
   // Paint: the viewer draws the receivers from their values, the colours from the scale and the hovered bin as a style
   // of uniforms (set first: the paint's first frame has it). The same receivers and column again (a new scale, range or
   // bin) only restyle. A receiver's rows are its own faces or points (lib/topology.ts): a face's value goes to each of
@@ -413,14 +420,16 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
 
   // Value labels (labels.ts): the label scene for this view's camera and size while it paints values (the agent's shots
   // take it whatever the toggle); with the toggle on, the layer hides while the camera moves (one write per move) and
-  // fills in idle slices 200 ms after it rests, again on a new result, column, section, rows or meshes.
+  // fills in idle slices 100 ms after it rests, again on a new result, column, section, rows or meshes.
   const valuesEl = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const layer = valuesEl.current!, owner = layer;
     const role = new Map(objects.map((o) => [o.id, o.role]));
+    const name = byValue?.columns[column], unit = name ? unitFor(name).value : '';
     const sceneOf = (camera: THREE.Camera, width: number, height: number): LabelScene | null => (!byValue ? null : {
       camera, width, height, meshes: [...meshes.values()].filter((o) => o.visible), result: byValue, column, keeps: (q) => usd.three.keeps(q),
       receiverOf: (o) => { const id = byObject.get(o); return id && role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1; },
+      unit, cell: labelCell(unit),
     });
     labelScenes.set(usd, sceneOf);
     layer.replaceChildren();
@@ -443,14 +452,15 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       layer.replaceChildren();
       layer.hidden = false;
       enqueue(owner, (until) => {
-        const done = sm.step(until);
+        const done = sm.step(until), chips = document.createDocumentFragment();
         for (; drawn < sm.labels.length; drawn++) {
           const l = sm.labels[drawn], d = document.createElement('div');
-          d.className = 'tooltip';
+          d.className = 'value-label';
           d.textContent = l.text;
-          d.style.transform = `translate(${l.x}px, ${l.y}px) translate(-50%, -50%)`; // JS owns a tooltip's place
-          layer.append(d);
+          d.style.transform = `translate(${l.x}px, ${l.y}px) translate(-50%, -50%)`; // JS owns a label's place
+          chips.append(d);
         }
+        layer.append(chips); // one layout per slice
         return done;
       });
     };
@@ -460,11 +470,11 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
       if (!layer.hidden) layer.hidden = true;
       cancelLabels(owner);
       clearTimeout(timer);
-      timer = window.setTimeout(start, 200);
+      timer = window.setTimeout(start, 100);
     };
     moved();
     usd.three.beforeRender.add(onFrame);
-    timer = window.setTimeout(start, 200);
+    timer = window.setTimeout(start, 100);
     return () => { clearTimeout(timer); cancelLabels(owner); usd.three.beforeRender.delete(onFrame); labelScenes.delete(usd); layer.replaceChildren(); };
   }, [labels, byValue, column, objects, meshes, byObject, recv, section, usd]);
 

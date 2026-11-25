@@ -230,12 +230,17 @@ export const DISPLAYS: readonly (readonly [Display, string])[] = [
   ['plain', 'Plain'], ['plain-wire', 'Plain + wire'], ['plain-selwire', 'Plain + selection wire'], ['wire', 'Wireframe'],
 ];
 
+/** What fills the views behind the model: the theme's background colour, or one of the viewer's HDRI skies (USD_WebViewer
+ *  public/skies), which also lights the model; result colours are unlit, so they stay the legend's. */
+export type Sky = 'none' | 'blue-sky' | 'sunset';
+export const SKIES_SHOWN: readonly (readonly [Sky, string])[] = [['none', 'Plain colour'], ['blue-sky', 'Blue sky'], ['sunset', 'Sunset']];
+
 /** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw in each (with
  *  their edges in the wire modes).
- *  `labels`: the values written on the painted surfaces (viewer/labels.ts). */
-export function DisplayMenu({ value, onChange, labels, onLabels }: { value: Display; onChange: (d: Display) => void; labels: boolean; onLabels: (on: boolean) => void }) {
+ *  `sky`: what fills the background (Sky). `labels`: the values written on the painted surfaces (viewer/labels.ts). */
+export function DisplayMenu({ value, onChange, sky, onSky, labels, onLabels }: { value: Display; onChange: (d: Display) => void; sky: Sky; onSky: (s: Sky) => void; labels: boolean; onLabels: (on: boolean) => void }) {
   return (
-    <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges. Result colours always show, with their edges in the wire modes">
+    <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges, in front of a plain colour or a sky. Result colours always show, with their edges in the wire modes">
       {() => (
         <>
           {DISPLAYS.map(([d, label]) => (
@@ -245,7 +250,17 @@ export function DisplayMenu({ value, onChange, labels, onLabels }: { value: Disp
             </label>
           ))}
           <div className="menu__separator" role="separator" />
-          <label className="menu__item" title="Writes the values on the painted surfaces where nothing covers them, one per face or point, at most 150 a view; they show once the camera rests">
+          <div className="menu__section" id="display-sky">Sky</div>
+          <div role="radiogroup" aria-labelledby="display-sky">
+            {SKIES_SHOWN.map(([k, label]) => (
+              <label key={k} className="menu__item" title={k === 'none' ? "The theme's background colour behind the model" : `${label} behind the model, also lighting it; result colours stay as the legend shows them`}>
+                <input className="menu__check" type="radio" name="display-sky" value={k} checked={sky === k} onChange={() => onSky(k)} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="menu__separator" role="separator" />
+          <label className="menu__item" title="Writes each value with its unit on the painted surfaces where nothing covers them, one per face or point, at most 150 a view; they show once the camera rests">
             <input className="menu__check" type="checkbox" id="display-labels" checked={labels} onChange={(e) => onLabels(e.target.checked)} />
             <span>Values on the surfaces</span>
           </label>
