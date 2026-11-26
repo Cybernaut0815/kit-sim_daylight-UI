@@ -41,7 +41,7 @@ export interface Ctl {
   shown: string | null; scale: Scale | null; domain: [number, number]; // the column every view shows, its colour scale, every model's data range
   exporting: boolean; exportError: { key: string; message: string } | null; // the last download's failure, by its result's run key
   onFiles: (slot: number, files: File[]) => Promise<void>; onRemove: (slot: number) => void;
-  onVariant: (slot: number, path: string, set: string, variant: string) => void; onSubdiv: (level: number) => void;
+  onVariant: (slot: number, path: string, set: string, variant: string) => void; onSubdiv: (level: number, override?: boolean) => void;
   onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRun: () => Promise<void>; onDownload: (format: Format, mode: ExportMode) => Promise<void>;
   // a row's mesh (model metres, Z up), built per call: take it once per mesh where it is read, never keep it. As drawn,

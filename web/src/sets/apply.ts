@@ -24,14 +24,18 @@ export type SetWeather = Omit<Settings['weather'], 'file'> & { file?: string };
 export interface SetLooks { quantities: Record<string, Look>; colors: Settings['viz']['colors'] }
 /**
  * One analysis' setup: every open model's roles and Materials edits, the tab's run settings, north, the site and weather
- * (Daylight), the result shown, every quantity's colours, the charts and the subdivision level. `look` (the shown
- * quantity's) is a set of an older version's, which also lacks the fields after it: the app keeps its own.
+ * (Daylight), the result shown, every quantity's colours, the charts and the subdivision level (`subdivOverride`: it
+ * also over the meshes' own levels). `look` (the shown quantity's) is a set of an older version's, which also lacks the
+ * fields after it: the app keeps its own.
  */
 export interface AnalysisSet {
   kind: 'set'; id: string; name: string; created: string; updated: string; tool: Tool;
   models: SetModel[]; settings: SetSettings; column: string; colourBy: 'plain' | 'value'; look?: Look;
-  north?: number; site?: Settings['site']; weather?: SetWeather; looks?: SetLooks; charts?: ChartSpec[]; subdiv?: number;
+  north?: number; site?: Settings['site']; weather?: SetWeather; looks?: SetLooks; charts?: ChartSpec[]; subdiv?: number; subdivOverride?: boolean;
 }
+/** A subdivision as the app holds it: the level for every model (0 the control cage, -1 auto, 1..3), and whether it
+ *  overrides the meshes' own levels (the file's or the Prims row's). */
+export interface Subdiv { level: number; override: boolean }
 /** How a model found its entry: its own (same letter and file), or its file's entry from a tab that now shows another
  *  file (the file reopened in another tab); `matched` of the entry's `total` paths are in the model. */
 export interface Match { entry: SetModel; how: 'same' | 'file'; matched: number; total: number }
@@ -63,11 +67,16 @@ export function matchText(m: Pick<Model, 'slot'>, match: Match | null): string {
   return `${L}: ${from}, ${match.matched} of ${match.total} meshes`;
 }
 
-/** The subdivision level set `set` runs at when it is not the app's `level` (null: it runs here). The set runner cannot
- *  refine the meshes of a set it does not open: opening it re-reads them at its level. */
-export const needsLevel = (set: Pick<AnalysisSet, 'subdiv'>, level: number): number | null => (set.subdiv !== undefined && set.subdiv !== level ? set.subdiv : null);
-/** A subdivision level in words, as the Model panel names it. */
-export const levelText = (level: number) => (level === -1 ? 'Auto' : level === 0 ? 'Off' : `Level ${level}`);
+/** The subdivision set `set` runs at when it is not the app's `now` (null: it runs here); a set without an override
+ *  takes the app's. The set runner cannot refine the meshes of a set it does not open: opening it re-reads them at its
+ *  subdivision. */
+export function needsLevel(set: Pick<AnalysisSet, 'subdiv' | 'subdivOverride'>, now: Subdiv): Subdiv | null {
+  if (set.subdiv === undefined) return null;
+  const want = { level: set.subdiv, override: set.subdivOverride ?? now.override };
+  return want.level !== now.level || want.override !== now.override ? want : null;
+}
+/** A subdivision level in words, as the Model panel names it, with its override. */
+export const levelText = (level: number, override = false) => `${level === -1 ? 'Auto' : level === 0 ? 'Off' : `Level ${level}`}${override ? ", over each mesh's own" : ''}`;
 
 /** Two models' Materials edits are the same. */
 export function sameOptics(a: Readonly<Record<string, OpticsEdit>>, b: Readonly<Record<string, OpticsEdit>>): boolean {

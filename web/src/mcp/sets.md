@@ -10,7 +10,7 @@ the app shares them. Their results stay in this browser session.
   roles (receivers and shades by prim path, a receiver's casts-shade flag, a View analysis target's group) and its
   Materials edits; the analysis' run settings (Daylight: sim and time; View analysis: view), north, the site and
   weather (Daylight; an uploaded EPW by its file name: opened elsewhere, weather asks for that file again), the column
-  it shows, the colours of every quantity, the charts and the subdivision level. Not in it: display switches,
+  it shows, the colours of every quantity, the charts and the subdivision level and override. Not in it: display switches,
   per-mesh refinements and the geometry. A set saved before these were kept leaves them as the app has them (app_state
   summary says "not kept").
 - save_set saves the app's setup now; its roles and settings change the set only, so several setups (a facade's

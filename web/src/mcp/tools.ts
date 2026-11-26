@@ -12,6 +12,7 @@
 // guide, runs a call, and keeps the hidden instance's session.
 import { flushSync } from 'react-dom';
 import { chosenOf } from '../report/spec';
+import { needsLevel } from '../sets/model';
 import { QUANTITIES, inFlight, parseSettings, serializeSettings } from '../store';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
@@ -106,7 +107,7 @@ export const HANDLERS: Record<string, Handler> = {
             ...(x.panes[m.slot]?.meshes.size ? { view: x.viewer(m.slot).el.view } : {}), // its camera now, exact
           };
         }),
-        display: display(x), subdivision: x.ui.subdiv, settings: publicSettings(s.settings), problems: problems(x), views: x.views.map(({ name, view }) => ({ name, view })),
+        display: display(x), subdivision: x.ui.subdiv, subdivisionOverride: x.ui.subdivOverride, settings: publicSettings(s.settings), problems: problems(x), views: x.views.map(({ name, view }) => ({ name, view })),
         reports: (x.reports ?? []).map((e) => ({ id: e.id, title: e.spec.title, models: e.spec.models.map((m) => m.model), updated: e.spec.updated, pdf: e.pdf, ...x.generation(e.id) })),
         viewAnalysis: viewState(x), sets: setsOf(x), combined: combinedOf(x),
       });
@@ -131,9 +132,10 @@ export const HANDLERS: Record<string, Handler> = {
 
 // ---------------------------------------------------------------------------------------------- the hidden instance's session
 /** What the hidden instance did, for a UI tab to pick up: its settings (serializeSettings; `epw`: the path of a weather
- *  file opened by path), its subdivision level (a view preference of its own browser profile that shapes the meshes run),
- *  its state-changing calls in order, and whether a model had a result (or a run on its way), of each analysis. */
-interface Session { settings: string; subdiv: number; epw?: string; steps: { name: string; arguments: Args }[]; ran: boolean; ranViews?: boolean }
+ *  file opened by path), its subdivision level and override (view preferences of its own browser profile that shape the
+ *  meshes run), its state-changing calls in order, and whether a model had a result (or a run on its way), of each
+ *  analysis. */
+interface Session { settings: string; subdiv: number; subdivOverride?: boolean; epw?: string; steps: { name: string; arguments: Args }[]; ran: boolean; ranViews?: boolean }
 const STEPS = new Set(['open_model', 'remove_model', 'set_roles', 'set_geometry', 'edit_material', 'set_visibility', 'set_display', 'set_camera', 'save_view', 'open_set']);
 const steps: Session['steps'] = [];
 const textOf = (r: CallToolResult) => r.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join(' ');
@@ -152,7 +154,7 @@ async function record(name: string, args: Args, res: CallToolResult, active: num
     steps.push({ name, arguments: { ...(name === 'set_camera' ? { view: reply.view } : args.section ? { ...args, section: reply.section } : args), ...(model ? { model } : {}) } });
   }
   const s = c().state, w = s.settings.weather, epw = w.source === 'upload' && w.file ? pathOf.get(w.file) : undefined, ran = (ms: typeof s.models) => ms.some((m) => m.result || inFlight(m.run));
-  const session: Session = { settings: serializeSettings(s.settings), subdiv: c().ui.subdiv, ...(epw ? { epw } : {}), steps, ran: ran(s.models), ranViews: ran(c().analysis('views').models) };
+  const session: Session = { settings: serializeSettings(s.settings), subdiv: c().ui.subdiv, subdivOverride: c().ui.subdivOverride, ...(epw ? { epw } : {}), steps, ran: ran(s.models), ranViews: ran(c().analysis('views').models) };
   await fetch('/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(session) }).catch(() => {});
 }
 
@@ -198,8 +200,9 @@ function pickup(c: () => Ctl): void {
         for (const ch of c().state.settings.charts) if (!p.charts.some((k) => k.id === ch.id)) d({ type: 'CHART', id: ch.id, remove: true });
         for (const spec of p.charts) d({ type: 'CHART', spec });
       });
-      if (rec.subdiv !== undefined && rec.subdiv !== c().ui.subdiv) { // before the models open: they are read at it
-        flushSync(() => c().onSubdiv(rec.subdiv));
+      const want = rec.subdiv !== undefined ? needsLevel({ subdiv: rec.subdiv, subdivOverride: rec.subdivOverride }, { level: c().ui.subdiv, override: c().ui.subdivOverride }) : null;
+      if (want) { // before the models open: they are read at it
+        flushSync(() => c().onSubdiv(want.level, want.override));
         await loaded();
       }
       let tab: string | undefined; // the tab the last set_display that named one ended on

@@ -28,6 +28,8 @@
 .value-label { position: absolute; inset-block-start: 0; inset-inline-start: 0; white-space: nowrap; padding: 1px var(--space-1);
   border: 1px solid var(--border-subtle); background: var(--bg-surface-1); color: var(--text-strong); font-size: var(--fs-label);
   line-height: var(--leading-body); font-variant-numeric: tabular-nums; }
+/* without the box (the Display menu's Box off): the text alone, in the layer's colour (the user's pick) */
+.viewport__values--plain .value-label { border-color: transparent; background: none; color: inherit; }
 .sunpath-label { font-size: var(--fs-small); color: var(--chart-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sunpath-label--strong { color: var(--chart-text-strong); }
 .sunpath-label--at { padding: 0 0 var(--space-1) var(--space-2); } /* anchored by its corner at a handle: up and right of it */
@@ -139,6 +141,13 @@
 .views__row > .menu__item { flex: 1; min-inline-size: 0; }
 .views__note { padding: var(--space-1) var(--space-3) var(--space-2); font-size: var(--fs-small); }
 .views__format { padding: var(--space-2) var(--space-3) var(--space-1); }
+/* the Display menu's label settings: one grid, so that every row's name, control and readout line up, aligned with the
+   menu's rows; the selects span the control and the readout, compact as the tree's */
+.display__labels { display: grid; grid-template-columns: auto 1fr auto; row-gap: var(--space-2); padding: var(--space-1) var(--space-3) var(--space-2); }
+.display__labels > .slider-row { grid-column: 1 / -1; grid-template-columns: subgrid; }
+.display__labels .select { grid-column: 2 / -1; --control-h: 28px; --control-pad-y: 2px; padding-inline: var(--space-2); font-size: var(--fs-small); }
+.display__box { display: flex; align-items: center; gap: var(--space-2); padding-inline-end: var(--space-3); }
+.display__box > .menu__item { flex: 1; min-inline-size: 0; }
 .views__save { gap: var(--space-2); }
 .views__save .input { inline-size: auto; flex: 1; min-inline-size: 0; }
 .sets__save { flex-wrap: wrap; } /* the Sets menu's: its label on a row of its own above the name and the button */

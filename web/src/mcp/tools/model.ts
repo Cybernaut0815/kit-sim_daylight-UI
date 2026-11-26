@@ -190,20 +190,22 @@ export const MODEL_HANDLERS: Record<string, Handler> = {
       if (!(await done(() => !c().panes[slot]?.loading, end, 'the re-read'))) return ok(running);
     }
     if (a.subdivision) {
-      const { level, paths } = a.subdivision;
+      const { level, paths, override } = a.subdivision;
       if (paths) {
         if (level === -1) throw new Error("subdivision.level: -1 applies to every model; with paths give 0 to 3 or 'model'");
+        if (override !== undefined) throw new Error('subdivision.override: applies to every model; leave paths out');
+        if (c().ui.subdivOverride) throw new Error("subdivision.paths: the model's level overrides each mesh's own now; set override false first");
         const now = modelOf(c(), L), ids = new Set(idsUnder(paths, now.objects)), meshes = now.objects.filter((o) => ids.has(o.id) && !o.instances).map((o) => o.path);
         if (!meshes.length) throw new Error('subdivision.paths: no meshes under them (instanced meshes do not refine)');
         await exclusive(() => flushSync(() => c().onRefine(slot, meshes, level === 'model' ? null : level)));
       } else {
         if (level === 'model') throw new Error("subdivision.level: 'model' needs paths");
-        await exclusive(() => flushSync(() => c().onSubdiv(level)));
+        await exclusive(() => flushSync(() => c().onSubdiv(level, override)));
       }
       if (!(await done(() => !Object.values(c().panes).some((p) => p.loading), end, 'the re-read'))) return ok(running);
     }
     const x = c(), now = modelOf(x, L);
-    return ok({ model: L, meshes: roles(now), subdivision: x.ui.subdiv, problems: x.panes[slot]?.loadError ?? null, note: 'results cleared: run' });
+    return ok({ model: L, meshes: roles(now), subdivision: x.ui.subdiv, subdivisionOverride: x.ui.subdivOverride, problems: x.panes[slot]?.loadError ?? null, note: 'results cleared: run' });
   },
 
   async get_materials(a, c) {

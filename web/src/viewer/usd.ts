@@ -36,6 +36,17 @@ export function viewer(slot: number): Slot {
 }
 viewer(0); // the first core starts with the page
 
+/** The viewer's refinement as the app sets it, once its core is up: `level` (0 the control cage, -1 auto, 1..3) and
+ *  `override` (that level also for the meshes with their own: the file's or the Prims row's, kept and back when off).
+ *  Only the setters whose value differs, sent together: a core's first open comes after both. */
+export async function refine(el: UsdViewerElement, level: number, override: boolean): Promise<void> {
+  await el.ready;
+  const edits: Promise<void>[] = [];
+  if (el.session.refineOverride !== override) edits.push(el.usd.setRefineOverride(override));
+  if (el.session.refineLevel !== level) edits.push(el.usd.setComplexity(level));
+  await Promise.all(edits);
+}
+
 /** textureStats() of a texture read (lib/optics.ts textureReads), from the file's own bytes in `el`'s core, decoded and
  *  counted in a worker of its own (gone with its memory once it answers); null when it cannot be read or decoded
  *  (readBytes null, EXR / HDR, a decode error): it then counts as absent. */

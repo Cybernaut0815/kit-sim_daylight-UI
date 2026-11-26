@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { fmtNum } from '../lib/result';
 import type { RunResult } from '../store';
-import { MAX_LABELS, cellsOf, elementOf, labelsOf, type LabelScene } from './labels';
+import { EXTREMES, MAX_LABELS, cellsOf, elementOf, labelsOf, type LabelScene } from './labels';
 
 /** A w × h plane at (x, y, z) facing the camera, `seg` × `seg` quads (two triangles each: a row per triangle). */
 const plane = (w: number, h: number, x: number, y = 0, z = 0, seg = 1) => {
@@ -33,12 +33,13 @@ function scene(receivers: THREE.Mesh[], others: THREE.Mesh[] = [], o: Partial<La
     result: r, column: 0, keeps: () => true, unit: '', cell: [96, 32], ...o,
   };
 }
-/** The labels three's own raycaster finds for `s` (every visible mesh, every triangle), cell by cell as the sampler goes. */
-function reference(s: LabelScene): string[] {
+/** The labels three's own raycaster finds for `s` (every visible mesh, every triangle), cell by cell as the sampler goes,
+ *  `cap` at most. */
+function reference(s: LabelScene, cap = MAX_LABELS): string[] {
   const ray = new THREE.Raycaster(), seen = new Set<string>(), out: string[] = [];
   ray.near = (s.camera as THREE.PerspectiveCamera).near;
   for (const [x, y] of cellsOf(s)) {
-    if (out.length >= MAX_LABELS) break;
+    if (out.length >= cap) break;
     ray.setFromCamera(new THREE.Vector2((x / s.width) * 2 - 1, -(y / s.height) * 2 + 1), s.camera);
     const hit = ray.intersectObjects(s.meshes as THREE.Object3D[], false).find((h) => s.keeps(h.point));
     const k = hit ? s.receiverOf(hit.object) : -1, e = hit && k >= 0 ? elementOf(s.result, k, hit) : null;
@@ -133,5 +134,63 @@ describe('value labels', () => {
     expect(cellsOf(scene([small], [plane(40, 40, 0)])).length).toBeLessThan(12); // an unpainted mesh does not widen them
     const fine = plane(40, 14, 0, 0, 0, 120);
     expect(labelsOf(scene([fine], [], {}, [1920, 640])).length).toBe(MAX_LABELS);
+    expect(cellsOf(scene([plane(40, 40, 0)], [], { cell: [192, 64] })).length).toBe(5 * 5); // a wider spacing: fewer cells
+  });
+
+  it('staggered: every other row shifted half a cell, none past the edge, found as three\'s raycaster finds them', () => {
+    const cells = cellsOf(scene([plane(40, 40, 0)], [], { layout: 'staggered' }));
+    expect(cells.length).toBe(10 * 10 - 5); // the odd rows' last cell would end past the edge
+    for (const [x, y] of cells) expect((x / 96) % 1).toBe(Math.floor(y / 32) % 2 ? 0 : 0.5);
+    expect(Math.max(...cells.map(([x]) => x))).toBeLessThanOrEqual(960 - 48);
+    const s = scene([plane(12, 4, 0, 0, 0, 9)], [], { layout: 'staggered' });
+    expect(labelsOf(s).map((l) => `${l.x},${l.y}:${l.text}`)).toEqual(reference(s));
+  });
+
+  it('scattered: each label nudged inside its own cell, the same every time, a cell\'s room round each', () => {
+    const s = scene([plane(40, 40, 0, 0, 0, 60)], [], { layout: 'scattered' }), cells = cellsOf(s);
+    expect(cells.length).toBe(100);
+    cells.forEach(([x, y], i) => expect([Math.floor(x / 96), Math.floor(y / 32)]).toEqual([i % 10, Math.floor(i / 10)]));
+    expect(cells.filter(([x, y]) => (x / 96) % 1 === 0.5 && (y / 32) % 1 === 0.5).length).toBeLessThan(3); // off the grid
+    const labels = labelsOf(s);
+    expect(labelsOf(s)).toEqual(labels);
+    expect(labels.length).toBeGreaterThan(20);
+    for (const a of labels) for (const b of labels) if (a !== b) expect(Math.abs(a.x - b.x) < 96 && Math.abs(a.y - b.y) < 32, `${a.text} ${b.text}`).toBe(false);
+  });
+
+  it('on the spot: a point result\'s label on its corner, a face result\'s on its triangle\'s centre', () => {
+    const left = plane(3, 3, -2), right = plane(3, 3, 2), cam = camera(960, 320);
+    const px = (q: THREE.Vector3) => { q.project(cam); return [((q.x + 1) / 2) * 960, ((1 - q.y) / 2) * 320].map((v) => Math.round(v * 1000) / 1000); };
+    const near = (l: { x: number; y: number }) => [l.x, l.y].map((v) => Math.round(v * 1000) / 1000);
+    const perVertex = { ...result([left, right], () => 0), on: 'vertices', manifest: { meshes: [{ first: 0, count: 4 }, { first: 4, count: 4 }] }, data: [Float32Array.from({ length: 8 }, (_, i) => i + 0.5)] } as unknown as RunResult;
+    const corners = labelsOf(scene([left, right], [], { result: perVertex, layout: 'spot', cell: [24, 16] }));
+    expect(corners.length).toBe(8);
+    for (const l of corners) {
+      const i = Number(l.text) - 0.5, m = i < 4 ? left : right;
+      expect(near(l)).toEqual(px(new THREE.Vector3().fromBufferAttribute(m.geometry.attributes.position, i % 4).applyMatrix4(m.matrixWorld)));
+    }
+    const faces = labelsOf(scene([left], [], { layout: 'spot', cell: [24, 16] })), g = left.geometry, index = g.index!.array;
+    expect(faces.map((l) => l.text).sort()).toEqual(['0.5', '1.5']);
+    for (const l of faces) {
+      const row = Number(l.text) - 0.5, centre = new THREE.Vector3();
+      for (let j = 0; j < 3; j++) centre.add(new THREE.Vector3().fromBufferAttribute(g.attributes.position, index[3 * row + j]));
+      expect(near(l)).toEqual(px(centre.divideScalar(3).applyMatrix4(left.matrixWorld)));
+    }
+  });
+
+  it('problem range only: the values outside it, none without one', () => {
+    const left = plane(3, 3, -2), right = plane(3, 3, 2), texts = (o: Partial<LabelScene>) => labelsOf(scene([left, right], [], o)).map((l) => l.text).sort();
+    expect(texts({ show: 'problem', range: [1, 10.6] })).toEqual(['0.5', '11.5']);
+    expect(texts({ show: 'problem', range: [null, 10] })).toEqual(['10.5', '11.5']);
+    expect(texts({ show: 'problem', range: [null, null] })).toEqual([]);
+    expect(texts({ show: 'problem' })).toEqual([]);
+    expect(texts({ show: 'all', range: [1, 10.6] })).toEqual(['0.5', '1.5', '10.5', '11.5']);
+  });
+
+  it('extremes only: the highest and lowest any cell finds, past the cap', () => {
+    const s = scene([plane(40, 14, 0, 0, 0, 120)], [], {}, [1920, 640]), number = (text: string) => Number(text.replace(/,/g, ''));
+    const all = reference(s, Infinity).map((r) => number(r.split(':')[1])).sort((a, b) => a - b);
+    expect(all.length).toBeGreaterThan(MAX_LABELS);
+    const got = labelsOf({ ...s, show: 'extremes' }).map((l) => number(l.text)).sort((a, b) => a - b);
+    expect(got).toEqual([...all.slice(0, EXTREMES), ...all.slice(-EXTREMES)]);
   });
 });

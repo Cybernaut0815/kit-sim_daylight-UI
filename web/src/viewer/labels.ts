@@ -1,7 +1,10 @@
 // Value labels on the painted receivers (the Display menu's "Values on the surfaces"): a screen grid of cells (the
 // scene's cell size: one label and a gap), a ray through each cell's centre; a label where the first hit among the
 // visible meshes is kept by the section and is a painted receiver (nothing covers it there), one per element (the face
-// or corner the probe reads), at most 150, written "value unit". Fast at any model size: a ray tests only the meshes
+// or corner the probe reads), at most 150, written "value unit". The scene's layout places them on the grid, every other
+// row shifted half a cell, nudged inside their cells or on their element's own place (the last two keep a cell's room
+// round each); its filter keeps all, the 10 highest and 10 lowest in view, or those outside the problem range. Fast at
+// any model size: a ray tests only the meshes
 // whose projected box covers its cell, nearest box first, and stops once the next box starts behind its hit; a mesh is
 // tested through a BVH of its triangles (three-mesh-bvh), made once per geometry. Takes any camera and size: the views
 // (sampled in idle slices once the camera rests, Viewer.tsx) and the agent's screenshots (capture.ts, all at once). One
@@ -13,34 +16,58 @@ import { fmtNum } from '../lib/result';
 import { faceRow } from '../lib/topology';
 import type { RunResult } from '../store';
 
-export const MAX_LABELS = 150, SLICE_MS = 12;
+export const MAX_LABELS = 150, SLICE_MS = 12, EXTREMES = 10;
 /** A label: its centre in px from the top left, its text. */
 export interface Label { x: number; y: number; text: string }
+/** Where the labels stand: on the cell grid, every other row shifted half a cell, each nudged inside its cell, or on
+ *  their element's own place (the hit triangle's centre for faces, the corner a point result reads). */
+export type LabelLayout = 'grid' | 'staggered' | 'scattered' | 'spot';
+/** Which values get a label: all, the EXTREMES highest and lowest in view, or those outside the problem range. */
+export type LabelShow = 'all' | 'extremes' | 'problem';
+
+const instanceMatrix = new THREE.Matrix4();
+/** The world matrix of what `hit` lands on: its mesh's, or its instance's in an instanced mesh. */
+function worldOf(hit: THREE.Intersection): THREE.Matrix4 {
+  const mesh = hit.object as THREE.InstancedMesh;
+  if (!mesh.isInstancedMesh || hit.instanceId === undefined) return mesh.matrixWorld;
+  mesh.getMatrixAt(hit.instanceId, instanceMatrix);
+  return instanceMatrix.premultiply(mesh.matrixWorld);
+}
 
 /** The element of receiver `k` (its index in `result.receivers`) that `hit` lands on: the face the hit triangle belongs
  *  to, or the corner of that triangle nearest the hit point (the receiver's own faces and points: lib/topology.ts);
- *  null where it has none. */
-export function elementOf(result: RunResult, k: number, hit: THREE.Intersection, p = new THREE.Vector3()): number | null {
+ *  null where it has none. `at`, when given, gets the element's place in world space: the hit triangle's centre for a
+ *  face, the corner for a point. */
+export function elementOf(result: RunResult, k: number, hit: THREE.Intersection, p = new THREE.Vector3(), at?: THREE.Vector3): number | null {
   if (hit.faceIndex == null) return null;
-  const form = result.forms?.[k] ?? null;
+  const form = result.forms?.[k] ?? null, mesh = hit.object as THREE.Mesh, pos = mesh.geometry.attributes.position;
   let element: number | null = null;
-  if (result.on === 'faces') element = faceRow(form, hit.faceIndex);
-  else if (hit.face) { // the geometry stays indexed: the hit face's corners are index[3 faceIndex + j]
-    const mesh = hit.object as THREE.Mesh, pos = mesh.geometry.attributes.position;
+  if (result.on === 'faces') {
+    element = faceRow(form, hit.faceIndex);
+    if (at && hit.face) {
+      at.set(0, 0, 0);
+      for (const vi of [hit.face.a, hit.face.b, hit.face.c]) at.add(p.fromBufferAttribute(pos, vi));
+      at.divideScalar(3).applyMatrix4(worldOf(hit));
+    }
+  } else if (hit.face) { // the geometry stays indexed: the hit face's corners are index[3 faceIndex + j]
+    const world = worldOf(hit);
     let best = Infinity;
     [hit.face.a, hit.face.b, hit.face.c].forEach((vi, j) => {
-      const d = p.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld).distanceToSquared(hit.point);
-      if (d < best) { best = d; element = form ? form.cornerRow[3 * hit.faceIndex! + j] : vi; }
+      const d = p.fromBufferAttribute(pos, vi).applyMatrix4(world).distanceToSquared(hit.point);
+      if (d < best) { best = d; element = form ? form.cornerRow[3 * hit.faceIndex! + j] : vi; at?.copy(p); }
     });
   }
   return element !== null && element < result.manifest.meshes[k].count ? element : null;
 }
 
 /** What a sampler reads: the camera and its size in px, the visible meshes, a mesh's receiver index when it is painted
- *  (else -1), the result and its column, the section's test, the column's unit ('' for none) and the cell size in px. */
+ *  (else -1), the result and its column, the section's test, the column's unit ('' for none) and the cell size in px;
+ *  where the labels stand (grid when absent), which values get one (all when absent) and the problem range those
+ *  outside get one under 'problem' ([lo, hi], null an open side). */
 export interface LabelScene {
   camera: THREE.Camera; width: number; height: number; meshes: readonly THREE.Object3D[]; receiverOf: (o: THREE.Object3D) => number;
   result: RunResult; column: number; keeps: (p: THREE.Vector3) => boolean; unit: string; cell: readonly [number, number];
+  layout?: LabelLayout; show?: LabelShow; range?: readonly [number | null, number | null];
 }
 
 /** A label's text: the value as the hover readout writes it, then the unit. */
@@ -50,6 +77,14 @@ const textOf = (v: number, unit: string) => (unit ? `${fmtNum(v)} ${unit}` : fmt
 function gridOf(s: LabelScene) {
   const cols = Math.floor(s.width / s.cell[0]), rows = Math.floor(s.height / s.cell[1]);
   return { cols, rows, dx: s.width / Math.max(cols, 1), dy: s.height / Math.max(rows, 1) };
+}
+
+/** A fixed offset in [-0.5, 0.5) of a cell for cell (col, row) along `axis` (0 across, 1 down): the scattered nudge. */
+function nudge(col: number, row: number, axis: number): number {
+  let h = Math.imul(col, 0x27d4eb2d) ^ Math.imul(row, 0x165667b1) ^ Math.imul(axis + 1, 0x9e3779b9);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h ^= h >>> 13;
+  return (h >>> 0) / 4294967296 - 0.5;
 }
 
 const corner = new THREE.Vector3(), eyeSpace = new THREE.Vector3();
@@ -101,7 +136,9 @@ function treeOf(g: THREE.BufferGeometry): MeshBVH {
   return tree;
 }
 
-/** The cells' centres inside the painted receivers' projected bounds (all of them when one lies partly behind the eye). */
+/** The cells' centres inside the painted receivers' projected bounds (all of them when one lies partly behind the eye),
+ *  as the layout places them: an odd row shifted half a cell when staggered (without the one past the edge), each
+ *  nudged inside its cell when scattered. */
 export function cellsOf(s: LabelScene): [number, number][] {
   return cellsIn(s, targetsOf(s.meshes.filter((o) => s.receiverOf(o) >= 0)));
 }
@@ -113,27 +150,66 @@ function cellsIn(s: LabelScene, receivers: readonly Target[]): [number, number][
   }
   if (!(right >= left)) return [];
   left = Math.max(left, 0); top = Math.max(top, 0); right = Math.min(right, s.width); bottom = Math.min(bottom, s.height);
-  const { cols, rows, dx, dy } = gridOf(s), out: [number, number][] = [];
+  const { cols, rows, dx, dy } = gridOf(s), labelLayout = s.layout ?? 'grid', out: [number, number][] = [];
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    const x = (c + 0.5) * dx, y = (r + 0.5) * dy;
-    if (x >= left - dx / 2 && x <= right + dx / 2 && y >= top - dy / 2 && y <= bottom + dy / 2) out.push([x, y]);
+    let x = (c + 0.5) * dx;
+    const y = (r + 0.5) * dy;
+    if (labelLayout === 'staggered' && r % 2) { x += dx / 2; if (x > s.width - dx / 2) continue; }
+    if (!(x >= left - dx / 2 && x <= right + dx / 2 && y >= top - dy / 2 && y <= bottom + dy / 2)) continue;
+    out.push(labelLayout === 'scattered' ? [x + nudge(c, r, 0) * dx, y + nudge(c, r, 1) * dy] : [x, y]);
   }
   return out;
 }
 
 /** A sampler over scene `s`: step(until) casts the next rays until `until()` says stop and returns whether it is done;
- *  `labels` holds every label found so far, in the order found. Its first step lays out the targets and cells. */
+ *  `labels` holds every label found so far, in the order found (the extremes once all cells are cast). Its first step
+ *  lays out the targets and cells. */
 export function sampler(s: LabelScene): { step: (until: () => boolean) => boolean; labels: Label[] } {
-  const caster = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3(), entry = new THREE.Vector3(), local = new THREE.Ray();
+  const caster = new THREE.Raycaster(), ndc = new THREE.Vector2(), p = new THREE.Vector3(), entry = new THREE.Vector3(), local = new THREE.Ray(), at = new THREE.Vector3();
   const seen = new Set<string>(), labels: Label[] = [];
   const near = (s.camera as THREE.PerspectiveCamera).isPerspectiveCamera ? (s.camera as THREE.PerspectiveCamera).near : 0; // what the camera clips (a shot's cutaway) covers nothing
   const { cols, rows, dx, dy } = gridOf(s);
-  let cells: [number, number][] | null = null, targets: Target[] = [], buckets: number[][] = [], i = 0;
+  const labelLayout = s.layout ?? 'grid', show = s.show ?? 'all', [lo, hi] = s.range ?? [null, null], onSpot = labelLayout === 'spot';
+  const roomy = labelLayout === 'scattered' || onSpot, [cw, ch] = s.cell, placed = new Map<string, Label[]>();
+  const candidates: (Label & { v: number })[] = [];
+  let cells: [number, number][] | null = null, targets: Target[] = [], buckets: number[][] = [], i = 0, picked = false;
+
+  const shows = (v: number) => show !== 'problem' || (lo !== null && v < lo) || (hi !== null && v > hi);
+  /** Whether a label at (x, y) keeps a cell's room from every placed one: always on the grid layouts, whose cells do. */
+  const free = (x: number, y: number) => {
+    if (!roomy) return true;
+    const gx = Math.floor(x / cw), gy = Math.floor(y / ch);
+    for (let a = gx - 1; a <= gx + 1; a++) for (let b = gy - 1; b <= gy + 1; b++) {
+      for (const l of placed.get(`${a},${b}`) ?? []) if (Math.abs(l.x - x) < cw && Math.abs(l.y - y) < ch) return false;
+    }
+    return true;
+  };
+  const place = (l: Label) => {
+    labels.push(l);
+    if (!roomy) return;
+    const key = `${Math.floor(l.x / cw)},${Math.floor(l.y / ch)}`, here = placed.get(key);
+    if (here) here.push(l); else placed.set(key, [l]);
+  };
+  /** World point `q` in px from the top left; NaN off the view or behind the eye. */
+  const screenOf = (q: THREE.Vector3): [number, number] => {
+    q.project(s.camera);
+    const x = ((q.x + 1) / 2) * s.width, y = ((1 - q.y) / 2) * s.height;
+    return q.z <= 1 && x >= 0 && x <= s.width && y >= 0 && y <= s.height ? [x, y] : [NaN, NaN];
+  };
+  /** The extremes: the highest and lowest candidates by turns, each with its room, EXTREMES of each at most. */
+  const pick = () => {
+    candidates.sort((a, b) => a.v - b.v);
+    let low = 0, high = candidates.length - 1, lows = 0, highs = 0;
+    while (low <= high && (lows < EXTREMES || highs < EXTREMES)) {
+      if (highs < EXTREMES) { const c = candidates[high--]; if (free(c.x, c.y)) { place({ x: c.x, y: c.y, text: c.text }); highs++; } }
+      if (low <= high && lows < EXTREMES) { const c = candidates[low++]; if (free(c.x, c.y)) { place({ x: c.x, y: c.y, text: c.text }); lows++; } }
+    }
+  };
 
   /** Each target in the cells its projected box covers (a cell more round it: the box's edge may fall on a centre). */
   const layout = () => {
     targets = targetsOf(s.meshes);
-    cells = cellsIn(s, targets.filter((t) => s.receiverOf(t.o) >= 0));
+    cells = show === 'problem' && lo === null && hi === null ? [] : cellsIn(s, targets.filter((t) => s.receiverOf(t.o) >= 0));
     buckets = Array.from({ length: cols * rows }, () => []);
     targets.forEach((t, k) => {
       const [l, tp, r, b] = rectOf(t.box, s.camera, s.width, s.height);
@@ -178,17 +254,20 @@ export function sampler(s: LabelScene): { step: (until: () => boolean) => boolea
   };
   const step = (until: () => boolean) => {
     if (!cells) layout();
-    while (i < cells!.length && labels.length < MAX_LABELS) {
+    while (i < cells!.length && (show === 'extremes' || labels.length < MAX_LABELS)) {
       const [x, y] = cells![i++], hit = hitAt(x, y);
-      const k = hit ? s.receiverOf(hit.object) : -1, e = hit && k >= 0 ? elementOf(s.result, k, hit, p) : null;
-      if (e !== null && !seen.has(`${k}:${e}`)) {
-        seen.add(`${k}:${e}`);
-        const v = s.result.data[s.column][s.result.manifest.meshes[k].first + e];
-        if (Number.isFinite(v)) labels.push({ x, y, text: textOf(v, s.unit) });
+      const k = hit ? s.receiverOf(hit.object) : -1, e = hit && k >= 0 ? elementOf(s.result, k, hit, p, onSpot ? at : undefined) : null, id = `${k}:${e}`;
+      if (e !== null && !seen.has(id)) {
+        const v = s.result.data[s.column][s.result.manifest.meshes[k].first + e], [lx, ly] = onSpot ? screenOf(at) : [x, y];
+        if (!Number.isFinite(v) || !shows(v) || Number.isNaN(lx)) seen.add(id);
+        else if (show === 'extremes') { seen.add(id); candidates.push({ x: lx, y: ly, text: textOf(v, s.unit), v }); }
+        else if (free(lx, ly)) { seen.add(id); place({ x: lx, y: ly, text: textOf(v, s.unit) }); } // crowded here: another cell may place it
       }
       if (until()) break;
     }
-    return i >= cells!.length || labels.length >= MAX_LABELS;
+    const done = i >= cells!.length || labels.length >= MAX_LABELS;
+    if (done && show === 'extremes' && !picked) { picked = true; pick(); }
+    return done;
   };
   return { step, labels };
 }

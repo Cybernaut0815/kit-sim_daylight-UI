@@ -35,10 +35,10 @@ describe('sets', () => {
     s = reducer(s, { type: 'OPTICS_EDIT', slot: 0, key: '/M/glass', edit: GLASS });
     s = reducer(s, { type: 'SITE', patch: { lat: 48.1, lon: 11.6, place: 'Munich' } });
     s = reducer(s, { type: 'WEATHER', patch: { source: 'upload', file: new File(['x'], 'munich.epw') } });
-    const set = captureSet(s, 'daylight', 'South', { shown: 'radiation_front', now: '2026-11-24T10:00:00.000Z', subdiv: 2 });
+    const set = captureSet(s, 'daylight', 'South', { shown: 'radiation_front', now: '2026-11-24T10:00:00.000Z', subdiv: { level: 2, override: false } });
     expect(set).toMatchObject({
       kind: 'set', name: 'South', tool: 'daylight', column: 'radiation_front', colourBy: 'value', created: '2026-11-24T10:00:00.000Z',
-      north: 30, site: { lat: 48.1, lon: 11.6, place: 'Munich' }, weather: { source: 'upload', file: 'munich.epw', turbidity: 3 }, subdiv: 2,
+      north: 30, site: { lat: 48.1, lon: 11.6, place: 'Munich' }, weather: { source: 'upload', file: 'munich.epw', turbidity: 3 }, subdiv: 2, subdivOverride: false,
     });
     expect(set.look).toBeUndefined();
     expect(Object.keys(set.looks!.quantities)).toEqual(QUANTITIES); // every Daylight quantity, a default one as {}
@@ -59,13 +59,14 @@ describe('sets', () => {
     s = reducer(s, { type: 'SITE', patch: { lat: 48.1, lon: 11.6, place: 'Munich' } });
     s = reducer(s, { type: 'WEATHER', patch: { source: 'upload', file: new File(['x'], 'munich.epw') } });
     s = reducer(s, { type: 'TIME', patch: { mode: 'instant', date: '2026-06-21', hour: 750 } });
-    const set = captureSet(s, 'daylight', 'South', { shown: 'radiation_front', subdiv: 2 }), lines = setSummary(set);
+    const set = captureSet(s, 'daylight', 'South', { shown: 'radiation_front', subdiv: { level: 2, override: false } }), lines = setSummary(set);
     expect(Object.fromEntries(lines.map((l) => [l.label, l.value]))).toEqual({
       'Model A': 'tower: 2 receivers, 1 shade, 1 material edit', Location: 'Munich (48.1, 11.6), north 30°', Time: '21 Jun, 12:30',
       Simulation: 'Physical: Radiation, Sun hours; front sides on faces; sky density 1; 2 reflections', Weather: 'an uploaded EPW, munich.epw', Subdivision: 'Level 2',
       Result: 'Radiation, front; the meshes plain', Colours: 'Magma, logarithmic, legend lowest to 900', 'Problem range': `below 100 ${unitFor('radiation_front').value}`,
     });
-    const { north: _n, site: _s, weather: _w, looks: _l, subdiv: _d, ...older } = set;
+    expect(setSummary({ ...set, subdivOverride: true }).find((l) => l.label === 'Subdivision')!.value).toBe("Level 2, over each mesh's own");
+    const { north: _n, site: _s, weather: _w, looks: _l, subdiv: _d, subdivOverride: _o, ...older } = set;
     expect(setSummary({ ...older, models: [{ ...older.models[0], optics: undefined }] }).filter((l) => /older/.test(l.value)).map((l) => l.label)).toEqual(['Location', 'Weather', 'Subdivision']);
     const views = setSummary(captureSet(s, 'views', 'Views', { shown: 'sky_front' }));
     expect(views.map((l) => l.label)).toEqual(['Model A', 'North', 'View settings', 'Subdivision', 'Result', 'Colours', 'Problem range']);
@@ -215,13 +216,13 @@ describe('sets over several models', () => {
     s = reducer(s, { type: 'OPTICS_EDIT', slot: 0, key: '/M/brick', edit: { rho: 0.3, tau: 0, kind: 'opaque' } });
     s = reducer(s, { type: 'OPTICS_EDIT', slot: 0, key: 'default', edit: { rho: 0.4, tau: 0, kind: 'opaque' } });
     s = reducer(s, { type: 'SIM', patch: { bounces: 2, north: 20 } });
-    const set = captureSet(s, 'daylight', 'South', { now: '2026-11-24T10:00:00.000Z', subdiv: 1 }), A = set.models[0];
+    const set = captureSet(s, 'daylight', 'South', { now: '2026-11-24T10:00:00.000Z', subdiv: { level: 1, override: true } }), A = set.models[0];
     const { set: copy, counts } = copySet(set, A, m(s, 2), ['/M/glass', '/M/steel'], copyName(set, 'tower-v2'), '2026-11-25T10:00:00.000Z');
     expect(copy.models).toEqual([{ model: 'C', file: 'tower-v2', roles: [{ path: '/W/a', role: 'receiver' }, { path: '/W/b', role: 'receiver', shade: false }], optics: { '/M/glass': GLASS, default: { rho: 0.4, tau: 0, kind: 'opaque' } } }]);
     expect(counts).toEqual({ roles: 2, rolesOf: 3, bare: 1, edits: 2, editsOf: 3 });
     expect(copyText('C', counts)).toBe('C: 2 of 3 roles by path, 1 mesh without a role; 2 of 3 material edits');
     expect(copyText('D', { roles: 0, rolesOf: 3, bare: 3, edits: 0, editsOf: 0 })).toBe('D: 0 of 3 roles by path, 3 meshes without a role; no material edits');
-    expect(copy).toMatchObject({ name: 'South for tower-v2', created: '2026-11-25T10:00:00.000Z', updated: '2026-11-25T10:00:00.000Z', settings: set.settings, north: 20, subdiv: 1, looks: set.looks, site: set.site });
+    expect(copy).toMatchObject({ name: 'South for tower-v2', created: '2026-11-25T10:00:00.000Z', updated: '2026-11-25T10:00:00.000Z', settings: set.settings, north: 20, subdiv: 1, subdivOverride: true, looks: set.looks, site: set.site });
     expect(copy.id).not.toBe(set.id);
     expect(copy.settings).not.toBe(set.settings); // its own, to edit
     expect(set.models).toHaveLength(4); // the original as it was
@@ -269,7 +270,7 @@ describe('parseSets', () => {
       entry(set), entry(view), { id: 'bad-json', spec: '{' }, entry({ ...set, id: 'other' }, 'mismatch'), entry({ ...set, kind: 'report' }),
       entry({ ...set, models: [{ model: 'E', file: 'x', roles: [] }] }), entry({ ...set, models: [{ model: 'A', file: 'x', roles: [{ path: 'no-slash', role: 'receiver' }] }] }),
       entry({ ...view, op: 'median' }), entry({ ...view, inputs: [] }), entry({ ...view, inputs: [{ ...view.inputs[0], weight: -1 }] }),
-      entry({ ...set, weather: { ...set.weather, source: 'ftp' } }), entry({ ...set, site: { lat: 95, lon: 0, place: 'x' } }), entry({ ...set, subdiv: 7 }),
+      entry({ ...set, weather: { ...set.weather, source: 'ftp' } }), entry({ ...set, site: { lat: 95, lon: 0, place: 'x' } }), entry({ ...set, subdiv: 7 }), entry({ ...set, subdiv: 1, subdivOverride: 'yes' }),
       entry({ ...set, looks: { quantities: {}, colors: { below: 'red', above: '#ff0000' } } }), entry({ ...set, models: [{ ...set.models[0], optics: { '/M': { rho: 2, tau: 0, kind: 'glass' } } }] }),
     ]);
     expect(list.map((x) => x.id)).toEqual([set.id, view.id]);

@@ -26,7 +26,7 @@ export function missingOf(slot: number, inputs: ReturnType<typeof inputStatus>):
     if (!st || st.state === 'none') return [`${L}: no entry in ${set.name}`];
     if (st.state === 'no-receiver') return [`${L}: no receiver in ${set.name}`];
     if (st.state === 'error') return [`${L}: ${set.name} failed (${st.message})`];
-    if (st.state === 'subdiv') return [`${L}: ${set.name} runs at subdivision ${levelText(st.level!)}; open it to run`];
+    if (st.state === 'subdiv') return [`${L}: ${set.name} runs at subdivision ${levelText(st.level!, st.override)}; open it to run`];
     if (st.state !== 'done') return [`${L}: no result of ${set.name}${st.state === 'missing' ? '' : ' yet'}`];
     return st.result!.columns.includes(input.column) ? [] : [`${L}: ${set.name} has no ${columnLabel(input.column)}`];
   });

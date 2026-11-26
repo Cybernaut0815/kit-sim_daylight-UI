@@ -17,8 +17,9 @@ import { MAX, NONE, boxOf, direction, mm, validate, type Section } from '../lib/
 import { stageView, type SavedView, type StageCamera } from '../lib/views';
 import { generation } from '../report/generate';
 import { inApp, readiness, type AppView, type Stored } from '../report/spec';
-import { Alert, Icon, MenuButton, NumberField, Segmented } from '../ui';
+import { Alert, ColorQuad, Icon, MenuButton, NumberField, Segmented } from '../ui';
 import { FORMATS, isUsd, type ExportMode, type Format } from './download';
+import type { LabelLayout, LabelShow } from './labels';
 
 /** The next free "View N" name. */
 const nextName = (views: SavedView[]) => `View ${Math.max(0, ...views.map((v) => Number(/^View (\d+)$/.exec(v.name)?.[1] ?? 0))) + 1}`;
@@ -234,11 +235,27 @@ export const DISPLAYS: readonly (readonly [Display, string])[] = [
  *  public/skies), which also lights the model; result colours are unlit, so they stay the legend's. */
 export type Sky = 'none' | 'blue-sky' | 'sunset';
 export const SKIES_SHOWN: readonly (readonly [Sky, string])[] = [['none', 'Plain colour'], ['blue-sky', 'Blue sky'], ['sunset', 'Sunset']];
+/** The value labels' size over the default: half to twice (set_display's labelScale in server/mcp.json alike). */
+export const LABEL_SCALE = { min: 0.5, max: 2 } as const;
+/** Their cells over the default: as tight as the default to four times (set_display's labelSpacing alike). */
+export const LABEL_SPACING = { min: 1, max: 4 } as const;
+/** Where they stand and which values get one (labels.ts), in the menu's words. */
+export const LABEL_LAYOUTS: readonly (readonly [LabelLayout, string])[] = [['grid', 'Grid'], ['staggered', 'Staggered'], ['scattered', 'Scattered'], ['spot', 'On the spot']];
+export const LABEL_SHOWS: readonly (readonly [LabelShow, string])[] = [['all', 'All values'], ['extremes', 'Extremes only'], ['problem', 'Problem range only']];
+/** Their text colour without the box, until one is picked. */
+export const LABEL_COLOUR = '#ffffff';
+/** How the value labels look (App's UI fields of the same names): their size and cells over the default, where they
+ *  stand, which values get one, the readout's box or plain text in a hex colour. */
+export interface LabelLook { labelScale: number; labelSpacing: number; labelLayout: LabelLayout; labelShow: LabelShow; labelBox: boolean; labelColour: string }
 
 /** How every view draws the stage: its materials or plain grey, with or without edges; result colours draw in each (with
  *  their edges in the wire modes).
- *  `sky`: what fills the background (Sky). `labels`: the values written on the painted surfaces (viewer/labels.ts). */
-export function DisplayMenu({ value, onChange, sky, onSky, labels, onLabels }: { value: Display; onChange: (d: Display) => void; sky: Sky; onSky: (s: Sky) => void; labels: boolean; onLabels: (on: boolean) => void }) {
+ *  `sky`: what fills the background (Sky). `labels`: the values written on the painted surfaces (viewer/labels.ts), as
+ *  `look` says; `problemRange`: whether the colours shown have a problem range (Show's last choice needs one). */
+export function DisplayMenu({ value, onChange, sky, onSky, labels, onLabels, look, onLook, problemRange }: {
+  value: Display; onChange: (d: Display) => void; sky: Sky; onSky: (s: Sky) => void; labels: boolean; onLabels: (on: boolean) => void;
+  look: LabelLook; onLook: (patch: Partial<LabelLook>) => void; problemRange: boolean;
+}) {
   return (
     <MenuButton id="display-menu" label="Display" title="How the views draw the model: its materials (Shaded) or plain grey, with or without edges, in front of a plain colour or a sky. Result colours always show, with their edges in the wire modes">
       {() => (
@@ -264,6 +281,44 @@ export function DisplayMenu({ value, onChange, sky, onSky, labels, onLabels }: {
             <input className="menu__check" type="checkbox" id="display-labels" checked={labels} onChange={(e) => onLabels(e.target.checked)} />
             <span>Values on the surfaces</span>
           </label>
+          <div className="display__labels">
+            <label className="slider-row" title="The values' size on the surfaces, over the default">
+              <span>Size</span>
+              <input id="display-labels-size" type="range" min={Math.log2(LABEL_SCALE.min)} max={Math.log2(LABEL_SCALE.max)} step={0.1} value={Math.log2(look.labelScale)}
+                aria-valuetext={`${Math.round(look.labelScale * 100)} %`} disabled={!labels} onChange={(e) => onLook({ labelScale: 2 ** e.target.valueAsNumber })} />
+              <span className="slider-row__value">{Math.round(look.labelScale * 100)} %</span>
+            </label>
+            <label className="slider-row" title="The room each value takes, over the default: fewer values, further apart">
+              <span>Spacing</span>
+              <input id="display-labels-spacing" type="range" min={Math.log2(LABEL_SPACING.min)} max={Math.log2(LABEL_SPACING.max)} step={0.1} value={Math.log2(look.labelSpacing)}
+                aria-valuetext={`${Math.round(look.labelSpacing * 100)} %`} disabled={!labels} onChange={(e) => onLook({ labelSpacing: 2 ** e.target.valueAsNumber })} />
+              <span className="slider-row__value">{Math.round(look.labelSpacing * 100)} %</span>
+            </label>
+            <label className="slider-row" title="Where the values stand: on a grid, every other row shifted half a value, nudged off the grid, or on their own face or point">
+              <span>Layout</span>
+              <select id="display-labels-layout" className="select" value={look.labelLayout} disabled={!labels} onChange={(e) => onLook({ labelLayout: e.target.value as LabelLayout })}>
+                {LABEL_LAYOUTS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </select>
+            </label>
+            <label className="slider-row" title={`Which values show: all, the 10 highest and 10 lowest in view, or those outside the problem range${problemRange ? '' : ' (set one under the colour scale first)'}`}>
+              <span>Show</span>
+              <select id="display-labels-show" className="select" value={look.labelShow} disabled={!labels} onChange={(e) => onLook({ labelShow: e.target.value as LabelShow })}>
+                {LABEL_SHOWS.map(([k, label]) => <option key={k} value={k} disabled={k === 'problem' && !problemRange}>{label}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="display__box">
+            <label className="menu__item" title="The readout's box round each value; off: the text alone, in a colour of its own">
+              <input className="menu__check" type="checkbox" id="display-labels-box" checked={look.labelBox} disabled={!labels} onChange={(e) => onLook({ labelBox: e.target.checked })} />
+              <span>Box</span>
+            </label>
+            {!look.labelBox && (
+              <>
+                <ColorQuad id="display-labels-colour" label="The values' text colour without the box" value={look.labelColour} onChange={(labelColour) => onLook({ labelColour })} />
+                <label htmlFor="display-labels-colour">Text colour</label>
+              </>
+            )}
+          </div>
         </>
       )}
     </MenuButton>

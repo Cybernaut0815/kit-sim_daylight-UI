@@ -5,7 +5,7 @@ import { noOccludeArgs } from '../lib/args';
 import type { Summary } from '../lib/result';
 import { NONE, toStage, type Section } from '../lib/section';
 import { glyphs } from '../report/spec';
-import { TAGGED, defaultSettings, initialState, reducer, swapModel, type Action, type ObjectRow, type RunResult, type State, type Station, type Tab, type Tool } from '../store';
+import { TAGGED, defaultSettings, initialState, reducer, serializeSettings, swapModel, type Action, type ObjectRow, type RunResult, type State, type Station, type Tab, type Tool } from '../store';
 import { exclusive, settled, startBridge, until } from './bridge';
 import guide from './guide.md?raw';
 import reportGuide from './report.md?raw';
@@ -357,6 +357,57 @@ describe('receivers that cast no shade', () => {
   });
 });
 
+describe('subdivision', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  /** Model A loaded (/Room/Grid, /Room/Floor); onSubdiv and onRefine as App takes them: the ui's level and override. */
+  function app(subdivOverride = false) {
+    const rows: ObjectRow[] = ['/Room/Grid', '/Room/Floor'].map((path) => ({ id: path, name: path, path, tris: 2, verts: 4, role: 'none' }));
+    const state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'room' }), ui = { tab: 'daylight', subdiv: 0, subdivOverride };
+    const refined: [string[], number | null][] = [];
+    const c = () => ({
+      ...LOOK, state, dispatch: () => {}, panes: { 0: { loading: false, meshes: new Map(), loadError: null } }, ui,
+      onSubdiv: (level: number, override = ui.subdivOverride) => Object.assign(ui, { subdiv: level, subdivOverride: override }),
+      onRefine: (_slot: number, paths: string[], level: number | null) => { refined.push([paths, level]); },
+    }) as unknown as Ctl;
+    return { c, refined };
+  }
+  const json = async (c: () => Ctl, args: Record<string, unknown>) => JSON.parse(await call(c, 'set_geometry', args));
+
+  it('set_geometry: the override goes for every model, kept until changed; per-mesh levels refuse it, and wait while it is on', async () => {
+    const { c, refined } = app();
+    expect(await json(c, { subdivision: { level: 2, override: true } })).toMatchObject({ subdivision: 2, subdivisionOverride: true });
+    expect(await call(c, 'set_geometry', { subdivision: { level: 1, paths: ['/Room/Grid'] } })).toBe("subdivision.paths: the model's level overrides each mesh's own now; set override false first");
+    expect(await json(c, { subdivision: { level: 1 } })).toMatchObject({ subdivision: 1, subdivisionOverride: true }); // the override as it was
+    expect(await json(c, { subdivision: { level: 1, override: false } })).toMatchObject({ subdivision: 1, subdivisionOverride: false });
+    expect(await call(c, 'set_geometry', { subdivision: { level: 2, paths: ['/Room/Grid'], override: true } })).toBe('subdivision.override: applies to every model; leave paths out');
+    await json(c, { subdivision: { level: 2, paths: ['/Room/Grid'] } });
+    expect(refined).toEqual([[['/Room/Grid'], 2]]);
+    expect(await call(c, 'set_geometry', { subdivision: { level: 0, override: 'yes' } })).toBe('subdivision.override: boolean');
+  });
+
+  it("a tab picking up the hidden session takes its level and override; an older session's level keeps the tab's override", async () => {
+    const pickup = async (session: { subdiv: number; subdivOverride?: boolean }, tabOverride: boolean) => {
+      const { c } = app(tabOverride);
+      let ended!: () => void;
+      const gone = new Promise<void>((r) => { ended = r; });
+      vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === '/session' && init?.method === 'DELETE') ended();
+        if (url === '/session') return init?.method ? new Response(null, { status: 204 }) : new Response(JSON.stringify({ settings: serializeSettings(defaultSettings()), steps: [], ran: false, ...session }), { headers: { 'Content-Type': 'application/json' } });
+        return url.includes('wait=25') ? new Response('error: agent routes answer only on this machine\n', { status: 403 }) : new Response(null, { status: 204 });
+      }));
+      vi.stubGlobal('document', { hasFocus: () => false, visibilityState: 'visible', addEventListener: vi.fn(), removeEventListener: vi.fn() });
+      vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+      const stop = connect(c);
+      await gone;
+      stop();
+      return { subdiv: c().ui.subdiv, subdivOverride: c().ui.subdivOverride };
+    };
+    expect(await pickup({ subdiv: 2, subdivOverride: true }, false)).toEqual({ subdiv: 2, subdivOverride: true });
+    expect(await pickup({ subdiv: 1 }, true)).toEqual({ subdiv: 1, subdivOverride: true });
+    expect(await pickup({ subdiv: 0, subdivOverride: false }, true)).toEqual({ subdiv: 0, subdivOverride: false });
+  });
+});
+
 describe('the View analysis (analysis views)', () => {
   afterEach(() => vi.unstubAllGlobals());
   const KEY = JSON.stringify([['--fov', '120,-70,50', '--cell', '2', '--north', '0', '--target', 'park=park'], null, 'facade']);
@@ -368,7 +419,9 @@ describe('the View analysis (analysis views)', () => {
    *  run lands RESULT (or the problem without a receiver). Also the tabs the app was set to and the downloads. */
   function app() {
     const rows = ['/Site/Facade', '/Site/Park', '/Site/Block'].map((path): ObjectRow => ({ id: path.slice(6).toLowerCase(), name: path.slice(6), path, tris: 2, verts: 4, role: 'none' }));
-    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = { tab: 'daylight' as Tab, labels: false, display: 'shaded', sky: 'none' };
+    let state = reducer(initialState(), { type: 'LOAD', slot: 0, objects: rows, name: 'site' }), ui = {
+      tab: 'daylight' as Tab, labels: false, labelScale: 1, labelSpacing: 1, labelLayout: 'grid', labelShow: 'all', labelBox: true, labelColour: '#ffffff', display: 'shaded', sky: 'none',
+    };
     let sunAround: Ctl['sunAround'] = {}, field: Ctl['field'] = { shown: false, scale: 1, density: 'some', around: {} };
     const tabs: Tab[] = [], downloads: unknown[] = [], dispatch = (a: Action) => { state = reducer(state, a); };
     const views = (a: Action) => dispatch(TAGGED.has(a.type) ? ({ ...a, tab: 'views' } as Action) : a);
@@ -464,9 +517,18 @@ describe('the View analysis (analysis views)', () => {
     const { c } = app();
     await ran(c);
     const all = ['/Site/Facade', '/Site/Park', '/Site/Block'];
-    const d = await json(c, 'set_display', { highlight: [[0.5, 0.7], [0, 0.2], [0.1, 0.3]], display: 'plain-wire', sky: 'blue-sky', sunAround: ['/Site'], fieldPreview: { show: true, scale: 2, density: 'many', around: ['/Site'] } });
+    const d = await json(c, 'set_display', { highlight: [[0.5, 0.7], [0, 0.2], [0.1, 0.3]], display: 'plain-wire', sky: 'blue-sky', labelScale: 1.5, sunAround: ['/Site'], fieldPreview: { show: true, scale: 2, density: 'many', around: ['/Site'] } });
     expect([d.highlight, c().state.bins, d.display, c().ui.display]).toEqual([[[0, 0.3], [0.5, 0.7]], [[0, 0.3], [0.5, 0.7]], 'plain-wire', 'plain-wire']);
-    expect([d.sky, c().ui.sky]).toEqual(['blue-sky', 'blue-sky']);
+    expect([d.sky, c().ui.sky, d.labelScale, c().ui.labelScale]).toEqual(['blue-sky', 'blue-sky', 1.5, 1.5]);
+    expect(await call(c, 'set_display', { labelScale: 3 })).toBe('labelScale: 0.5 to 2');
+    const look = await json(c, 'set_display', { labelSpacing: 2, labelLayout: 'staggered', labelShow: 'extremes', labelBox: false, labelColour: '#ff8800' });
+    const keys = ['labelSpacing', 'labelLayout', 'labelShow', 'labelBox', 'labelColour'] as const;
+    expect(keys.map((k) => look[k])).toEqual([2, 'staggered', 'extremes', false, '#ff8800']);
+    expect(keys.map((k) => c().ui[k])).toEqual([2, 'staggered', 'extremes', false, '#ff8800']);
+    expect(await call(c, 'set_display', { labelSpacing: 0.5 })).toBe('labelSpacing: 1 to 4');
+    expect(await call(c, 'set_display', { labelLayout: 'random' })).toMatch(/^labelLayout: one of grid, staggered, scattered, spot/);
+    expect(await call(c, 'set_display', { labelShow: 'top' })).toMatch(/^labelShow: one of all, extremes, problem/);
+    expect(await call(c, 'set_display', { labelColour: 'red' })).toBe("labelColour: a colour, '#rrggbb'");
     expect([d.sunAround, c().sunAround]).toEqual([all, { 0: all }]);
     expect(d.fieldPreview).toEqual({ show: true, scale: 2, density: 'many', around: ['/Site/Facade'] }); // the View analysis' receivers under /Site
     expect(await call(c, 'set_display', { highlight: [[1, 1]] })).toBe('highlight[0]: [lo, hi] with lo < hi');

@@ -51,7 +51,7 @@ export const REPORT_HANDLERS: Record<string, Handler> = {
   async save_report(a, c) {
     return exclusive(async () => {
       // the Daylight setup now goes with it (the name a set's: a title may be longer than a set's name takes)
-      const d = validateSpec(a.spec, appView(c()), boundsIn(c()), captureSet(c().state, 'daylight', 'Report setup', { shown: c().shown, subdiv: c().ui.subdiv }));
+      const d = validateSpec(a.spec, appView(c()), boundsIn(c()), captureSet(c().state, 'daylight', 'Report setup', { shown: c().shown, subdiv: { level: c().ui.subdiv, override: c().ui.subdivOverride } }));
       if (Array.isArray(d)) return fail(`spec: ${d.length} problem${d.length > 1 ? 's' : ''}; fix ${d.length > 1 ? 'them' : 'it'} and save again:\n${d.join('\n')}`);
       const old = (await storedReports()).find((e) => e.id === d.id)?.spec, since: unknown = a.updated ?? a.spec.updated; // get_report's spec carries its updated
       if (old && since !== old.updated) {

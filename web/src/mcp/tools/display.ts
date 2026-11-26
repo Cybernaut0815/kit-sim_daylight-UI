@@ -29,7 +29,8 @@ export const display = (x: Ctl) => {
   const t = tabOf(x, x.ui.tab), slot = x.state.active;
   return {
     analysis: x.ui.tab, ...(x.ui.tab === 'combined' ? { id: x.combined.view?.id ?? null } : {}), active: letter(slot), column: t.shown, colourBy: t.colourBy,
-    labels: x.ui.labels, display: x.ui.display, sky: x.ui.sky, highlight: x.state.bins.length ? x.state.bins : null,
+    labels: x.ui.labels, labelScale: x.ui.labelScale, labelSpacing: x.ui.labelSpacing, labelLayout: x.ui.labelLayout, labelShow: x.ui.labelShow, labelBox: x.ui.labelBox, labelColour: x.ui.labelColour,
+    display: x.ui.display, sky: x.ui.sky, highlight: x.state.bins.length ? x.state.bins : null,
     sunPath: x.ui.sunPath, sunScale: x.sunScale, sunAround: x.sunAround[slot] ?? null,
     fieldPreview: { show: x.field.shown, scale: x.field.scale, density: x.field.density, around: x.field.around[slot] ?? null },
     theme: x.theme, split: x.ui.split, link: x.ui.link, auto: x.ui.auto, section: x.section,
@@ -262,7 +263,8 @@ export const DISPLAY_HANDLERS: Record<string, Handler> = {
     return exclusive(() => {
       const x = c(), tab = lookTab(x, a), t = tabOf(x, tab), slot = a.active ? modelOf(x, a.active, 'active').slot : x.state.active;
       const bins = a.highlight === undefined ? undefined : binsOf(a.highlight), around = aroundArg(x, [slot], a.sunAround), field = fieldArg(x, [slot], a.fieldPreview);
-      const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto', 'labels', 'display', 'sky'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
+      const ui = Object.fromEntries(['sunPath', 'split', 'link', 'auto', 'labels', 'labelScale', 'labelSpacing', 'labelLayout', 'labelShow', 'labelBox', 'labelColour', 'display', 'sky']
+        .filter((k) => a[k] !== undefined).map((k) => [k, a[k]]));
       const section = a.section && sectionArg(x, a.section, a.active); // a view's look: no run key holds it, results stay fresh
       flushSync(() => {
         if (tab !== x.ui.tab) { // as a tab clicked: the probe and the bin highlight belong to the old tab's column
@@ -341,7 +343,7 @@ export const DISPLAY_HANDLERS: Record<string, Handler> = {
           const { el } = y.viewer(m.slot), mpu = el.stage?.metersPerUnit ?? 1, L = letter(m.slot), shown = u.models.find((k) => k.slot === m.slot);
           const fr = a.frame ? framed(y, m, a, size.width / size.height, !!u.shown?.endsWith('_back')) : null, view = a.view ?? fr?.view ?? el.view;
           const onSurfaces = labels ? (cam: Parameters<NonNullable<Shot['labels']>>[0]) => { const s = labelScenes.get(el)?.(cam, size.width, size.height); return s ? labelsOf(s) : []; } : undefined;
-          const shot = await capture(el, { width: size.width, height: size.height, view, near: a.near === undefined ? undefined : a.near / mpu, type: 'image/jpeg', quality: 0.85, labels: onSurfaces })
+          const shot = await capture(el, { width: size.width, height: size.height, view, near: a.near === undefined ? undefined : a.near / mpu, type: 'image/jpeg', quality: 0.85, labels: onSurfaces, labelScale: y.ui.labelScale, labelBox: y.ui.labelBox, labelColour: y.ui.labelColour })
             .catch((e: Error) => { throw new Error(e.message.replace(/less than (\S+) here$/, (_, v: string) => `less than ${fmtNum(Number(v) * mpu)} m here`)); }); // near's limit: stage units -> m
           // the reply's base64 within budget: a lower JPEG quality first, then fewer pixels (from the first JPEG)
           let data = await b64(shot), q = 0.85, w = size.width, h = size.height;

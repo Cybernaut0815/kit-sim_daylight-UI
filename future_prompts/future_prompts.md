@@ -94,6 +94,7 @@ Please add for each setting on the analysis a small diagram on the current setti
 So for views only under "field of view" and for "daylight" under "time"
 Please for views also (similar to the sun path) add a visualization on the mesh directly which would preview the view fields according ot the settings - make sure that hit only shows it kind as a camera and make sure it will not compromise the performance of the viewer with many analytics parts
 Also make sure, it can be same as the sun path turned on and off and also edits can be made as scaling it in scale and so on, but it should show the user the raycast field taken in account
+Also please do a small change on the analytics meshes - I want to be able to also show the wirefreame on those, so if a view with wireframe is toggled, the analysis mesh should also show wires, but just additionally to the still coloured result mesh
 
 ## Prompt 8
 
@@ -108,3 +109,10 @@ Also in this view, but also int he other result view it should be possible to sa
 Please make sure, that this visualization tab and the according visualization also has full MCP access
 
 *implemented*
+
+## Prompt 9
+
+___
+2026|11|22 - 10:24 am
+
+Make sure it is running with the latest USD_WebViewer main branch

@@ -9,7 +9,7 @@ import { DEFAULT_KEY, GLASS_KEY, type OpticsEdit } from '../lib/optics';
 import { columnLabel, fmtNum, splitColumn, unitFor } from '../lib/result';
 import { fmtClock, fmtDay } from '../lib/time';
 import { GROUP, QUANTITIES, parseSettings, type Model, type Settings, type State, type Tool } from '../store';
-import { LETTERS, entryFor, levelText, matchText, type AnalysisSet, type Look, type Match, type SetLooks, type SetModel, type SetRole, type SetWeather } from './apply';
+import { LETTERS, entryFor, levelText, matchText, type AnalysisSet, type Look, type Match, type SetLooks, type SetModel, type SetRole, type SetWeather, type Subdiv } from './apply';
 import { BOUNDS } from './combine';
 
 export * from './apply';
@@ -59,10 +59,10 @@ export function looksOf(viz: Settings['viz'], tool: Tool, shown: string): SetLoo
 /**
  * The setup of analysis `tool` in `s` now as set `name`: every model with a file open (its letter, file, roles and
  * Materials edits), the tab's run settings, north, the site and weather (Daylight; an uploaded EPW by its name), the
- * column shown (`shown`: its full name, else the tab's), the tab's colours, the charts and `subdiv` (the App's level,
- * when given). `was`: the set it updates (its id and created stay).
+ * column shown (`shown`: its full name, else the tab's), the tab's colours, the charts and `subdiv` (the App's
+ * subdivision, when given). `was`: the set it updates (its id and created stay).
  */
-export function captureSet(s: State, tool: Tool, name: string, o: { shown?: string | null; was?: AnalysisSet; now?: string; subdiv?: number } = {}): AnalysisSet {
+export function captureSet(s: State, tool: Tool, name: string, o: { shown?: string | null; was?: AnalysisSet; now?: string; subdiv?: Subdiv } = {}): AnalysisSet {
   const views = tool === 'views', now = o.now ?? new Date().toISOString(), { north, ...sim } = s.settings.sim, { file, ...weather } = s.settings.weather;
   const column = o.shown ?? (views ? s.viewAnalysis.column : s.column);
   return {
@@ -72,7 +72,7 @@ export function captureSet(s: State, tool: Tool, name: string, o: { shown?: stri
     column, colourBy: views ? s.viewAnalysis.colourBy : s.colourBy, north,
     ...(views ? {} : { site: { ...s.settings.site }, weather: { ...weather, ...(weather.source === 'upload' && file ? { file: file.name } : {}) } }),
     looks: looksOf(s.settings.viz, tool, splitColumn(column)[0]), charts: s.settings.charts.map((c) => ({ ...c })),
-    ...(o.subdiv !== undefined ? { subdiv: o.subdiv } : {}),
+    ...(o.subdiv ? { subdiv: o.subdiv.level, subdivOverride: o.subdiv.override } : {}),
   };
 }
 
@@ -160,7 +160,7 @@ export function setSummary(set: AnalysisSet): { label: string; value: string }[]
     if (north) line('North', north);
     line('View settings', `field ${v.fov[0]}°, ${v.fov[1]}° to ${v.fov[2]}°${v.fov[0] < 360 ? (v.gaze === 'level' ? ', level gaze' : ' about the normal') : ''}; a ray every ${fmtNum(v.cell)}°; far ${fmtNum(v.far)} m; ${SIDE_WORDS[v.sides]} on ${v.on}${v.reach ? `; reach ${v.reach}` : ''}${v.transmission ? '; through glass' : ''}`);
   }
-  line('Subdivision', set.subdiv !== undefined ? levelText(set.subdiv) : NOT_KEPT);
+  line('Subdivision', set.subdiv !== undefined ? levelText(set.subdiv, set.subdivOverride) : NOT_KEPT);
   const q = splitColumn(set.column)[0], look = set.looks?.quantities[q] ?? set.look ?? {}, unit = unitFor(set.column).value;
   line('Result', `${set.column ? columnLabel(set.column) : 'none chosen'}; ${set.colourBy === 'value' ? 'the meshes coloured by value' : 'the meshes plain'}`);
   const legend = has(look.min) || has(look.max) ? `, legend ${has(look.min) ? fmtNum(look.min) : 'lowest'} to ${has(look.max) ? fmtNum(look.max) : 'highest'}` : '';
@@ -194,7 +194,8 @@ const readableLooks = (v: unknown): v is SetLooks => isObj(v) && isObj(v.quantit
   && isObj(v.colors) && HEX.test(String(v.colors.below)) && HEX.test(String(v.colors.above));
 /** The fields a set of an older version lacks, each absent or readable. */
 const readableExtras = (s: Obj) => (s.north === undefined || finite(s.north)) && (s.site === undefined || readableSite(s.site)) && (s.weather === undefined || readableWeather(s.weather))
-  && (s.looks === undefined || readableLooks(s.looks)) && (s.charts === undefined || Array.isArray(s.charts)) && (s.subdiv === undefined || (Number.isInteger(s.subdiv) && (s.subdiv as number) >= -1 && (s.subdiv as number) <= 3));
+  && (s.looks === undefined || readableLooks(s.looks)) && (s.charts === undefined || Array.isArray(s.charts)) && (s.subdiv === undefined || (Number.isInteger(s.subdiv) && (s.subdiv as number) >= -1 && (s.subdiv as number) <= 3))
+  && (s.subdivOverride === undefined || typeof s.subdivOverride === 'boolean');
 
 /** A stored set the app can read, its settings spread over the defaults (a set of an older version opens with today's
  *  fields, but a view analysis saved before the gaze with the one it ran with: about the normal) and its charts as the

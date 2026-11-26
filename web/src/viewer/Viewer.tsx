@@ -19,7 +19,7 @@ import { idsUnder } from '../lib/tree';
 import type { Action, ObjectRow, RunResult, Tab } from '../store';
 import { Alert, Illustration } from '../ui';
 import { labelCell } from './capture';
-import { cancelLabels, elementOf, enqueue, sampler, type LabelScene } from './labels';
+import { cancelLabels, elementOf, enqueue, sampler, type LabelLayout, type LabelScene, type LabelShow } from './labels';
 import { candidatesOf, sampleEyes } from '../lib/viewfield';
 import { createSunPath, type Grab, type Ptr, type SunPath, type SunView } from './sunpath';
 import { createViewField, type FieldView, type ViewField } from './viewfield';
@@ -44,9 +44,20 @@ function look() {
 }
 /** Lets the renderer forget a mesh: it keeps a render object (holding the geometry) per mesh until the mesh fires 'dispose'. */
 const release = (m: THREE.Mesh) => (m as unknown as THREE.EventDispatcher<{ dispose: object }>).dispatchEvent({ type: 'dispose' });
-/** The most vertices a painted mesh gets the hover tint for: the viewer's paint freed its own GPU copy, which the tint
- *  uploads again while it shows. */
+/** The most vertices a painted mesh gets the hover tint for: the viewer's paint freed its own GPU copy, so the tint
+ *  uploads one of its own while it shows (tintGeometry). */
 const TINT_PAINTED = 65_536;
+/** A painted mesh's tint geometry: its arrays in attributes of their own, freed with it. The mesh's geometry stays the
+ *  viewer's: its wire lines and selection fill share its attributes, and disposing it would free their GPU buffers,
+ *  which three uploads again only for an object or geometry that changed (every frame then fails: a frozen view). */
+export function tintGeometry(mesh: THREE.BufferGeometry): THREE.BufferGeometry {
+  const position = mesh.attributes.position as THREE.BufferAttribute, own = new THREE.BufferGeometry();
+  own.setAttribute('position', new THREE.BufferAttribute(position.array, position.itemSize));
+  if (mesh.index) own.setIndex(new THREE.BufferAttribute(mesh.index.array, 1));
+  own.boundingBox = mesh.boundingBox;
+  own.boundingSphere = mesh.boundingSphere;
+  return own;
+}
 
 interface Props {
   usd: UsdViewerElement; slot: number; // this view's viewer (./usd.ts) and its model's slot
@@ -66,6 +77,10 @@ interface Props {
   display: Display; // the viewer's display mode (the Display menu), with results or without
   sky?: Sky; // what fills the background (the Display menu's Sky)
   labels?: boolean; // value labels on the painted receivers (the Display menu's "Values on the surfaces")
+  labelScale?: number; // their size over the default (the Display menu's Size)
+  labelSpacing?: number; // their cells' size over the default (Spacing)
+  labelLayout?: LabelLayout; labelShow?: LabelShow; // where they stand, which values get one (Layout, Show)
+  labelBox?: boolean; labelColour?: string; // the readout's chip, or plain text in this hex colour (Box, Text colour)
 }
 
 /** Per view, its label scene for a camera and size while it paints values (the agent's screenshots: labels.ts labelsOf). */
@@ -95,7 +110,7 @@ function SceneInfo({ objects, unit, section, stats, analysis }: { objects: Objec
   );
 }
 
-export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, fieldAround = null, section, analysis, display, sky = 'none', labels = false }: Props) {
+export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objects, selected, hovered, colourBy, result, column, scale, bin, bins, probeLabel, theme, dispatch, children, sun, around, field = null, fieldAround = null, section, analysis, display, sky = 'none', labels = false, labelScale = 1, labelSpacing = 1, labelLayout = 'grid', labelShow = 'all', labelBox = true, labelColour }: Props) {
   const [{ TINT, EMPTY, tint }] = useState(look);
   // cut with the model from the first section on; registered per mount, as a dispose lets go of it (StrictMode runs
   // this twice)
@@ -429,7 +444,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     const sceneOf = (camera: THREE.Camera, width: number, height: number): LabelScene | null => (!byValue ? null : {
       camera, width, height, meshes: [...meshes.values()].filter((o) => o.visible), result: byValue, column, keeps: (q) => usd.three.keeps(q),
       receiverOf: (o) => { const id = byObject.get(o); return id && role.get(id) === 'receiver' ? recv.get(id) ?? -1 : -1; },
-      unit, cell: labelCell(unit),
+      unit, cell: labelCell(unit, labelScale, labelSpacing), layout: labelLayout, show: labelShow, range: [scale?.lo ?? null, scale?.hi ?? null],
     });
     labelScenes.set(usd, sceneOf);
     layer.replaceChildren();
@@ -457,7 +472,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
           const l = sm.labels[drawn], d = document.createElement('div');
           d.className = 'value-label';
           d.textContent = l.text;
-          d.style.transform = `translate(${l.x}px, ${l.y}px) translate(-50%, -50%)`; // JS owns a label's place
+          d.style.transform = `translate(${l.x}px, ${l.y}px) translate(-50%, -50%) scale(${labelScale})`; // JS owns a label's place and size
           chips.append(d);
         }
         layer.append(chips); // one layout per slice
@@ -476,7 +491,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     usd.three.beforeRender.add(onFrame);
     timer = window.setTimeout(start, 100);
     return () => { clearTimeout(timer); cancelLabels(owner); usd.three.beforeRender.delete(onFrame); labelScenes.delete(usd); layer.replaceChildren(); };
-  }, [labels, byValue, column, objects, meshes, byObject, recv, section, usd]);
+  }, [labels, labelScale, labelSpacing, labelLayout, labelShow, scale?.lo, scale?.hi, byValue, column, objects, meshes, byObject, recv, section, usd]);
 
   // Hover: a light accent tint over the mesh, fainter over results.
   useEffect(() => {
@@ -484,13 +499,13 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
     if (!o || (o as THREE.InstancedMesh).isInstancedMesh) return; // ponytail: no tint on instanced shades (a child draws once, not per instance)
     const g = (o as THREE.Mesh).geometry, painted = !!byValue && recv.has(hovered!);
     if (painted && g.attributes.position.count > TINT_PAINTED) return; // ponytail: none on big painted meshes; the paint's own pieces if that is missed
-    tint.geometry = g;
+    const own = painted ? tintGeometry(g) : null;
+    tint.geometry = own ?? g;
     TINT.color.set(solid('--accent'));
     TINT.opacity = painted ? 0.1 : 0.22;
     o.add(tint);
     usd.three.invalidate();
-    // a painted mesh's GPU copy goes again with the tint (the viewer's paint freed it; its arrays stay for picks)
-    return () => { tint.removeFromParent(); if (painted) g.dispose(); usd.three.invalidate(); };
+    return () => { tint.removeFromParent(); own?.dispose(); usd.three.invalidate(); };
   }, [hovered, meshes, byValue, recv, theme]);
   // A new model: the tint lets go of the last one's geometry (the renderer would hold it until the next hover).
   useEffect(() => () => { tint.geometry = EMPTY; release(tint); }, [meshes]);
@@ -510,7 +525,7 @@ export function Viewer({ usd, slot, meshes, stage, follow, loading, error, objec
   return (
     <div ref={host} className="viewport" onClick={activate} onKeyDown={onKey}>
       <div ref={labelsEl} className="viewport__labels" aria-hidden="true" />
-      <div ref={valuesEl} className="viewport__values" data-density="compact" aria-hidden="true" />
+      <div ref={valuesEl} className={labelBox ? 'viewport__values' : 'viewport__values viewport__values--plain'} style={labelBox || !labelColour ? undefined : { color: labelColour }} data-density="compact" aria-hidden="true" />
       <div ref={tip} className="readout readout--float" hidden={!probeLabel} aria-hidden="true">{probeLabel}</div>
       {children && (
         <div className="viewport__name">

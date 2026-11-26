@@ -52,10 +52,14 @@ describe('set runner', () => {
     });
   }
 
-  it('a set of another subdivision level runs only once opened', () => {
-    const set = captureSet(open(1), 'daylight', 'Set', { subdiv: 2 });
-    expect([needsLevel(set, 2), needsLevel(set, 0), needsLevel({}, 3)]).toEqual([null, 2, null]);
-    expect([-1, 0, 2].map(levelText)).toEqual(['Auto', 'Off', 'Level 2']);
+  it('a set of another subdivision level or override runs only once opened; an older set without an override takes the app\'s', () => {
+    const set = captureSet(open(1), 'daylight', 'Set', { subdiv: { level: 2, override: true } }), off = { level: 2, override: false };
+    expect([set.subdiv, set.subdivOverride]).toEqual([2, true]);
+    expect([needsLevel(set, { level: 2, override: true }), needsLevel(set, { level: 0, override: true }), needsLevel(set, off), needsLevel({}, { level: 3, override: false })])
+      .toEqual([null, { level: 2, override: true }, { level: 2, override: true }, null]);
+    expect([needsLevel({ subdiv: 2 }, off), needsLevel({ subdiv: 2 }, { level: 2, override: true }), needsLevel({ subdiv: 1 }, off)]).toEqual([null, null, { level: 1, override: false }]);
+    expect([-1, 0, 2].map((l) => levelText(l))).toEqual(['Auto', 'Off', 'Level 2']);
+    expect(levelText(2, true)).toBe("Level 2, over each mesh's own");
   });
 
   it('setup leaves the app as it is', () => {

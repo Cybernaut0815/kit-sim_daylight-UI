@@ -23,7 +23,7 @@ import { columnFacts, compared, provenance, rowArgs, summaries, viewProvenance }
 const SETTINGS = TOOLS.find((t) => t.name === 'update_settings')!.inputSchema.properties!;
 const STATE: Record<SetModelStatus['state'], string> = { none: 'no entry', 'no-receiver': 'no receiver', subdiv: 'another subdivision', missing: 'not run', queued: 'queued', running: 'running', done: 'done', error: 'failed' };
 /** What a set of another subdivision level needs, for the agent. */
-const levelNote = (st: SetModelStatus) => (st.level !== undefined ? { note: `the set runs at subdivision ${levelText(st.level)}, not the app's: open_set it first (it re-reads the models at that level)` } : {});
+const levelNote = (st: SetModelStatus) => (st.level !== undefined ? { note: `the set runs at subdivision ${levelText(st.level, st.override)}, not the app's: open_set it first (it re-reads the models at that level)` } : {});
 const savedSets = (x: Ctl) => x.sets.saved.filter(isSet);
 const ids = (l: readonly { id: string }[], none: string) => l.map((s) => s.id).join(', ') || none;
 /** Saved set `id`; its refusal names `field` and the sets there are. */
@@ -206,7 +206,7 @@ export const SET_HANDLERS: Record<string, Handler> = {
         const [q, side] = (a.column as string).split('_');
         if (!(sim.quantities as string[]).includes(q) || !sides.includes(side)) throw new Error(`column: not a column the set computes (${sim.quantities.flatMap((k) => sides.map((d) => `${k}_${d}`)).join(', ')})`);
       }
-      const set = captureSet(s, tool, name, { shown: a.column ?? x.analysis(tool).shown ?? was?.column, was, subdiv: x.ui.subdiv });
+      const set = captureSet(s, tool, name, { shown: a.column ?? x.analysis(tool).shown ?? was?.column, was, subdiv: { level: x.ui.subdiv, override: x.ui.subdivOverride } });
       const saved: AnalysisSet = { ...set, ...(a.colourBy ? { colourBy: a.colourBy } : {}) };
       if (!(await x.sets.put(saved))) throw new Error(`id: not saved (${c().sets.error ?? 'the server refused it'})`);
       return ok({ saved: { id: saved.id, name, analysis: tool, column: saved.column, colourBy: saved.colourBy, models: saved.models.map((m) => ({ model: m.model, file: m.file, roles: m.roles.length })), updated: saved.updated }, status: statusLines(c(), saved) });

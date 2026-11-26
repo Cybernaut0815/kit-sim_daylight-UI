@@ -25,11 +25,11 @@ export function setPer(state: State, set: AnalysisSet, optics: (m: Model, reflec
 }
 
 /** A set's result for one open model: none (no entry of its own), no receiver, subdiv (it runs at another subdivision
- *  `level`: open it), missing (not run with these inputs this session), queued or running (the runner's), done
- *  (`result`, `key`) or error (`message`). */
+ *  `level` and `override`: open it), missing (not run with these inputs this session), queued or running (the
+ *  runner's), done (`result`, `key`) or error (`message`). */
 export interface SetModelStatus {
   slot: number; model: string; state: 'none' | 'no-receiver' | 'subdiv' | 'missing' | 'queued' | 'running' | 'done' | 'error';
-  progress?: number; message?: string; result?: RunResult; key?: string; level?: number;
+  progress?: number; message?: string; result?: RunResult; key?: string; level?: number; override?: boolean;
 }
 type Runs = Readonly<Record<string, Readonly<Record<number, Run>>>>;
 
@@ -42,7 +42,7 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((done, fail
 export interface SetRunsCfg {
   state: State; conv: RefObject<Map<string, Conv>>; reading: RefObject<boolean>; texStats: TexStats; setTexStats: Dispatch<SetStateAction<TexStats>>;
   idle: () => boolean; // neither live analysis has a batch in flight
-  subdiv: number; // the app's subdivision level
+  subdiv: number; subdivOverride: boolean; // the app's subdivision level, and whether it overrides the meshes' own
 }
 
 /** The runner: each set's status per model, Run (queued behind the sets before it) and Cancel (every set queued). */
@@ -63,14 +63,14 @@ export function useSetRuns(c: SetRunsCfg) {
   // Per set, its status as of the inputs it was worked out from (O(rows) per model: never per hover)
   const memo = useRef(new Map<string, { inputs: unknown[]; value: SetModelStatus[] }>());
   const statusOf = (set: AnalysisSet): SetModelStatus[] => {
-    const { state, subdiv } = latest.current, inputs = [set, state.models, state.settings, tex.current, runs[set.id], tick, subdiv], had = memo.current.get(set.id);
+    const { state, subdiv, subdivOverride } = latest.current, inputs = [set, state.models, state.settings, tex.current, runs[set.id], tick, subdiv, subdivOverride], had = memo.current.get(set.id);
     if (had && had.inputs.every((x, i) => x === inputs[i])) return had.value;
-    const per = setPer(state, set, (m, reflect) => opticsFor(m, tex.current, reflect)), level = needsLevel(set, subdiv);
+    const per = setPer(state, set, (m, reflect) => opticsFor(m, tex.current, reflect)), want = needsLevel(set, { level: subdiv, override: subdivOverride });
     const value = state.models.filter((m) => m.name).map((m): SetModelStatus => {
       const p = per.find((x) => x.m.slot === m.slot), run = runs[set.id]?.[m.slot], base = { slot: m.slot, model: LETTERS[m.slot] };
       if (!p) return { ...base, state: 'none' };
       if (!p.receivers.length) return { ...base, state: 'no-receiver' };
-      if (level !== null) return { ...base, state: 'subdiv', level };
+      if (want !== null) return { ...base, state: 'subdiv', level: want.level, override: want.override };
       const result = kept.peek(m.slot, p.key) ?? (p.m.result?.key === p.key ? p.m.result : undefined);
       if (run && inFlight(run)) return { ...base, state: run.status === 'queued' ? 'queued' : 'running', ...(run.status === 'running' && run.progress !== undefined ? { progress: run.progress } : {}), key: p.key };
       if (result) return { ...base, state: 'done', result, key: p.key };
@@ -127,7 +127,7 @@ export function useSetRuns(c: SetRunsCfg) {
   /** Set `set` run for its models (`slots`: these only) after the sets queued before it; resolves when it has run (at
    *  once for a set of another subdivision level: nothing runs). */
   const run = useCallback((set: AnalysisSet, slots?: readonly number[]): Promise<void> => {
-    if (needsLevel(set, latest.current.subdiv) !== null) return Promise.resolve();
+    if (needsLevel(set, { level: latest.current.subdiv, override: latest.current.subdivOverride }) !== null) return Promise.resolve();
     const g = gen.current;
     for (const m of setup(latest.current.state, set).models) if (!slots || slots.includes(m.slot)) putRun(set.id, m.slot, { status: 'queued', position: 0 });
     setQueued((n) => n + 1);

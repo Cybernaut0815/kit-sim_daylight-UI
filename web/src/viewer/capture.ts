@@ -5,7 +5,8 @@
 // legend's; the transparent background becomes white, a sky (the Display menu's) stays as the view shows it. Near and far
 // follow the viewer's rule for the shot's eye (USD_WebViewer viewport.ts fitClipPlanes); `near` overrides near: a cutaway
 // that clips what stands in front.
-// `labels`: value labels for the shot's camera (labels.ts), drawn over the image as the views' chips look.
+// `labels`: value labels for the shot's camera (labels.ts), drawn over the image as the views' chips look, at
+// `labelScale` times their size, or as plain text in `labelColour` without `labelBox` (the Display menu's).
 // No import of ./usd.ts: the node tests import this module.
 import { Box3, OrthographicCamera, PerspectiveCamera, RenderTarget, Sphere } from 'three';
 import type { UsdViewerElement, ViewState } from 'usd-viewer';
@@ -14,45 +15,47 @@ import type { Label } from './labels';
 
 export interface Shot {
   width: number; height: number; view?: ViewState; near?: number; type?: 'image/png' | 'image/jpeg'; quality?: number;
-  labels?: (camera: PerspectiveCamera | OrthographicCamera) => readonly Label[];
+  labels?: (camera: PerspectiveCamera | OrthographicCamera) => readonly Label[]; labelScale?: number; labelBox?: boolean; labelColour?: string;
 }
-/** The value labels' font (app.css .value-label): the label size in the primary face. */
-export function labelFont(): string {
+/** The value labels' font (app.css .value-label) at `scale` times its size: the label size in the primary face. */
+export function labelFont(scale = 1): string {
   const style = getComputedStyle(document.documentElement), px = parseFloat(style.getPropertyValue('--fs-label')) || 11;
-  return `${px}px ${style.getPropertyValue('--font-primary').trim() || 'sans-serif'}`;
+  return `${px * scale}px ${style.getPropertyValue('--font-primary').trim() || 'sans-serif'}`;
 }
 let measure: OffscreenCanvasRenderingContext2D | null = null;
-const cells = new Map<string, [number, number]>();
-/** The label grid's cell for values in `unit`, in px: a wide value's chip (padding and hairline as .value-label) and
- *  room round it; measured once per unit and font. */
-export function labelCell(unit: string): [number, number] {
+const widths = new Map<string, number>();
+/** The label grid's cell for values in `unit` at `scale` times their size, in px: a wide value's chip (padding and
+ *  hairline as .value-label) and room round it, the whole `spacing` times; its width measured once per unit and font. */
+export function labelCell(unit: string, scale = 1, spacing = 1): [number, number] {
   const font = labelFont(), key = `${font}|${unit}`;
-  let cell = cells.get(key);
-  if (!cell) {
+  let width = widths.get(key);
+  if (width === undefined) {
     measure ??= new OffscreenCanvas(1, 1).getContext('2d')!;
     measure.font = font;
-    cell = [Math.ceil(measure.measureText(unit ? `-8.888 ${unit}` : '-8.888').width) + 10 + 12, 24];
-    cells.set(key, cell);
+    width = Math.ceil(measure.measureText(unit ? `-8.888 ${unit}` : '-8.888').width) + 10 + 12;
+    widths.set(key, width);
   }
-  return cell;
+  return [Math.round(width * scale * spacing), Math.round(24 * scale * spacing)];
 }
-/** Labels as the views draw them (app.css .value-label): small strong text on the first surface in a hairline, centred
- *  on their cells. */
-function drawLabels(g: OffscreenCanvasRenderingContext2D, labels: readonly Label[]) {
-  const font = labelFont(), leading = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leading-body')) || 1.2;
-  const h = Math.round(parseFloat(font) * leading) + 4; // the line, 1 px padding and a hairline above and below
+/** Labels as the views draw them (app.css .value-label) at `scale` times their size: small strong text on the first
+ *  surface in a hairline, centred on their places; without `box` the text alone in `colour` (.viewport__values--plain). */
+function drawLabels(g: OffscreenCanvasRenderingContext2D, labels: readonly Label[], scale: number, box: boolean, colour: string | undefined) {
+  const font = labelFont(scale), leading = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leading-body')) || 1.2;
+  const h = Math.round(parseFloat(font) * leading + 4 * scale); // the line, 1 px padding and a hairline above and below
   g.font = font;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.lineWidth = 1;
+  g.lineWidth = scale;
   const back = cssVar('--bg-surface-1', '#fff'), edge = cssVar('--border-subtle', '#ccc', '--bg-surface-1'), text = cssVar('--text-strong', '#111');
   for (const l of labels) {
-    const w = Math.ceil(g.measureText(l.text).width) + 10, x = Math.round(l.x - w / 2), y = Math.round(l.y - h / 2);
-    g.fillStyle = back;
-    g.fillRect(x, y, w, h);
-    g.strokeStyle = edge;
-    g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-    g.fillStyle = text;
+    if (box) {
+      const w = Math.ceil(g.measureText(l.text).width + 10 * scale), x = Math.round(l.x - w / 2), y = Math.round(l.y - h / 2);
+      g.fillStyle = back;
+      g.fillRect(x, y, w, h);
+      g.strokeStyle = edge;
+      g.strokeRect(x + scale / 2, y + scale / 2, w - scale, h - scale);
+    }
+    g.fillStyle = box ? text : colour ?? text;
     g.fillText(l.text, l.x, l.y);
   }
 }
@@ -163,7 +166,7 @@ export async function capture(el: UsdViewerElement, s: Shot): Promise<Blob> {
     if (error) throw new Error(`${W} × ${H} px needs more GPU memory than is free: take a smaller shot`);
     const canvas = new OffscreenCanvas(W, H), g = canvas.getContext('2d')!;
     g.putImageData(new ImageData(unpack(px, W, H, el.backend === 'webgl2'), W, H), 0, 0);
-    if (s.labels) drawLabels(g, s.labels(cam));
+    if (s.labels) drawLabels(g, s.labels(cam), s.labelScale ?? 1, s.labelBox ?? true, s.labelColour);
     return await canvas.convertToBlob({ type: s.type ?? 'image/png', quality: s.quality });
   } finally {
     rt.dispose();

@@ -4,7 +4,7 @@
     {
       "name": "app_state",
       "title": "App state",
-      "description": "Snapshot of the app: call it first and whenever the user may have changed something. Compact JSON: the tab (UI or hidden, visible); per model A-D its name, file, variant choices, load state and problems, meshes by role, faces, run status and result freshness (fresh, stale, running); display (as set_display takes it); every setting (as update_settings takes it) and the problems that would stop a run; viewAnalysis (settings, field grid, roles, runs, problems); saved views; reports; sets (summary, and per model a status: done = a result for its inputs now is kept this session); combined views (meaning, inputs each model misses).",
+      "description": "Snapshot of the app: call it first and whenever the user may have changed something. JSON: the tab (UI or hidden, visible); per model A-D its name, file, variant choices, load state and problems, meshes by role, faces, run status and result freshness (fresh, stale, running); display (as set_display takes it); every setting (as update_settings takes it) and the problems that would stop a run; viewAnalysis (settings, field grid, roles, runs, problems); saved views; reports; sets (summary, and per model a status: done = a result for its inputs now is kept this session); combined views (meaning, inputs each model misses).",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -149,7 +149,7 @@
             "properties": {
               "quantity": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "A Daylight quantity (radiation, direct, diffuse, irradiance, illuminance, sunhours), a View analysis one (sky, ground, obstruction, obstruction_total, glazing, volume, area, distance, distance_min, reach_<D>, a target group) or combined_<id>; default the shown column's." },
               "gradient": { "type": "string", "description": "Gradient key: inferno, magma, plasma, viridis, cividis, turbo, ladybug, greys, blues, greens, oranges, purples, or a library one (an unknown key: the quantity's default)." },
-              "scaling": { "type": "string", "enum": ["linear", "log", "sqrt", "square", "equalised"], "description": "How values spread between min and max: linear, log (equal ratios, equal steps), sqrt (stretches the low end), square (the high end), equalised (each colour covers as many elements). Colours only." },
+              "scaling": { "type": "string", "enum": ["linear", "log", "sqrt", "square", "equalised"], "description": "How values spread between min and max: linear, log (equal ratios, equal steps), sqrt (stretches the low end), square (the high end), equalised (each colour covers as many elements)." },
               "min": { "type": ["number", "null"], "description": "Legend minimum, the quantity's unit; null: the data's over every model." },
               "max": { "type": ["number", "null"], "description": "Legend maximum, the quantity's unit; null: the data's over every model." },
               "lo": { "type": ["number", "null"], "description": "Problem range: values under it are painted belowColour and count as problems; null: no lower bound." },
@@ -179,7 +179,7 @@
           },
           "charts": {
             "type": "array",
-            "description": "Results panel charts, in order: a new id adds one (kind needed), an existing id changes the given fields; {id, remove: true} deletes an added chart, {id, reset: true} restores one. 'hist' and 'curve' are built in. Report charts belong to the report (save_report).",
+            "description": "Results panel charts, in order: a new id adds one (kind needed), an existing id changes the given fields; {id, remove: true} deletes an added chart, {id, reset: true} restores one. 'hist' and 'curve' are built in. Report charts: save_report.",
             "items": {
               "type": "object",
               "properties": {
@@ -293,7 +293,7 @@
     {
       "name": "set_geometry",
       "title": "Change model geometry",
-      "description": "Change what is drawn and simulated (the prim tree's variant column, the Model panel's subdivision). variant: switch a variant set on a prim (sets and values from model_tree). subdivision: refine catmullClark and loop meshes; without paths one level for every model (0 control cage, the default; -1 the authored schemes up to 2; 1 to 3), with paths that level for the meshes under them ('model' restores the model's). Roles are kept by path, new meshes start ignored, the result clears. Returns mesh and role counts; a slow re-read may answer 'running': poll app_state.",
+      "description": "Change what is drawn and simulated (the prim tree's variant column, the Model panel's subdivision). variant: switch a variant set on a prim (sets and values from model_tree). subdivision: refine catmullClark and loop meshes; without paths one level for every model (0 control cage, the default; -1 the authored schemes up to 2; 1 to 3), with paths that level for the meshes under them ('model' restores the model's), which keep it unless override. Roles are kept by path, new meshes start ignored, the result clears. Returns mesh and role counts; a slow re-read may answer 'running': poll app_state.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -313,8 +313,9 @@
             "type": "object",
             "description": "Refinement of subdivision meshes.",
             "properties": {
-              "level": { "type": ["integer", "string"], "enum": [-1, 0, 1, 2, 3, "model"], "description": "-1 authored up to 2, 0 control cage, 1 to 3 levels; 'model' (with paths) restores the model's level." },
-              "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims whose meshes get the level; default every model as a whole." }
+              "level": { "type": ["integer", "string"], "enum": [-1, 0, 1, 2, 3, "model"], "description": "As above; 'model' only with paths." },
+              "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "description": "Prims whose meshes get the level; default every model as a whole." },
+              "override": { "type": "boolean", "description": "No paths: true, the level also for meshes with their own (file or paths); false, theirs again. Default: unchanged." }
             },
             "required": ["level"],
             "additionalProperties": false
@@ -371,7 +372,7 @@
     {
       "name": "results",
       "title": "Result statistics",
-      "description": "Area-weighted statistics of one column per model: elements, area (m²), min, P10, median, mean, P90, max, total (value x area), the area shares (%) below, within and above the problem range, and below and at or above each threshold. A whole-model row, then rows by mesh, by parts (each prim in paths) or by facing (N, E, S, W, up, down). The first model is the reference: the others carry differences to it (compare options A-D this way). Also the unit, meaning, freshness and run provenance. From analysis daylight or views (the last runs), set (a saved set's kept results, not opened) or analysis combined with id (a combined view; missing input sets run first).",
+      "description": "Area-weighted statistics of one column per model: elements, area (m²), min, P10, median, mean, P90, max, total (value x area), the area shares (%) below, within and above the problem range, and below and at or above each threshold. A whole-model row, then rows by mesh, by parts (each prim in paths) or by facing (N, E, S, W, up, down). The first model is the reference: the others carry differences to it. Also the unit, meaning, freshness and run provenance. From analysis daylight or views (the last runs), set (a saved set's kept results, not opened) or analysis combined with id (a combined view; missing input sets run first).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -411,7 +412,7 @@
     {
       "name": "set_display",
       "title": "Set the display",
-      "description": "Change what the views show (the app bar, Results panel, Display and Section menus). Only given fields change; none touches a run or makes results stale. analysis: the tab shown and whose column and colourBy change (combined: id picks the view). Also the active model, labels (values on the surfaces), display mode, sky, highlight (value ranges kept bright), sun path (sunPath, sunScale, sunAround), the View analysis' fieldPreview, theme, split, link, auto run, and section: clipping planes and boxes replacing the whole section ({planes: [], boxes: []} clears it). Returns the display, section boxes as footprints.",
+      "description": "Change what the views show (the app bar, Results panel, Display and Section menus). Only given fields change; none touches a run or makes results stale. analysis: the tab shown and whose column and colourBy change (combined: id picks the view). Also the active model, labels (values on the surfaces) and their look, display mode, sky, highlight (value ranges kept bright), sun path (sunPath, sunScale, sunAround), the View analysis' fieldPreview, theme, split, link, auto run, and section: clipping planes and boxes replacing the whole section ({planes: [], boxes: []} clears it). Returns the display, section boxes as footprints.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -421,6 +422,12 @@
           "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "Result column every view shows." },
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "value (result colours) or plain (the model's own look)." },
           "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces (coloured by value only)." },
+          "labelScale": { "type": "number", "minimum": 0.5, "maximum": 2, "description": "The labels' size over the default; shots too." },
+          "labelSpacing": { "type": "number", "minimum": 1, "maximum": 4, "description": "Their cells over the default: fewer labels." },
+          "labelLayout": { "type": "string", "enum": ["grid", "staggered", "scattered", "spot"], "description": "spot: on their own face or point." },
+          "labelShow": { "type": "string", "enum": ["all", "extremes", "problem"], "description": "extremes: the 10 highest and lowest in view; problem: outside the problem range." },
+          "labelBox": { "type": "boolean", "description": "false: plain text in labelColour." },
+          "labelColour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Their text colour without the box." },
           "display": { "type": "string", "enum": ["shaded", "shaded-wire", "shaded-selwire", "plain", "plain-wire", "plain-selwire", "wire"], "description": "How the views draw the model: shaded (its materials) or plain grey, with every edge (-wire) or the selection's (-selwire), or wireframe; result colours show in each." },
           "sky": { "type": "string", "enum": ["none", "blue-sky", "sunset"], "description": "Behind the model: none (the theme's colour; white in shots) or an HDRI sky that also lights it; result colours stay the legend's." },
           "highlight": { "type": ["array", "null"], "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "maxItems": 32, "description": "Value ranges [lo, hi] in the column's unit kept bright, the rest faded (as selected histogram bars); null or [] clears; a run clears it." },
@@ -567,7 +574,7 @@
     {
       "name": "screenshot",
       "title": "Take a screenshot",
-      "description": "Render model views as JPEG images of any size, also while the tab is hidden; never moves the user's camera. Each model from its current camera, from view, or framed with frame (as set_camera, fitted to width/height); near cuts away what is closer to the eye (find_critical gives it). analysis, id, column, colourBy, labels, display, highlight, sunPath, sunAround, fieldPreview, grid and section apply to this shot only, as set_display takes them (section null: none). 16 to 8192 px a side, at most 8 MP; images come at most 1568 px on the long side, recompressed past about 800 KB per reply. Per model one image and a text: camera, colour scale, size and section.",
+      "description": "Render model views as JPEG images of any size, also while the tab is hidden; never moves the user's camera. Each model from its current camera, from view, or framed with frame (as set_camera, fitted to width/height); near cuts away what is closer to the eye (find_critical gives it). analysis, id, column, colourBy, labels, display, highlight, sunPath, sunAround, fieldPreview, grid and section apply to this shot only, as set_display takes them (section null: none). 16 to 8192 px a side, at most 8 MP; images come at most 1568 px on the long side, recompressed past ~800 KB a reply. Per model one image and a text: camera, colour scale, size and section.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -614,20 +621,20 @@
           "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$", "description": "With analysis 'combined': the combined view (app_state combined)." },
           "column": { "type": "string", "pattern": "^[A-Za-z0-9_-]+_(front|back)$", "description": "Result column to colour by; default the shown one." },
           "colourBy": { "type": "string", "enum": ["value", "plain"], "description": "value (result colours) or plain (the model's own look)." },
-          "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces (coloured by value only); default the Display menu's." },
-          "display": { "type": "string", "enum": ["shaded", "shaded-wire", "shaded-selwire", "plain", "plain-wire", "plain-selwire", "wire"], "description": "How the views draw the model: shaded (its materials) or plain grey, with every edge (-wire) or the selection's (-selwire), or wireframe; result colours show in each." },
-          "sky": { "type": "string", "enum": ["none", "blue-sky", "sunset"], "description": "Behind the model: none (the theme's colour; white in shots) or an HDRI sky that also lights it; result colours stay the legend's." },
-          "highlight": { "type": ["array", "null"], "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "maxItems": 32, "description": "Value ranges [lo, hi] in the column's unit kept bright, the rest faded (as selected histogram bars); null or [] clears; a run clears it." },
+          "labels": { "type": "boolean", "description": "Write each visible element's value on the surfaces (coloured by value only); default the Display menu's, in its look." },
+          "display": { "type": "string", "enum": ["shaded", "shaded-wire", "shaded-selwire", "plain", "plain-wire", "plain-selwire", "wire"], "description": "As set_display." },
+          "sky": { "type": "string", "enum": ["none", "blue-sky", "sunset"], "description": "As set_display." },
+          "highlight": { "type": ["array", "null"], "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "maxItems": 32, "description": "As set_display." },
           "sunPath": { "type": "boolean", "description": "Draw the sun path; default as shown." },
-          "sunAround": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^/" }, "description": "Prims of each model shot the sun path stands on and encloses; null or []: the whole model; default as shown." },
+          "sunAround": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^/" }, "description": "As set_display, in each model shot; default as shown." },
           "fieldPreview": {
             "type": "object",
-            "description": "The View analysis' field preview: the field each eye traces, drawn on the receivers (View analysis tab).",
+            "description": "As set_display.",
             "properties": {
-              "show": { "type": "boolean", "description": "Show the glyphs." },
-              "scale": { "type": "number", "minimum": 0.25, "maximum": 4, "description": "Glyph size over the fitted one (1 = fitted)." },
-              "density": { "type": "string", "enum": ["few", "some", "many"], "description": "At most 30, 120 or 400 glyphs." },
-              "around": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^/" }, "description": "Only on the receivers at or under these prims; null or []: every receiver." }
+              "show": { "type": "boolean", "description": "As set_display." },
+              "scale": { "type": "number", "minimum": 0.25, "maximum": 4, "description": "As set_display." },
+              "density": { "type": "string", "enum": ["few", "some", "many"], "description": "As set_display." },
+              "around": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^/" }, "description": "As set_display." }
             },
             "additionalProperties": false
           },
@@ -696,7 +703,7 @@
     {
       "name": "download_result",
       "title": "Download the result",
-      "description": "Save a model's result as a file in the browser's downloads folder (the Download menu; the model becomes active): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ, receivers coloured by the analysis' shown column; every format but OBJ also holds each column as values. mode, USD only: replace (colours instead of the receivers' materials, default) or variants (a 'daylight' variant set per receiver on a flattened stage). A big model may answer 'running': the file lands by itself, do not call again. Several downloads from a background tab can trip the browser's automatic-downloads block: the reply says so.",
+      "description": "Save a model's result as a file in the browser's downloads folder (the Download menu; the model becomes active): USD (usdz, usda, usdc, usd), glTF (glb, gltf) or OBJ, receivers coloured by the analysis' shown column; every format but OBJ also holds each column as values. mode, USD only: replace (colours instead of the receivers' materials, default) or variants (a 'daylight' variant set per receiver on a flattened stage). A big model may answer 'running': the file lands by itself, do not call again. Downloads from a background tab can trip the browser's automatic-downloads block: the reply says so.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -471,7 +471,7 @@
         "tags": ["agents"],
         "operationId": "getSession",
         "summary": "The hidden instance's session (app)",
-        "description": "With no app tab open, the agent works in the app hidden in headless Chrome (`--web` or `--app-url`), which records here, in memory, its `settings` (`epw`: a weather file opened by path), `subdiv`, the state-changing tool calls it made (`steps`) and whether it ran (`ran`). An app tab opening later replays the record and deletes it (`deleteSession`), which ends the hidden instance.",
+        "description": "With no app tab open, the agent works in the app hidden in headless Chrome (`--web` or `--app-url`), which records here, in memory, its `settings` (`epw`: a weather file opened by path), `subdiv` and `subdivOverride`, the state-changing tool calls it made (`steps`) and whether it ran (`ran`). An app tab opening later replays the record and deletes it (`deleteSession`), which ends the hidden instance.",
         "responses": {
           "200": { "description": "The record, as the hidden instance stored it.", "content": { "application/json": { "schema": { "type": "object" }, "example": { "settings": "{\"site\":{\"lat\":52.52,\"lon\":13.41,\"place\":\"Berlin\"},...}", "subdiv": 0, "epw": "C:\\weather\\berlin.epw", "steps": [{ "name": "open_model", "arguments": { "paths": ["C:\\models\\house.usdz"], "model": "A" } }, { "name": "set_roles", "arguments": { "paths": ["/Site/Block"], "role": "receiver", "model": "A" } }], "ran": true } } } },
           "204": { "description": "No session: no hidden instance, or picked up already (not an error, so an app tab's console stays clean)." },
@@ -738,7 +738,8 @@
           "weather": { "type": "object", "description": "Daylight: the source, station or EPW file name, turbidity and altitude." },
           "looks": { "type": "object", "description": "`quantities`: each quantity's `Look`; `colors`: the problem range's two colours." },
           "charts": { "type": "array", "items": { "type": "object" }, "description": "The charts, as `update_settings` takes them." },
-          "subdiv": { "type": "integer", "description": "The subdivision level it runs at (-1 auto, 0 off)." }
+          "subdiv": { "type": "integer", "description": "The subdivision level it runs at (-1 auto, 0 off)." },
+          "subdivOverride": { "type": "boolean", "description": "That level also for the meshes with their own refinement (absent: the app's setting)." }
         }
       },
       "CombinedView": {

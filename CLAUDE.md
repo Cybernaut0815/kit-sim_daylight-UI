@@ -6,8 +6,9 @@
   markup. Only kit-ui classes and CSS variables in `web/`; inline `style=` only for its seven knobs (`--container-w
   --grid-min --stack-gap --split-aside --control-h --dialog-w --sidebar-w`, via `knob()` in `web/src/ui.tsx`); charts take
   `--chart-*` tokens (`--chart-cat-1..8` for series in fixed order). The one project stylesheet is `web/src/app.css`
-  (layout only, tokens only). One deliberate deviation: result data colours (gradient stops, the problem-range colours)
-  and the neutral scene grey of unpainted meshes are hex values, never UI chrome. The `kit-report` skill in the same
+  (layout only, tokens only). One deliberate deviation: result data colours (gradient stops, the problem-range colours,
+  the value labels' text colour without the box) and the neutral scene grey of unpainted meshes are hex values, never UI
+  chrome. The `kit-report` skill in the same
   package (`skills/kit-report/SKILL.md`) is the layout of the PDF reports (`web/src/report`, the agent's `guide` topic).
 - `kit-sim_daylight/` is a git submodule (the repo kit-sim_core): change the core in its own repo, then bump the pointer
   here.

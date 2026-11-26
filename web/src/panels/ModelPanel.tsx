@@ -10,7 +10,8 @@ import { Alert, Icon, LETTERS, Section, Tag } from '../ui';
 import { PrimTree } from './PrimTree';
 
 const LABEL: Record<Role, string> = { receiver: 'Receiver', shade: 'Shade', none: 'Ignore' };
-const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. Not saved to the model.';
+const SUBDIV_HELP = 'As the USD viewer draws them: catmullClark and loop meshes refined with OpenSubdiv (creases, corners, holes and boundary rules included); bilinear and "none" stay as authored; a mesh without a scheme counts as catmullClark, except under Auto. A mesh whose refined surface would be very large for the view is refined less: its row shows the triangles it really has. A mesh with a level of its own (from its file, or the Prims row\'s Subdivision…) keeps it unless "Over each mesh\'s own level" is on. Not saved to the model.';
+const OVERRIDE_HELP = 'On: this level for every catmullClark / loop mesh, also those with a level of their own (from their file, or the Prims row\'s Subdivision…), which get theirs back when it is off. Nothing in the file changes.';
 const SHADE_HELP = "Off: the selected receivers are measured but cast no shade and reflect nothing, e.g. a grid of points inside a room, which gets the room's shade and shades nothing else.";
 const SHADE_OFF = 'No receiver casts shade now: Receivers block rays too (Simulation, Advanced) is off.';
 // the view analysis' words for the same roles and switch
@@ -23,9 +24,9 @@ const TARGETS_HELP = 'Every group is measured in the same run, a result column e
 interface Props {
   models: Model[]; active: number; usd: UsdViewerElement; // the active model's viewer
   names: ReadonlyMap<string, string>; loading: boolean; busy: boolean; // busy: any model loading
-  error: string | null; errors: Record<string, string>; stage: number; subdiv: number; selfOcclude: boolean; // selfOcclude: receivers block rays
+  error: string | null; errors: Record<string, string>; stage: number; subdiv: number; subdivOverride: boolean; selfOcclude: boolean; // selfOcclude: receivers block rays
   onFiles: (slot: number, files: File[]) => void; onVariant: (slot: number, path: string, set: string, variant: string) => void;
-  onSubdiv: (level: number) => void; onRefine: (slot: number, paths: string[], level: number | null) => void;
+  onSubdiv: (level: number, override?: boolean) => void; onRefine: (slot: number, paths: string[], level: number | null) => void;
   onRemove: (slot: number) => void; dispatch: Dispatch<Action>;
   analysis?: Tab; groups?: readonly string[]; // whose roles the rows carry; the view analysis' target groups in use (every model's)
 }
@@ -33,7 +34,7 @@ interface Props {
 /** After a tab is added or removed, the pressed tab takes the focus (the button pressed may be gone). */
 const focusTab = () => requestAnimationFrame(() => document.querySelector<HTMLElement>('.model-tabs [aria-current="page"]')?.focus());
 
-export const ModelPanel = memo(function ModelPanel({ models, active, usd, names, loading, busy, error, errors, stage, subdiv, selfOcclude, onFiles, onVariant, onSubdiv, onRefine, onRemove, dispatch, analysis = 'daylight', groups = [] }: Props) {
+export const ModelPanel = memo(function ModelPanel({ models, active, usd, names, loading, busy, error, errors, stage, subdiv, subdivOverride, selfOcclude, onFiles, onVariant, onSubdiv, onRefine, onRemove, dispatch, analysis = 'daylight', groups = [] }: Props) {
   const { objects, selection, selected } = models.find((m) => m.slot === active)!;
   const total = objects.length, count = (r: Role) => objects.reduce((n, o) => n + (o.role === r ? 1 : 0), 0);
   const receivers = objects.filter((o) => selected.has(o.id) && o.role === 'receiver'), free = receivers.filter((o) => o.shade === false).length; // the selected receivers; those casting no shade
@@ -99,6 +100,7 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
           <option value={-1}>Auto: authored schemes, up to level 2</option>
           {[1, 2, 3].map((l) => <option key={l} value={l}>Level {l}</option>)}
         </select>
+        <label title={OVERRIDE_HELP}><input type="checkbox" checked={subdivOverride} disabled={busy} onChange={(e) => onSubdiv(subdiv, e.target.checked)} /> Over each mesh&apos;s own level</label>
         <span className="field__help line" title={models.length > 1 ? `${SUBDIV_HELP} One level for every model.` : SUBDIV_HELP}>catmullClark / loop meshes as smooth surfaces with their creases; the run uses these triangles</span>
       </div>
       {error && <Alert title="Problems loading the model">{error}</Alert>}
@@ -123,8 +125,9 @@ export const ModelPanel = memo(function ModelPanel({ models, active, usd, names,
               /> {views ? 'Blocks rays' : 'Casts shade'}
             </label>
             <select
-              className="select" value="" aria-label="Subdivision of the selected meshes" title={`Subdivision of the selected meshes, over the model's level. ${SUBDIV_HELP}`}
-              disabled={!selected.size || loading}
+              className="select" value="" aria-label="Subdivision of the selected meshes"
+              title={subdivOverride ? "Subdivision of the selected meshes: off while the model's level is over each mesh's own (above)" : `Subdivision of the selected meshes, over the model's level. ${SUBDIV_HELP}`}
+              disabled={!selected.size || loading || subdivOverride}
               onChange={(e) => onRefine(active, objects.filter((o) => selected.has(o.id) && !o.instances).map((o) => o.path), e.target.value === 'model' ? null : Number(e.target.value))}
             >
               <option value="" disabled>Subdivision…</option>

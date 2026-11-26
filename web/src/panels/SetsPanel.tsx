@@ -24,7 +24,7 @@ const BADGE: Record<SetModelStatus['state'], [string, string]> = {
   done: ['badge--success', 'result'], running: ['badge--info', 'running'], queued: ['badge--neutral', 'queued'], missing: ['badge--neutral', 'not run'],
   error: ['badge--error', 'failed'], none: ['badge--neutral', 'no entry'], 'no-receiver': ['badge--warning', 'no receiver'], subdiv: ['badge--warning', 'open to run'],
 };
-const badgeTitle = (x: SetModelStatus) => (x.level !== undefined ? `It runs at subdivision ${levelText(x.level)}: Open re-reads the models at that level, then it runs` : x.message);
+const badgeTitle = (x: SetModelStatus) => (x.level !== undefined ? `It runs at subdivision ${levelText(x.level, x.override)}: Open re-reads the models at that level, then it runs` : x.message);
 const badgeText = (x: SetModelStatus) => `${LETTERS[x.slot]} ${x.state === 'running' && x.progress !== undefined ? `${Math.round(100 * x.progress)} %` : BADGE[x.state][1]}`;
 
 /** One set: its name and badges folded; its actions (or the rename field), what it keeps and Copy to model unfolded. */

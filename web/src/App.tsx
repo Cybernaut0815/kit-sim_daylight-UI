@@ -35,7 +35,7 @@ import { columnOf } from './sets/combine';
 import { kept } from './sets/kept';
 import { SetsMenu } from './sets/SetsMenu';
 import { useSetRuns } from './sets/runs';
-import { applyReport, captureSet, copySet, copyText, isSet, notOpen, renameSet, type AnalysisSet, type CombinedView, type SetModel } from './sets/model';
+import { applyReport, captureSet, copySet, copyText, isSet, needsLevel, notOpen, renameSet, type AnalysisSet, type CombinedView, type SetModel, type Subdiv } from './sets/model';
 import { useCombined } from './sets/useCombined';
 import { useSaved } from './sets/useSaved';
 import { TimePanel } from './panels/TimePanel';
@@ -47,23 +47,40 @@ import { TAGGED, initialState, loadRole, parseSettings, reducer, serializeSettin
 import { Icon, LETTERS, Segmented, Tag, knob } from './ui';
 import { Viewer } from './viewer/Viewer';
 import { download, type ExportMode, type Format, type PickedModel } from './viewer/download';
-import { DISPLAYS, DisplayMenu, DownloadMenu, ReportsMenu, SKIES_SHOWN, SectionMenu, ViewsMenu, type Display, type Sky } from './viewer/Views';
+import { DISPLAYS, DisplayMenu, DownloadMenu, LABEL_COLOUR, LABEL_LAYOUTS, LABEL_SCALE, LABEL_SHOWS, LABEL_SPACING, ReportsMenu, SKIES_SHOWN, SectionMenu, ViewsMenu, type Display, type Sky } from './viewer/Views';
+import type { LabelLayout, LabelShow } from './viewer/labels';
 import type { SunView } from './viewer/sunpath';
 import { DENSITY, type Density, type FieldView } from './viewer/viewfield';
-import { viewer } from './viewer/usd';
+import { refine, viewer } from './viewer/usd';
 
 const KEY = 'daylight.settings', THEME_KEY = 'daylight.theme', UI_KEY = 'daylight.ui';
 // View preferences, stored apart from the settings: sidebar widths (px; 22rem / 24rem defaults), the sun path, Auto run,
-// the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3; every model alike), two or three views
+// the subdivision level (the viewer's: 0 = the control cage, -1 = auto, 1..3; every model alike) and whether it also
+// overrides the meshes' own levels, two or three views
 // side by side or stacked, linked cameras, the analysis shown (its tab), the views' display mode, sky and value labels
-// (the Display menu).
-const UI = { widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab, display: 'shaded' as Display, sky: 'none' as Sky, labels: false }, MIN_W = 240, MAX_W = 640;
+// with their look (the Display menu).
+const UI = {
+  widths: { left: 352, right: 384 }, sunPath: true, auto: false, subdiv: 0, subdivOverride: false, split: 'side' as 'side' | 'stacked', link: true, tab: 'daylight' as Tab, display: 'shaded' as Display, sky: 'none' as Sky, labels: false,
+  labelScale: 1, labelSpacing: 1, labelLayout: 'grid' as LabelLayout, labelShow: 'all' as LabelShow, labelBox: true, labelColour: LABEL_COLOUR,
+}, MIN_W = 240, MAX_W = 640;
 export type UiPrefs = typeof UI;
 
 type ThemeMode = 'auto' | 'light' | 'dark';
 const media = window.matchMedia('(prefers-color-scheme: dark)');
 const readTheme = (): ThemeMode => { try { const m = localStorage.getItem(THEME_KEY); return m === 'light' || m === 'dark' ? m : 'auto'; } catch { return 'auto'; } };
-const readUi = (): typeof UI => { try { const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {}; return { ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' || p.tab === 'combined' ? p.tab : 'daylight', labels: p.labels === true, display: DISPLAYS.some(([d]) => d === p.display) ? p.display : UI.display, sky: SKIES_SHOWN.some(([k]) => k === p.sky) ? p.sky : UI.sky }; } catch { return UI; } };
+const within = (v: unknown, range: { min: number; max: number }): v is number => typeof v === 'number' && v >= range.min && v <= range.max;
+const readUi = (): typeof UI => {
+  try {
+    const p = JSON.parse(localStorage.getItem(UI_KEY) ?? 'null') ?? {};
+    return {
+      ...UI, ...p, widths: { ...UI.widths, ...p.widths }, tab: p.tab === 'views' || p.tab === 'combined' ? p.tab : 'daylight', labels: p.labels === true, subdivOverride: p.subdivOverride === true,
+      display: DISPLAYS.some(([d]) => d === p.display) ? p.display : UI.display, sky: SKIES_SHOWN.some(([k]) => k === p.sky) ? p.sky : UI.sky,
+      labelScale: within(p.labelScale, LABEL_SCALE) ? p.labelScale : UI.labelScale, labelSpacing: within(p.labelSpacing, LABEL_SPACING) ? p.labelSpacing : UI.labelSpacing,
+      labelLayout: LABEL_LAYOUTS.some(([k]) => k === p.labelLayout) ? p.labelLayout : UI.labelLayout, labelShow: LABEL_SHOWS.some(([k]) => k === p.labelShow) ? p.labelShow : UI.labelShow,
+      labelBox: p.labelBox !== false, labelColour: typeof p.labelColour === 'string' && /^#[0-9a-f]{6}$/i.test(p.labelColour) ? p.labelColour : UI.labelColour,
+    };
+  } catch { return UI; }
+};
 
 /** A view's model as the app holds it: the viewer's object per row id, the model's own names by prim path (glb / gltf /
  *  obj), a load in progress or its problem, and the open counter (bumped per opened model: the tree resets and the camera
@@ -143,8 +160,8 @@ export default function App() {
   const model = useRef<Record<number, { mpu: number; own: ReadonlyMap<string, string>; picked: PickedModel }>>({});
   const models = useRef(state.models); // the models now, for the stable callbacks
   models.current = state.models;
-  const subdiv = useRef(ui.subdiv);
-  subdiv.current = ui.subdiv;
+  const subdiv = useRef<Subdiv>({ level: ui.subdiv, override: ui.subdivOverride });
+  subdiv.current = { level: ui.subdiv, override: ui.subdivOverride };
   const [savedViews, setSavedViews] = useState<SavedView[]>([]); // views saved in the app: this session, every view, never in a file
   const choices = useRef<Record<number, AppModel['choices']>>({}); // per slot, the variant choices made since its file opened: [the file's own, chosen]
   const [reports, setReports] = useState<Stored[] | null>(null); // the stored reports (null: none here: no agent routes, a LAN tab, mock mode)
@@ -335,24 +352,22 @@ export default function App() {
     sets[set] = [own, variant];
   }), [reread]);
   // The viewers' refinement, one level for every model so they are drawn and run alike: catmullClark / loop meshes drawn
-  // (and so simulated) as their smooth surface, creases included.
-  const onSubdiv = useCallback((level: number) => {
-    setUi((u) => ({ ...u, subdiv: level }));
-    for (const m of models.current) { const { el } = viewer(m.slot); void reread(m.slot, () => el.ready.then(() => el.usd.setComplexity(level))); }
+  // (and so simulated) as their smooth surface, creases included; with `override` (default: as it is) that level also for
+  // the meshes with their own, which get it back when it goes off.
+  const onSubdiv = useCallback((level: number, override = subdiv.current.override) => {
+    setUi((u) => ({ ...u, subdiv: level, subdivOverride: override }));
+    for (const m of models.current) { const { el } = viewer(m.slot); void reread(m.slot, () => refine(el, level, override)); }
   }, [reread]);
   /** Per mesh, over the model's level: a level, or null = back to the model's. Prims that cannot refine are skipped. */
   const onRefine = useCallback((slot: number, paths: string[], level: number | null) => void reread(slot, async () => {
     const { usd } = viewer(slot).el;
     for (const p of paths) await (level === null ? usd.clearRefinement(p) : usd.setRefinement(p, true, level)).catch(() => {});
   }), [reread]);
-  // The stored level, once each core is up (a new one starts at 0; this lands before its first open: the same promise,
-  // registered first). It then holds across that core's models.
+  // The stored level and override, once each core is up (a new one starts at 0 and off; this lands before its first open:
+  // the same promise, registered first). They then hold across that core's models.
   const slots = state.models.map((m) => m.slot).join();
   useEffect(() => {
-    for (const m of models.current) {
-      const { el } = viewer(m.slot);
-      el.ready.then(() => { if (el.session.refineLevel !== subdiv.current) void el.usd.setComplexity(subdiv.current); }, () => {});
-    }
+    for (const m of models.current) void refine(viewer(m.slot).el, subdiv.current.level, subdiv.current.override).catch(() => {});
   }, [slots]);
 
   // The section in every view with a stage, in that stage's units and axes; again whenever a stage opens there (which
@@ -433,7 +448,7 @@ export default function App() {
   // Daylight per model, and the view analysis: the same models, meshes and materials, its own roles, settings and runs
   // (analysis.ts cfgFor: how each runs).
   // saved sets run in the background (sets/runs.ts), one job at a time and only while neither analysis has a batch on its way
-  const runs = useSetRuns({ state, conv, reading, texStats, setTexStats, idle: () => analyses.current.every((x) => !x.busy.current), subdiv: ui.subdiv });
+  const runs = useSetRuns({ state, conv, reading, texStats, setTexStats, idle: () => analyses.current.every((x) => !x.busy.current), subdiv: ui.subdiv, subdivOverride: ui.subdivOverride });
   const shared = { conv, texStats, setTexStats, reading, auto: ui.auto, viz: s.viz, tick: runs.tick };
   const D = useAnalysis({ ...shared, ...cfgFor('daylight', s), models: state.models, column: state.column, visible: ui.tab === 'daylight', dispatch });
   const V = useAnalysis({ ...shared, ...cfgFor('views', s), models: vModels, column: state.viewAnalysis.column, visible: views, dispatch: dispatchViews });
@@ -543,7 +558,8 @@ export default function App() {
   // `copied`: a copy's own line, for its model's
   const onOpenSet = (set: AnalysisSet, copied?: { model: string; text: string }) => {
     dispatch({ type: 'APPLY_SET', set });
-    if (set.subdiv !== undefined && set.subdiv !== ui.subdiv) onSubdiv(set.subdiv); // re-reads after the roles land: they stay by path
+    const want = needsLevel(set, subdiv.current);
+    if (want) onSubdiv(want.level, want.override); // re-reads after the roles land: they stay by path
     setOpenSets((o) => ({ ...o, [set.tool]: set.id }));
     setSetNote({ tool: set.tool, lines: [...applyReport(state.models, set).map((r) => (r.model === copied?.model ? copied.text : r.text)), ...notOpen(state.models, set)] });
     if (ui.tab !== set.tool) onTab(set.tool);
@@ -559,7 +575,7 @@ export default function App() {
   // the setup of analysis `of` now as set `name` (`was`: the set it updates), open on its tab from then on: from its own
   // tab's Sets menu, or from the Combined tab
   const onSaveSet = (name: string, of: Tool, was?: AnalysisSet) => {
-    const x = captureSet(state, of, name, { shown: (of === 'views' ? V : D).shown, was, subdiv: ui.subdiv });
+    const x = captureSet(state, of, name, { shown: (of === 'views' ? V : D).shown, was, subdiv: subdiv.current });
     void sets.put(x).then((ok) => { if (ok) { setOpenSets((o) => ({ ...o, [of]: x.id })); setSetNote({ tool: of, lines: [was ? `'${x.name}' updated with the current setup` : `'${x.name}' saved; it is open now`] }); } });
   };
   const onRenameSet = (set: AnalysisSet, name: string) => sets.put(renameSet(set, name));
@@ -599,7 +615,7 @@ export default function App() {
                 {combined && <CombinedPanel views={C.views} sets={C.sets} shown={C.view} notes={C.notes} error={sets.error} saving={sets.saving} statusOf={runs.statusOf} onShow={onShowCombined} onSave={onSaveCombined} onDelete={onDeleteCombined} onPreview={setCvPreview} />}
                 {/* the tab's model and materials (daylight's on the Combined tab), mounted there too, hidden */}
                 <div className="panel-group" hidden={combined}>
-                <ModelPanel models={T.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={views ? state.viewAnalysis.errors : state.errors} stage={ap.stage} subdiv={ui.subdiv} selfOcclude={views ? v.selfOcclude : s.sim.selfOcclude} analysis={tool} groups={groups} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={views ? dispatchViews : dispatch} />
+                <ModelPanel models={T.models} active={am.slot} usd={viewer(am.slot).el} names={ap.names} loading={ap.loading} busy={Object.values(panes).some((p) => p.loading)} error={ap.loadError} errors={views ? state.viewAnalysis.errors : state.errors} stage={ap.stage} subdiv={ui.subdiv} subdivOverride={ui.subdivOverride} selfOcclude={views ? v.selfOcclude : s.sim.selfOcclude} analysis={tool} groups={groups} onFiles={onFiles} onVariant={onVariant} onSubdiv={onSubdiv} onRefine={onRefine} onRemove={onRemove} dispatch={views ? dispatchViews : dispatch} />
                 <MaterialsPanel slot={am.slot} title={n > 1 ? `Materials, model ${LETTERS[am.slot]}` : 'Materials'} rows={T.optics[ai].materials} fallback={T.optics[ai].fallback} glass={T.optics[ai].glass} reading={!T.materialsReady} mode={views ? 'physical' : s.sim.mode} transmission={views ? v.transmission : s.sim.transmission} reflections={!views && reflect} edited={Object.keys(am.optics).length > 0} dispatch={dispatch} />
                 </div>
                 {/* daylight's own inputs stay mounted on the other tabs (the weather header, the map), hidden */}
@@ -630,7 +646,8 @@ export default function App() {
                     <Viewer
                       key={m.slot} usd={viewer(m.slot).el} slot={m.slot} follow={f === undefined ? null : viewer(f).el} meshes={p.meshes} stage={p.stage} loading={p.loading} error={n > 1 ? p.loadError : null}
                       objects={m.objects} selected={m.selected} hovered={state.hovered} colourBy={colourBy} result={A.cols[i] >= 0 ? m.result : null} column={Math.max(A.cols[i], 0)}
-                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={ui.tab === 'daylight' ? sunView : null} around={sunAround[m.slot] ?? null} field={views ? fieldView : null} fieldAround={fieldAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display} sky={ui.sky} labels={ui.labels}
+                      scale={A.scale} bin={state.bin} bins={state.bins} probeLabel={probed === m ? probeLabel : null} theme={theme} dispatch={dispatch} sun={ui.tab === 'daylight' ? sunView : null} around={sunAround[m.slot] ?? null} field={views ? fieldView : null} fieldAround={fieldAround[m.slot] ?? null} section={sectionWords} analysis={ui.tab} display={ui.display} sky={ui.sky} labels={ui.labels} labelScale={ui.labelScale}
+                      labelSpacing={ui.labelSpacing} labelLayout={ui.labelLayout} labelShow={ui.labelShow} labelBox={ui.labelBox} labelColour={ui.labelColour}
                     >
                       {n > 1 && (
                         <button className="chip" type="button" aria-pressed={m.slot === state.active} title={`Model ${LETTERS[m.slot]}: ${m.name || 'no model open yet'}. The Model and Materials panels, Views and Download act on the pressed view; a click in a view presses it`}>
@@ -649,7 +666,8 @@ export default function App() {
                   <div className="cluster">
                     <ViewsMenu usd={viewer(am.slot).el} model={n > 1 ? LETTERS[am.slot] : undefined} disabled={!ap.meshes.size} views={savedViews} reports={reports} onSave={(sv) => setSavedViews((l) => [...l, sv])} onRemove={(id) => setSavedViews((l) => l.filter((sv) => sv.id !== id))} onReportView={onReportView} onSection={(sc) => onSection(sc, null)} />
                     <SectionMenu usd={viewer(am.slot).el} section={section} selected={am.selection.paths.length > 0} disabled={!ap.meshes.size} onChange={onSection} />
-                    <DisplayMenu value={ui.display} onChange={(display) => setUi((u) => ({ ...u, display }))} sky={ui.sky} onSky={(sky) => setUi((u) => ({ ...u, sky }))} labels={ui.labels} onLabels={(labels) => setUi((u) => ({ ...u, labels }))} />
+                    <DisplayMenu value={ui.display} onChange={(display) => setUi((u) => ({ ...u, display }))} sky={ui.sky} onSky={(sky) => setUi((u) => ({ ...u, sky }))} labels={ui.labels} onLabels={(labels) => setUi((u) => ({ ...u, labels }))}
+                      look={ui} onLook={(patch) => setUi((u) => ({ ...u, ...patch }))} problemRange={!!A.scale && (A.scale.lo !== null || A.scale.hi !== null)} />
                     {!combined && <SetsMenu tool={tool} sets={tabSets} open={openSet} note={setNote?.tool === tool ? setNote.lines : null} error={sets.error} saving={sets.saving} onShow={sets.refresh} onOpen={onOpenSet} onSave={(name) => onSaveSet(name, tool)} onUpdate={(x) => onSaveSet(x.name, tool, x)} models={openModels} onCopy={onCopySet} />}
                     <DownloadMenu model={n > 1 ? LETTERS[am.slot] : undefined} ready={!!am.result && A.cols[ai] >= 0} exporting={exporting} error={exportError && exportError.key === am.result?.key ? exportError.message : null} onDownload={onDownload} />
                     {/* only while there are reports (daylight's); a generation's failure shows as its lastError */}
