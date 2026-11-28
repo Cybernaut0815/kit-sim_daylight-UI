@@ -23,6 +23,13 @@ quote numbers only from tool output, name the model, the column in words, the st
   the View settings panel's preview: check fov, cell and gaze with a screenshot before a long run.
 - Problem ranges and colour scales are per quantity name (update_settings viz quantity 'sky', 'distance_min', a
   group's name, ...); find_critical and the results shares use them as for Daylight.
+- Colours that fit the targets: give each target group a gradient that reads as what it is, low to high share
+  (a park or lawn 'greens', water 'blues', a landmark 'oranges' or 'purples'), and sky 'blues' or 'greys'. When no
+  preset fits, or the user names colours (a corporate palette, a map key), add one to viz.library and pick it:
+  viz {quantity: 'park', library: [{key: 'park', label: 'Park', stops: ['#f4f1e8', '#7fbf6a', '#1f5f2c']}], gradient:
+  'park'}. Light at the low end, saturated at the high end, so more share reads as more colour; keep the problem
+  range colours (belowColour, aboveColour) apart from the gradient's. A target the user sets as a criterion (at least
+  10 % park) goes in viz.lo / viz.hi of that quantity, so the views, find_critical and the shares show it.
 
 ## 2. Columns
 
